@@ -6,7 +6,7 @@ import type {
   SignatureStatus,
 } from "./components/refscope/data";
 
-const API_BASE_URL = import.meta.env.VITE_RTGV_API_BASE_URL ?? "http://127.0.0.1:4175";
+export const API_BASE_URL = import.meta.env.VITE_RTGV_API_BASE_URL ?? "http://127.0.0.1:4175";
 
 type CommitResponse = {
   hash: string;
@@ -79,7 +79,15 @@ export async function getDiff(repoId: string, hash: string) {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { headers: { accept: "application/json" } });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { headers: { accept: "application/json" } });
+  } catch (error) {
+    throw new Error(
+      `Cannot reach API at ${API_BASE_URL}. Start it with RTGV_REPOS=viewer=/absolute/path pnpm dev:api, or set VITE_RTGV_API_BASE_URL if the API runs elsewhere.`,
+      { cause: error },
+    );
+  }
   if (!response.ok) {
     const message = await readError(response);
     throw new Error(message);
