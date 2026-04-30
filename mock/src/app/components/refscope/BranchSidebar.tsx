@@ -102,6 +102,8 @@ export function BranchSidebar({
 }
 
 function AlertRow({ alert }: { alert: RealtimeAlert }) {
+  const observedTime = formatObservedTime(alert.observedAt);
+  const incidentNote = formatIncidentNote(alert, observedTime);
   return (
     <div
       className="px-2 py-2 mx-1 rounded-md"
@@ -117,6 +119,16 @@ function AlertRow({ alert }: { alert: RealtimeAlert }) {
       >
         <AlertTriangle size={11} aria-hidden /> History rewritten
       </div>
+      <dl
+        className="mt-2 grid gap-1"
+        style={{ fontSize: 10, color: "var(--rs-text-secondary)", lineHeight: 1.4 }}
+      >
+        <AlertFact label="Ref" value={`${alert.refName} (${alert.fullRefName})`} />
+        <AlertFact label="Previous" value={alert.previousHash} mono />
+        <AlertFact label="Current" value={alert.currentHash} mono />
+        <AlertFact label="Observed" value={observedTime} />
+        <AlertFact label="Source" value={formatDetectionSource(alert.detectionSource)} />
+      </dl>
       <div
         style={{
           fontSize: 11,
@@ -125,21 +137,74 @@ function AlertRow({ alert }: { alert: RealtimeAlert }) {
           lineHeight: 1.45,
         }}
       >
-        {alert.refName} moved from {alert.previousHash.slice(0, 7)} to{" "}
-        {alert.currentHash.slice(0, 7)}.
+        {alert.explanation}
       </div>
-      <div
-        style={{
-          fontSize: 10,
-          color: "var(--rs-text-muted)",
-          marginTop: 3,
-          fontFamily: "var(--rs-mono)",
-        }}
+      <button
+        className="rs-compact-button mt-2"
+        type="button"
+        onClick={() => void navigator.clipboard?.writeText(incidentNote)}
       >
-        {alert.time}
-      </div>
+        Copy note
+      </button>
     </div>
   );
+}
+
+function AlertFact({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div>
+      <dt style={{ color: "var(--rs-text-muted)" }}>{label}</dt>
+      <dd
+        className="truncate"
+        title={value}
+        style={{
+          color: "var(--rs-text-primary)",
+          fontFamily: mono ? "var(--rs-mono)" : undefined,
+        }}
+      >
+        {mono ? shortHash(value) : value}
+      </dd>
+    </div>
+  );
+}
+
+function formatObservedTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function formatDetectionSource(source: RealtimeAlert["detectionSource"]) {
+  if (source === "polling") return "polling snapshot comparison";
+  if (source === "reconnect_recovery") return "reconnect recovery";
+  return "direct ref change";
+}
+
+function formatIncidentNote(alert: RealtimeAlert, observedTime: string) {
+  return [
+    "History rewrite detected",
+    "",
+    `Repo: ${alert.repoName}`,
+    `Ref: ${alert.refName} (${alert.fullRefName})`,
+    `Previous: ${alert.previousHash}`,
+    `Current: ${alert.currentHash}`,
+    `Observed: ${observedTime}`,
+    `Source: ${formatDetectionSource(alert.detectionSource)}`,
+    "",
+    `Reason: ${alert.explanation}`,
+  ].join("\n");
+}
+
+function shortHash(value: string) {
+  return value.length > 12 ? `${value.slice(0, 7)}...${value.slice(-7)}` : value;
 }
 
 function Section({

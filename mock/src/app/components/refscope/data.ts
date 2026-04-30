@@ -70,10 +70,15 @@ export type CompareResult = {
 export type RealtimeAlert = {
   id: string;
   type: "history_rewritten";
+  repoId: string;
+  repoName: string;
   refName: string;
+  fullRefName: string;
   previousHash: string;
   currentHash: string;
-  time: string;
+  observedAt: string;
+  detectionSource: "polling" | "reconnect_recovery" | "direct_ref_change";
+  explanation: string;
 };
 
 export type CommitDetail = {

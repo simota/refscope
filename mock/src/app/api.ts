@@ -29,7 +29,16 @@ type CommitResponse = {
 export type ViewerEvent =
   | { type: "connected"; repoId: string }
   | { type: "commit_added"; repoId: string; ref: GitRef; commit: CommitResponse }
-  | { type: "history_rewritten"; repoId: string; ref: GitRef; previousHash: string; currentHash: string }
+  | {
+      type: "history_rewritten";
+      repoId: string;
+      ref: GitRef;
+      previousHash: string;
+      currentHash: string;
+      observedAt?: string;
+      detectionSource?: "polling" | "reconnect_recovery" | "direct_ref_change";
+      explanation?: string;
+    }
   | { type: "ref_created" | "ref_updated" | "ref_deleted"; repoId: string; ref: GitRef }
   | { type: "error"; error: string; timedOut?: boolean; truncated?: boolean };
 

@@ -212,7 +212,7 @@ export default function App() {
       handleRealtimeEvent(notice, () => {
         setEventNotice(notice);
         if (data.type === "history_rewritten") {
-          const alert = toRealtimeAlert(data);
+          const alert = toRealtimeAlert(data, repoName || selectedRepo);
           setRealtimeAlerts((current) => [
             alert,
             ...current.filter((item) => item.id !== alert.id),
@@ -523,14 +523,25 @@ function eventRefName(event: ViewerEvent) {
   return "ref" in event ? event.ref.shortName : "selected ref";
 }
 
-function toRealtimeAlert(event: Extract<ViewerEvent, { type: "history_rewritten" }>): RealtimeAlert {
+function toRealtimeAlert(
+  event: Extract<ViewerEvent, { type: "history_rewritten" }>,
+  repoName: string,
+): RealtimeAlert {
+  const observedAt = event.observedAt ?? new Date().toISOString();
   return {
     id: `${event.ref.name}:${event.previousHash}:${event.currentHash}`,
     type: "history_rewritten",
+    repoId: event.repoId,
+    repoName,
     refName: event.ref.shortName,
+    fullRefName: event.ref.name,
     previousHash: event.previousHash,
     currentHash: event.currentHash,
-    time: new Date().toLocaleTimeString(),
+    observedAt,
+    detectionSource: event.detectionSource ?? "polling",
+    explanation:
+      event.explanation ??
+      "The current commit is not a descendant of the previously observed commit.",
   };
 }
 

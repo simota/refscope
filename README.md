@@ -176,6 +176,9 @@ The SSE endpoint keeps an in-memory ref snapshot per connection, polls the allow
 The web UI uses `history_rewritten` events for the realtime notice and the
 sidebar alert list. The alert list is event-driven and starts empty; it does not
 show synthetic rewrite warnings before the API observes one.
+Rewrite alerts show observed facts (ref, previous hash, current hash, observed
+time, and detection source) separately from the interpretation, and include a
+copyable incident note for team coordination.
 The web UI also marks commits observed through real `commit_added` SSE events as
 new in the timeline after the refreshed commit list includes those hashes. The
 highlight state is local to the current browser session and clears when

@@ -136,6 +136,10 @@ export function createGitService(config) {
             ref: change.ref,
             previousHash: change.previousHash,
             currentHash: change.ref.hash,
+            observedAt: new Date().toISOString(),
+            detectionSource: "polling",
+            explanation:
+              "The current commit is not a descendant of the previously observed commit.",
           });
           continue;
         }
