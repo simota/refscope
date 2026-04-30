@@ -38,6 +38,7 @@ export function CommitTimeline({
       style={{ background: "var(--rs-bg-canvas)", flex: 1, minWidth: 0 }}
     >
       {error ? <MessageBanner tone="warning" title="API error" message={error} /> : null}
+      {isApiConnectionError(error) ? <ApiRecoveryHint /> : null}
       {eventNotice ? <MessageBanner title="Realtime update" message={eventNotice} /> : null}
 
       <div className="overflow-y-auto" style={{ flex: 1 }}>
@@ -67,6 +68,48 @@ export function CommitTimeline({
         count={commits.length}
       />
     </main>
+  );
+}
+
+function isApiConnectionError(message: string) {
+  return message.startsWith("Cannot reach API at ");
+}
+
+function ApiRecoveryHint() {
+  return (
+    <div
+      className="mx-4 mt-2 rounded-md px-3 py-2.5"
+      style={{
+        background: "var(--rs-bg-elevated)",
+        border: "1px solid var(--rs-border)",
+        color: "var(--rs-text-secondary)",
+        fontSize: 12,
+      }}
+    >
+      <div style={{ color: "var(--rs-text-primary)", fontWeight: 600 }}>Start local services</div>
+      <div style={{ marginTop: 4 }}>
+        From the repository root, run this command, then reload the browser:
+      </div>
+      <code
+        className="mt-2 block rounded px-2 py-1.5"
+        style={{
+          background: "var(--rs-bg-canvas)",
+          color: "var(--rs-text-primary)",
+          fontFamily: "var(--rs-mono)",
+          fontSize: 11,
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        make dev-self
+      </code>
+      <div style={{ marginTop: 6 }}>
+        To inspect another repository, run{" "}
+        <code style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-primary)" }}>
+          make dev-app RTGV_REPOS=viewer=/absolute/path
+        </code>
+        .
+      </div>
+    </div>
   );
 }
 

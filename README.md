@@ -24,22 +24,25 @@ pnpm install
 
 ## Development
 
-Start the mock UI from the repository root:
+Start the API and UI for this repository with one command:
 
 ```sh
-pnpm dev
+make dev-self
 ```
 
-Equivalent explicit command:
+Open the UI at `http://127.0.0.1:5173`.
+
+To inspect another Git repository, pass an allowlisted repository path:
 
 ```sh
-pnpm dev:mock
+make dev-app RTGV_REPOS=viewer=/absolute/path/to/git/repo
 ```
 
-Start the API server in another terminal:
+Equivalent explicit two-terminal setup:
 
 ```sh
 RTGV_REPOS=viewer=/absolute/path/to/git/repo pnpm dev:api
+VITE_RTGV_API_BASE_URL=http://127.0.0.1:4175 pnpm dev:mock
 ```
 
 The API listens on `http://127.0.0.1:4175` by default.
@@ -48,13 +51,6 @@ The web UI reads the API at `http://127.0.0.1:4175` by default. Override it
 when the API runs elsewhere:
 
 ```sh
-VITE_RTGV_API_BASE_URL=http://127.0.0.1:4175 pnpm dev:mock
-```
-
-For a working local app, run both processes:
-
-```sh
-RTGV_REPOS=viewer=/absolute/path/to/git/repo pnpm dev:api
 VITE_RTGV_API_BASE_URL=http://127.0.0.1:4175 pnpm dev:mock
 ```
 

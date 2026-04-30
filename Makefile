@@ -10,7 +10,7 @@ MAX_ITERATIONS ?= 30
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install dev dev-app dev-api dev-mock build build-api build-mock test test-api verify audit orbit recover clean status
+.PHONY: help install dev dev-self dev-app dev-api dev-mock build build-api build-mock test test-api verify audit orbit recover clean status
 
 help:
 	@printf "Realtime Git Viewer commands\n\n"
@@ -18,6 +18,7 @@ help:
 	@printf "  make install                         Install dependencies from lockfile\n"
 	@printf "\nDevelopment:\n"
 	@printf "  make dev                             Start mock UI on 127.0.0.1:5173\n"
+	@printf "  make dev-self                        Start API and UI for this repository\n"
 	@printf "  make dev-app RTGV_REPOS=id=/repo     Start API and mock UI together\n"
 	@printf "  make dev-api RTGV_REPOS=id=/repo     Start API with allowlisted Git repos\n"
 	@printf "  make dev-mock                        Start mock UI with API base URL\n"
@@ -41,12 +42,21 @@ install:
 dev:
 	$(MAKE) dev-mock
 
+dev-self:
+	$(MAKE) dev-app RTGV_REPOS="viewer=$(CURDIR)"
+
 dev-app:
 	@if [[ -z "$(RTGV_REPOS)" ]]; then \
 		echo "RTGV_REPOS is required, e.g. make dev-app RTGV_REPOS=viewer=/absolute/path"; \
+		echo "For the current repository, run: make dev-self"; \
 		exit 1; \
 	fi
 	@set -euo pipefail; \
+	echo "Starting Realtime Git Viewer"; \
+	echo "  API:  $(VITE_RTGV_API_BASE_URL)"; \
+	echo "  UI:   http://$(MOCK_HOST):$(MOCK_PORT)"; \
+	echo "  Repos: $(RTGV_REPOS)"; \
+	echo ""; \
 	RTGV_REPOS="$(RTGV_REPOS)" RTGV_REF_POLL_MS="$(RTGV_REF_POLL_MS)" $(PNPM) dev:api & \
 	api_pid=$$!; \
 	trap 'kill $$api_pid 2>/dev/null || true' EXIT INT TERM; \

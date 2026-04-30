@@ -7,6 +7,7 @@ import type {
 } from "./components/refscope/data";
 
 export const API_BASE_URL = import.meta.env.VITE_RTGV_API_BASE_URL ?? "http://127.0.0.1:4175";
+const API_RECOVERY_COMMAND = "make dev-self";
 
 type CommitResponse = {
   hash: string;
@@ -84,7 +85,7 @@ async function getJson<T>(path: string): Promise<T> {
     response = await fetch(`${API_BASE_URL}${path}`, { headers: { accept: "application/json" } });
   } catch (error) {
     throw new Error(
-      `Cannot reach API at ${API_BASE_URL}. Start it with RTGV_REPOS=viewer=/absolute/path pnpm dev:api, or set VITE_RTGV_API_BASE_URL if the API runs elsewhere.`,
+      `Cannot reach API at ${API_BASE_URL}. Run ${API_RECOVERY_COMMAND} from the repository root, or start the API with RTGV_REPOS=viewer=/absolute/path pnpm dev:api if you want to inspect another repository.`,
       { cause: error },
     );
   }
