@@ -93,6 +93,7 @@ export function CommitTimeline({
         onPinCurrentRefAsTarget={onPinCurrentRefAsTarget}
         onClear={onClearCompare}
       />
+      <CommitActivityGraph commits={commits} />
 
       <div className="overflow-y-auto" style={{ flex: 1 }}>
         {loading ? (
@@ -123,6 +124,97 @@ export function CommitTimeline({
         count={commits.length}
       />
     </main>
+  );
+}
+
+function CommitActivityGraph({ commits }: { commits: Commit[] }) {
+  const totalAdded = commits.reduce((sum, commit) => sum + commit.added, 0);
+  const totalDeleted = commits.reduce((sum, commit) => sum + commit.deleted, 0);
+  const signedCount = commits.filter((commit) => commit.signed).length;
+  const mergeCount = commits.filter((commit) => commit.isMerge).length;
+  const newCount = commits.filter((commit) => commit.isNew).length;
+  const maxChange = Math.max(1, ...commits.map((commit) => commit.added + commit.deleted));
+  const visibleCommits = commits.slice(0, 24);
+
+  return (
+    <section
+      className="mx-4 mt-3 rounded-md px-3 py-2"
+      aria-label={`Commit activity overview: ${commits.length} commits, ${totalAdded} additions, ${totalDeleted} deletions, ${signedCount} signed commits, ${mergeCount} merge commits`}
+      style={{
+        background: "var(--rs-bg-panel)",
+        border: "1px solid var(--rs-border)",
+      }}
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <GraphMetric label="Commits" value={commits.length.toString()} />
+        <GraphMetric label="Added" value={`+${totalAdded}`} tone="added" />
+        <GraphMetric label="Deleted" value={`-${totalDeleted}`} tone="deleted" />
+        <GraphMetric label="Signed" value={signedCount.toString()} tone="accent" />
+        <GraphMetric label="Merge" value={mergeCount.toString()} tone="merge" />
+        {newCount ? <GraphMetric label="New" value={newCount.toString()} tone="accent" /> : null}
+      </div>
+      <div
+        className="mt-2 flex items-end gap-1"
+        aria-hidden
+        style={{ height: 34, minWidth: 0 }}
+      >
+        {visibleCommits.length ? (
+          visibleCommits.map((commit) => {
+            const height = Math.max(4, Math.round(((commit.added + commit.deleted) / maxChange) * 30));
+            return (
+              <div
+                key={commit.hash}
+                title={`${commit.subject}: +${commit.added} -${commit.deleted}`}
+                className="rounded-sm"
+                style={{
+                  width: 8,
+                  height,
+                  background: commit.deleted > commit.added ? "var(--rs-git-deleted)" : "var(--rs-git-added)",
+                  opacity: commit.isMerge ? 0.55 : 0.9,
+                  outline: commit.isNew ? "1px solid var(--rs-accent)" : undefined,
+                  outlineOffset: 1,
+                }}
+              />
+            );
+          })
+        ) : (
+          <div style={{ color: "var(--rs-text-muted)", fontSize: 12 }}>
+            Activity appears after commits load.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function GraphMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "added" | "deleted" | "accent" | "merge";
+}) {
+  const color =
+    tone === "added"
+      ? "var(--rs-git-added)"
+      : tone === "deleted"
+      ? "var(--rs-git-deleted)"
+      : tone === "merge"
+      ? "var(--rs-git-merge)"
+      : tone === "accent"
+      ? "var(--rs-accent)"
+      : "var(--rs-text-primary)";
+  return (
+    <div className="flex items-baseline gap-1.5" style={{ minWidth: 0 }}>
+      <span style={{ color, fontFamily: "var(--rs-mono)", fontSize: 12, fontWeight: 700 }}>
+        {value}
+      </span>
+      <span style={{ color: "var(--rs-text-muted)", fontSize: 10 }}>
+        {label}
+      </span>
+    </div>
   );
 }
 
