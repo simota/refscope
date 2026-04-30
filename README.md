@@ -1,6 +1,9 @@
-# Realtime Git Viewer
+# Refscope
 
-Realtime Git Viewer is a local web application for inspecting Git history updates as they happen. The repository currently contains the product/architecture specification, a Vite React mock UI, and the first backend API slice for reading allowlisted Git repositories.
+Refscope is a local web application for inspecting Git refs and history updates
+as they happen. The repository currently contains the product/architecture
+specification, a Vite React mock UI, and the first backend API slice for reading
+allowlisted Git repositories.
 
 ## Repository layout
 
@@ -193,6 +196,9 @@ the timeline is not refreshed until updates are resumed.
 The timeline includes a read-only compare bar for pinning a base ref/commit and
 target ref, preserving selected commits across ref switches when possible, and
 copying local Git comparison commands.
+The timeline also includes a commit activity overview with labeled metrics and
+mini bars for commit count, additions, deletions, signed commits, merge commits,
+and live-update new commits.
 If the SSE stream emits a typed `error` event, the web UI surfaces the sanitized
 API error message in the timeline instead of silently dropping the event.
 
