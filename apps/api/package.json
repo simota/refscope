@@ -1,0 +1,14 @@
+{
+  "name": "@realtime-git-viewer/api",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "build": "node --check src/server.js && node --check src/config.js && node --check src/gitRunner.js && node --check src/gitService.js && node --check src/http.js && node --check src/validation.js",
+    "dev": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

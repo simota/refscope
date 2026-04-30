@@ -4,10 +4,13 @@
   "version": "0.0.0",
   "packageManager": "pnpm@10.9.0",
   "scripts": {
+    "dev:api": "pnpm --filter @realtime-git-viewer/api dev",
+    "build:api": "pnpm --filter @realtime-git-viewer/api build",
     "dev:mock": "pnpm --filter @realtime-git-viewer/mock dev",
     "build:mock": "pnpm --filter @realtime-git-viewer/mock build",
     "dev": "pnpm dev:mock",
-    "build": "pnpm build:mock"
+    "build": "pnpm build:api && pnpm build:mock",
+    "test": "pnpm --filter @realtime-git-viewer/api test"
   },
   "pnpm": {
     "overrides": {

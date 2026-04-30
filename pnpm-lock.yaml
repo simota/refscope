@@ -11,6 +11,8 @@ importers:
 
   .: {}
 
+  apps/api: {}
+
   mock:
     dependencies:
       '@emotion/react':
