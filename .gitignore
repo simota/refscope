@@ -9,3 +9,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Orbit runtime state
+scripts/orbit/full-implementation/.circuit-state
+scripts/orbit/full-implementation/actions.log
+scripts/orbit/full-implementation/progress.md
+scripts/orbit/full-implementation/runner.jsonl
+scripts/orbit/full-implementation/runner.log*
+scripts/orbit/full-implementation/state.env
+scripts/orbit/full-implementation/state.env.sha256
