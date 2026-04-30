@@ -1,6 +1,46 @@
-import { ChevronDown, Search, Circle, Command } from "lucide-react";
+import { ChevronDown, Search, Circle, Command, User, FileSearch } from "lucide-react";
+import type { GitRef, Repository } from "./data";
 
-export function TopBar() {
+export function TopBar({
+  repositories,
+  selectedRepo,
+  onSelectRepo,
+  refs,
+  selectedRef,
+  onSelectRef,
+  repoName,
+  refName,
+  status,
+  search,
+  onSearchChange,
+  author,
+  onAuthorChange,
+  path,
+  onPathChange,
+}: {
+  repositories: Repository[];
+  selectedRepo: string;
+  onSelectRepo: (repoId: string) => void;
+  refs: GitRef[];
+  selectedRef: string;
+  onSelectRef: (ref: string) => void;
+  repoName: string;
+  refName: string;
+  status: "connecting" | "connected" | "error";
+  search: string;
+  onSearchChange: (value: string) => void;
+  author: string;
+  onAuthorChange: (value: string) => void;
+  path: string;
+  onPathChange: (value: string) => void;
+}) {
+  const liveColor =
+    status === "connected"
+      ? "var(--rs-git-added)"
+      : status === "error"
+        ? "var(--rs-warning)"
+        : "var(--rs-text-muted)";
+
   return (
     <header
       className="flex items-center gap-3 px-4 border-b"
@@ -29,14 +69,60 @@ export function TopBar() {
 
       <Separator />
 
-      <button className="rs-chip">
-        frontend-app <ChevronDown size={12} />
-      </button>
-      <button className="rs-chip">
-        <Circle size={8} fill="var(--rs-accent)" stroke="none" /> main <ChevronDown size={12} />
-      </button>
+      <label className="rs-chip" style={{ paddingRight: 6 }}>
+        <span className="sr-only">Repository</span>
+        <select
+          value={selectedRepo}
+          onChange={(event) => onSelectRepo(event.target.value)}
+          disabled={!repositories.length}
+          className="bg-transparent outline-none"
+          style={{
+            appearance: "none",
+            color: "inherit",
+            font: "inherit",
+            maxWidth: 180,
+            cursor: repositories.length ? "pointer" : "default",
+          }}
+        >
+          {repositories.length ? (
+            repositories.map((repo) => (
+              <option key={repo.id} value={repo.id}>
+                {repo.name}
+              </option>
+            ))
+          ) : (
+            <option value="">{repoName}</option>
+          )}
+        </select>
+        <ChevronDown size={12} />
+      </label>
+      <label className="rs-chip" style={{ paddingRight: 6 }}>
+        <Circle size={8} fill="var(--rs-accent)" stroke="none" />
+        <span className="sr-only">Ref</span>
+        <select
+          value={selectedRef}
+          onChange={(event) => onSelectRef(event.target.value)}
+          disabled={!selectedRepo}
+          className="bg-transparent outline-none"
+          style={{
+            appearance: "none",
+            color: "inherit",
+            font: "inherit",
+            maxWidth: 180,
+            cursor: selectedRepo ? "pointer" : "default",
+          }}
+        >
+          <option value="HEAD">{refs.length ? "HEAD" : refName}</option>
+          {refs.map((ref) => (
+            <option key={ref.name} value={ref.name}>
+              {formatRefOption(ref)}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={12} />
+      </label>
 
-      <div className="flex-1 flex items-center justify-center px-4">
+      <div className="flex-1 flex items-center justify-center gap-2 px-4">
         <div
           className="flex items-center gap-2 px-3 w-full max-w-xl"
           style={{
@@ -48,7 +134,9 @@ export function TopBar() {
         >
           <Search size={13} style={{ color: "var(--rs-text-muted)" }} />
           <input
-            placeholder="Search commits, files, authors…"
+            value={search}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder="Search commit messages…"
             className="bg-transparent outline-none flex-1"
             style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
           />
@@ -64,6 +152,44 @@ export function TopBar() {
             <Command size={10} /> K
           </span>
         </div>
+        <div
+          className="flex items-center gap-2 px-3"
+          style={{
+            width: 160,
+            height: 30,
+            background: "var(--rs-bg-canvas)",
+            border: "1px solid var(--rs-border)",
+            borderRadius: "var(--rs-radius-sm)",
+          }}
+        >
+          <User size={13} style={{ color: "var(--rs-text-muted)" }} />
+          <input
+            value={author}
+            onChange={(event) => onAuthorChange(event.target.value)}
+            placeholder="Author"
+            className="bg-transparent outline-none min-w-0 flex-1"
+            style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
+          />
+        </div>
+        <div
+          className="flex items-center gap-2 px-3"
+          style={{
+            width: 190,
+            height: 30,
+            background: "var(--rs-bg-canvas)",
+            border: "1px solid var(--rs-border)",
+            borderRadius: "var(--rs-radius-sm)",
+          }}
+        >
+          <FileSearch size={13} style={{ color: "var(--rs-text-muted)" }} />
+          <input
+            value={path}
+            onChange={(event) => onPathChange(event.target.value)}
+            placeholder="Path"
+            className="bg-transparent outline-none min-w-0 flex-1"
+            style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
+          />
+        </div>
       </div>
 
       <div
@@ -75,11 +201,11 @@ export function TopBar() {
           style={{
             width: 7,
             height: 7,
-            background: "var(--rs-git-added)",
-            boxShadow: "0 0 0 3px color-mix(in oklab, var(--rs-git-added), transparent 75%)",
+            background: liveColor,
+            boxShadow: `0 0 0 3px color-mix(in oklab, ${liveColor}, transparent 75%)`,
           }}
         />
-        LIVE
+        {status === "connected" ? "LIVE" : status.toUpperCase()}
       </div>
     </header>
   );
@@ -89,4 +215,11 @@ function Separator() {
   return (
     <div style={{ width: 1, height: 20, background: "var(--rs-border)" }} aria-hidden />
   );
+}
+
+function formatRefOption(ref: GitRef) {
+  if (ref.type === "branch") return ref.shortName;
+  if (ref.type === "tag") return `tag: ${ref.shortName}`;
+  if (ref.type === "remote") return `remote: ${ref.shortName}`;
+  return ref.shortName;
 }

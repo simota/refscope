@@ -1,18 +1,133 @@
-import { useEffect, useState } from "react";
-import { Search, GitBranch, Hash, Eye, Zap, FileSearch } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { FileSearch, GitBranch, Hash, Search, Tag } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import type { Commit, GitRef } from "./data";
 
-const COMMANDS = [
-  { icon: GitBranch, label: "Switch branch: main", hint: "branch" },
-  { icon: GitBranch, label: "Switch branch: develop", hint: "branch" },
-  { icon: FileSearch, label: 'Search commits by "checkout main"', hint: "search" },
-  { icon: Hash, label: "Copy current commit hash", hint: "C" },
-  { icon: Eye, label: "Toggle compact mode", hint: "view" },
-  { icon: Zap, label: "Toggle live mode", hint: "L" },
-];
+type PaletteCommand = {
+  icon: LucideIcon;
+  label: string;
+  hint: string;
+  run: () => void | Promise<void>;
+};
 
-export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function CommandPalette({
+  open,
+  onClose,
+  refs,
+  selectedCommit,
+  onSelectRef,
+  search,
+  author,
+  path,
+  onSearchChange,
+  onAuthorChange,
+  onPathChange,
+}: {
+  open: boolean;
+  onClose: () => void;
+  refs: GitRef[];
+  selectedCommit: Commit | null;
+  onSelectRef: (ref: string) => void;
+  search: string;
+  author: string;
+  path: string;
+  onSearchChange: (value: string) => void;
+  onAuthorChange: (value: string) => void;
+  onPathChange: (value: string) => void;
+}) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
+  const [status, setStatus] = useState("");
+  const commands = useMemo<PaletteCommand[]>(() => {
+    const refCommands = refs.slice(0, 12).map((ref) => ({
+      icon: ref.type === "tag" ? Tag : GitBranch,
+      label: `Switch to ${formatRefLabel(ref)}`,
+      hint: ref.type,
+      run: () => {
+        onSelectRef(ref.name);
+        onClose();
+      },
+    }));
+
+    const filterCommands = [
+      search
+        ? {
+            icon: FileSearch,
+            label: "Clear message search",
+            hint: "search",
+            run: () => {
+              onSearchChange("");
+              onClose();
+            },
+          }
+        : null,
+      author
+        ? {
+            icon: FileSearch,
+            label: "Clear author filter",
+            hint: "author",
+            run: () => {
+              onAuthorChange("");
+              onClose();
+            },
+          }
+        : null,
+      path
+        ? {
+            icon: FileSearch,
+            label: "Clear path filter",
+            hint: "path",
+            run: () => {
+              onPathChange("");
+              onClose();
+            },
+          }
+        : null,
+    ].filter((command): command is PaletteCommand => command !== null);
+
+    const copyCommand: PaletteCommand[] = selectedCommit
+      ? [
+          {
+            icon: Hash,
+            label: "Copy current commit hash",
+            hint: selectedCommit.shortHash ?? selectedCommit.hash.slice(0, 7),
+            run: async () => {
+              await navigator.clipboard.writeText(selectedCommit.hash);
+              setStatus("Commit hash copied");
+              window.setTimeout(() => setStatus(""), 1600);
+              onClose();
+            },
+          },
+        ]
+      : [];
+
+    return [...refCommands, ...copyCommand, ...filterCommands];
+  }, [
+    author,
+    onAuthorChange,
+    onClose,
+    onPathChange,
+    onSearchChange,
+    onSelectRef,
+    path,
+    refs,
+    search,
+    selectedCommit,
+  ]);
+
+  useEffect(() => {
+    if (!open) return;
+    setQ("");
+    setActive(0);
+  }, [open]);
+
+  const filtered = commands.filter((c) =>
+    c.label.toLowerCase().includes(q.toLowerCase()),
+  );
+
+  useEffect(() => {
+    setActive((current) => Math.min(current, Math.max(0, filtered.length - 1)));
+  }, [filtered.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -20,21 +135,32 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       if (e.key === "Escape") onClose();
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setActive((i) => Math.min(COMMANDS.length - 1, i + 1));
+        setActive((i) => (filtered.length ? Math.min(filtered.length - 1, i + 1) : 0));
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
         setActive((i) => Math.max(0, i - 1));
       }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void runCommand(filtered[active]);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [active, filtered, open, onClose]);
 
   if (!open) return null;
-  const filtered = COMMANDS.filter((c) =>
-    c.label.toLowerCase().includes(q.toLowerCase()),
-  );
+
+  async function runCommand(command: PaletteCommand | undefined) {
+    if (!command) return;
+    try {
+      await command.run();
+    } catch {
+      setStatus("Command failed");
+      window.setTimeout(() => setStatus(""), 1600);
+    }
+  }
 
   return (
     <div
@@ -63,7 +189,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           <Search size={14} style={{ color: "var(--rs-text-muted)" }} />
           <input
             autoFocus
-            placeholder="Type a command or search…"
+            placeholder="Type a command…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             className="flex-1 bg-transparent outline-none"
@@ -102,6 +228,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                   role="option"
                   aria-selected={isActive}
                   onMouseEnter={() => setActive(i)}
+                  onClick={() => void runCommand(c)}
                   className="mx-1 px-3 flex items-center gap-2.5 rounded-md cursor-pointer"
                   style={{
                     height: 36,
@@ -146,8 +273,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           <span>↑↓ navigate</span>
           <span>↵ select</span>
           <span>esc close</span>
+          {status ? <span>{status}</span> : null}
         </div>
       </div>
     </div>
   );
+}
+
+function formatRefLabel(ref: GitRef) {
+  if (ref.type === "tag") return `tag ${ref.shortName}`;
+  if (ref.type === "remote") return `remote ${ref.shortName}`;
+  return ref.shortName;
 }

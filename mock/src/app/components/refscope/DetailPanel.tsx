@@ -1,17 +1,52 @@
-import { Copy, ExternalLink, Sparkles, ShieldCheck } from "lucide-react";
-import type { Commit } from "./data";
-import { diffSample } from "./data";
+import { useState } from "react";
+import { Copy, ExternalLink, ShieldCheck } from "lucide-react";
+import type { Commit, CommitDetail } from "./data";
 
-export function DetailPanel({ commit }: { commit: Commit }) {
+export function DetailPanel({
+  commit,
+  detail,
+  diff,
+  loading,
+  error,
+}: {
+  commit: Commit | null;
+  detail: CommitDetail | null;
+  diff: string;
+  loading: boolean;
+  error: string;
+}) {
+  const [copyStatus, setCopyStatus] = useState("");
+
+  if (!commit) {
+    return (
+      <PanelShell>
+        <Empty>No commit selected</Empty>
+      </PanelShell>
+    );
+  }
+  const authorName = detail?.author.name ?? commit.author;
+  const authorDate = detail?.authorDate ?? commit.authorDate;
+  const parents = detail?.parents ?? commit.parents ?? [];
+  const refs = detail?.refs ?? commit.refs ?? [];
+  const body = detail?.body ?? commit.body;
+  const files = detail?.files ?? commit.files;
+  const signatureStatus = detail?.signatureStatus ?? commit.signatureStatus;
+  const signed = detail?.signed ?? commit.signed;
+  const gitShowCommand = `git show --stat --patch ${commit.hash}`;
+
+  async function copyToClipboard(label: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyStatus(`${label} copied`);
+      window.setTimeout(() => setCopyStatus(""), 1600);
+    } catch {
+      setCopyStatus("Copy failed");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+    }
+  }
+
   return (
-    <aside
-      className="flex flex-col overflow-hidden"
-      style={{
-        width: 460,
-        background: "var(--rs-bg-panel)",
-        borderLeft: "1px solid var(--rs-border)",
-      }}
-    >
+    <PanelShell>
       <div
         className="px-4 flex items-center justify-between"
         style={{
@@ -29,11 +64,30 @@ export function DetailPanel({ commit }: { commit: Commit }) {
         >
           COMMIT
         </div>
-        <div className="flex gap-1">
-          <button className="rs-icon-btn" title="Copy git show">
+        <div className="flex items-center gap-1">
+          {copyStatus ? (
+            <span
+              style={{
+                fontSize: 11,
+                color: "var(--rs-text-muted)",
+                fontFamily: "var(--rs-mono)",
+              }}
+            >
+              {copyStatus}
+            </span>
+          ) : null}
+          <button
+            className="rs-icon-btn"
+            title="Copy git show command"
+            onClick={() => void copyToClipboard("git show command", gitShowCommand)}
+          >
             <ExternalLink size={13} />
           </button>
-          <button className="rs-icon-btn" title="Copy hash">
+          <button
+            className="rs-icon-btn"
+            title="Copy commit hash"
+            onClick={() => void copyToClipboard("Commit hash", commit.hash)}
+          >
             <Copy size={13} />
           </button>
         </div>
@@ -61,7 +115,7 @@ export function DetailPanel({ commit }: { commit: Commit }) {
           >
             {commit.subject}
           </h3>
-          {commit.body ? (
+          {body ? (
             <p
               style={{
                 fontSize: 12,
@@ -70,7 +124,7 @@ export function DetailPanel({ commit }: { commit: Commit }) {
                 lineHeight: 1.55,
               }}
             >
-              {commit.body}
+              {body}
             </p>
           ) : null}
 
@@ -84,17 +138,17 @@ export function DetailPanel({ commit }: { commit: Commit }) {
             }}
           >
             <Meta label="Author">
-              {commit.author}{" "}
-              <span style={{ color: "var(--rs-text-muted)" }}>· 2026-04-30 12:30</span>
+              {authorName}{" "}
+              <span style={{ color: "var(--rs-text-muted)" }}>· {formatDate(authorDate)}</span>
             </Meta>
             <Meta label="Parents">
               <span style={{ fontFamily: "var(--rs-mono)" }}>
-                {commit.parents?.join(", ") ?? "—"}
+                {parents.length ? parents.join(", ") : "—"}
               </span>
             </Meta>
             <Meta label="Refs">
               <span className="flex flex-wrap gap-1">
-                {(commit.refs ?? []).map((r) => (
+                {refs.map((r) => (
                   <span
                     key={r}
                     className="px-1.5 rounded-full"
@@ -110,7 +164,7 @@ export function DetailPanel({ commit }: { commit: Commit }) {
                     {r}
                   </span>
                 ))}
-                {commit.signed ? (
+                {signed ? (
                   <span
                     className="px-1.5 rounded-full inline-flex items-center gap-1"
                     style={{
@@ -120,7 +174,7 @@ export function DetailPanel({ commit }: { commit: Commit }) {
                         "1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 40%)",
                     }}
                   >
-                    <ShieldCheck size={10} /> signed
+                    <ShieldCheck size={10} /> {formatSignatureStatus(signatureStatus)}
                   </span>
                 ) : null}
               </span>
@@ -128,13 +182,14 @@ export function DetailPanel({ commit }: { commit: Commit }) {
           </dl>
         </div>
 
-        <AISummary />
+        {loading ? <Empty>Loading commit detail…</Empty> : null}
+        {error ? <Empty>{error}</Empty> : null}
 
-        <Section title="CHANGED FILES" hint={`${commit.files.length} files`}>
-          {commit.files.length === 0 ? (
-            <Empty>No file changes (merge commit)</Empty>
+        <Section title="CHANGED FILES" hint={`${files.length} files`}>
+          {files.length === 0 ? (
+            <Empty>{loading ? "Loading changed files…" : "No file changes returned for this commit."}</Empty>
           ) : (
-            commit.files.map((f) => (
+            files.map((f) => (
               <div
                 key={f.path}
                 className="px-3 flex items-center gap-2"
@@ -160,10 +215,30 @@ export function DetailPanel({ commit }: { commit: Commit }) {
           )}
         </Section>
 
-        <Section title="DIFF" hint="src/api/events.ts">
-          <Diff />
+        <Section title="DIFF" hint={diff ? "git show --patch" : "empty"}>
+          <Diff diff={diff} />
         </Section>
       </div>
+    </PanelShell>
+  );
+}
+
+function formatSignatureStatus(status: Commit["signatureStatus"]) {
+  if (!status || status === "valid") return "signed";
+  return status.replaceAll("-", " ");
+}
+
+function PanelShell({ children }: { children: React.ReactNode }) {
+  return (
+    <aside
+      className="flex flex-col overflow-hidden"
+      style={{
+        width: 460,
+        background: "var(--rs-bg-panel)",
+        borderLeft: "1px solid var(--rs-border)",
+      }}
+    >
+      {children}
     </aside>
   );
 }
@@ -238,13 +313,16 @@ function Empty({ children }: { children: React.ReactNode }) {
   );
 }
 
-function FileBadge({ status }: { status: "M" | "A" | "D" }) {
+function FileBadge({ status }: { status: string }) {
   const map = {
     M: { color: "var(--rs-git-modified)", bg: "var(--rs-git-modified)" },
     A: { color: "var(--rs-git-added)", bg: "var(--rs-git-added)" },
     D: { color: "var(--rs-git-deleted)", bg: "var(--rs-git-deleted)" },
   } as const;
-  const c = map[status];
+  const c = map[status as keyof typeof map] ?? {
+    color: "var(--rs-text-secondary)",
+    bg: "var(--rs-text-secondary)",
+  };
   return (
     <span
       className="grid place-items-center rounded"
@@ -263,74 +341,8 @@ function FileBadge({ status }: { status: "M" | "A" | "D" }) {
   );
 }
 
-function AISummary() {
-  return (
-    <div
-      className="mx-3 my-3 p-3 rounded-md"
-      style={{
-        background: "var(--rs-bg-elevated)",
-        border: "1px solid var(--rs-border)",
-      }}
-    >
-      <div
-        className="flex items-center gap-1.5"
-        style={{ fontSize: 11, color: "var(--rs-accent)", fontWeight: 600 }}
-      >
-        <Sparkles size={11} /> AI Summary
-        <span
-          className="ml-auto px-1.5 rounded-full"
-          style={{
-            fontSize: 10,
-            color: "var(--rs-warning)",
-            background:
-              "color-mix(in oklab, var(--rs-bg-canvas), var(--rs-warning) 14%)",
-            border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 40%)",
-          }}
-        >
-          risk: medium
-        </span>
-      </div>
-      <p
-        style={{
-          fontSize: 12,
-          color: "var(--rs-text-primary)",
-          lineHeight: 1.55,
-          marginTop: 6,
-        }}
-      >
-        Adds SSE-based realtime updates to the commit timeline.
-      </p>
-      <ul
-        style={{
-          fontSize: 11,
-          color: "var(--rs-text-secondary)",
-          marginTop: 6,
-          paddingLeft: 14,
-          lineHeight: 1.6,
-        }}
-      >
-        <li>Touches realtime subscription &amp; reconnect logic.</li>
-        <li>
-          Impact:{" "}
-          <span style={{ fontFamily: "var(--rs-mono)" }}>src/api/events.ts</span>,{" "}
-          <span style={{ fontFamily: "var(--rs-mono)" }}>src/hooks/useGitEvents.ts</span>
-        </li>
-      </ul>
-      <div
-        style={{
-          fontSize: 10,
-          color: "var(--rs-text-muted)",
-          marginTop: 8,
-          fontStyle: "italic",
-        }}
-      >
-        Generated by AI · verify before relying on risk scores.
-      </div>
-    </div>
-  );
-}
-
-function Diff() {
+function Diff({ diff }: { diff: string }) {
+  if (!diff) return <Empty>No diff returned for this commit.</Empty>;
   return (
     <div
       className="overflow-x-auto"
@@ -340,7 +352,7 @@ function Diff() {
         background: "var(--rs-bg-canvas)",
       }}
     >
-      {diffSample.split("\n").map((line, i) => {
+      {diff.split("\n").map((line, i) => {
         const isAdd = line.startsWith("+") && !line.startsWith("+++");
         const isDel = line.startsWith("-") && !line.startsWith("---");
         const isHunk = line.startsWith("@@");
@@ -394,4 +406,11 @@ function Diff() {
       })}
     </div>
   );
+}
+
+function formatDate(value?: string) {
+  if (!value) return "unknown";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }

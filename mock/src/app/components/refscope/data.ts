@@ -1,19 +1,79 @@
 export type Commit = {
   hash: string;
+  shortHash?: string;
   subject: string;
   author: string;
+  authorDate?: string;
   time: string;
   branch?: string;
   refs?: string[];
   added: number;
   deleted: number;
-  files: { status: "M" | "A" | "D"; path: string; added: number; deleted: number }[];
+  fileCount?: number;
+  files: ChangedFile[];
   isMerge?: boolean;
   isNew?: boolean;
   signed?: boolean;
+  signatureStatus?: SignatureStatus;
   body?: string;
   parents?: string[];
   lane: number;
+};
+
+export type SignatureStatus =
+  | "valid"
+  | "untrusted"
+  | "bad"
+  | "expired-signature"
+  | "expired-key"
+  | "revoked-key"
+  | "missing-key"
+  | "unsigned"
+  | "unknown";
+
+export type ChangedFile = {
+  status: string;
+  path: string;
+  added: number;
+  deleted: number;
+};
+
+export type Repository = {
+  id: string;
+  name: string;
+};
+
+export type GitRef = {
+  name: string;
+  shortName: string;
+  hash: string;
+  type: "branch" | "tag" | "remote" | "other";
+  updatedAt: string | null;
+};
+
+export type RealtimeAlert = {
+  id: string;
+  type: "history_rewritten";
+  refName: string;
+  previousHash: string;
+  currentHash: string;
+  time: string;
+};
+
+export type CommitDetail = {
+  hash: string;
+  parents: string[];
+  subject: string;
+  body: string;
+  author: {
+    name: string;
+    email: string;
+  };
+  authorDate: string;
+  refs: string[];
+  signed?: boolean;
+  signatureStatus?: SignatureStatus;
+  files: ChangedFile[];
 };
 
 export const commits: Commit[] = [

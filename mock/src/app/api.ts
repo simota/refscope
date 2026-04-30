@@ -1,0 +1,130 @@
+import type {
+  Commit,
+  CommitDetail,
+  GitRef,
+  Repository,
+  SignatureStatus,
+} from "./components/refscope/data";
+
+const API_BASE_URL = import.meta.env.VITE_RTGV_API_BASE_URL ?? "http://127.0.0.1:4175";
+
+type CommitResponse = {
+  hash: string;
+  shortHash?: string;
+  parents: string[];
+  subject: string;
+  author: string;
+  authorDate: string;
+  refs: string[];
+  isMerge: boolean;
+  signed?: boolean;
+  signatureStatus?: SignatureStatus;
+  added?: number;
+  deleted?: number;
+  fileCount?: number;
+};
+
+export type ViewerEvent =
+  | { type: "connected"; repoId: string }
+  | { type: "commit_added"; repoId: string; ref: GitRef; commit: CommitResponse }
+  | { type: "history_rewritten"; repoId: string; ref: GitRef; previousHash: string; currentHash: string }
+  | { type: "ref_created" | "ref_updated" | "ref_deleted"; repoId: string; ref: GitRef }
+  | { type: "error"; error: string; timedOut?: boolean; truncated?: boolean };
+
+export function eventsUrl(repoId: string) {
+  return `${API_BASE_URL}/api/repos/${encodeURIComponent(repoId)}/events`;
+}
+
+export async function listRepositories() {
+  const body = await getJson<{ repositories: Repository[] }>("/api/repos");
+  return body.repositories;
+}
+
+export async function listRefs(repoId: string) {
+  const body = await getJson<{ refs: GitRef[] }>(`/api/repos/${encodeURIComponent(repoId)}/refs`);
+  return body.refs;
+}
+
+export async function listCommits(repoId: string, ref: string, search = "", author = "", path = "") {
+  const params = new URLSearchParams({ ref, limit: "100" });
+  const normalizedSearch = search.trim();
+  if (normalizedSearch) {
+    params.set("search", normalizedSearch);
+  }
+  const normalizedAuthor = author.trim();
+  if (normalizedAuthor) {
+    params.set("author", normalizedAuthor);
+  }
+  const normalizedPath = path.trim();
+  if (normalizedPath) {
+    params.set("path", normalizedPath);
+  }
+  const body = await getJson<CommitResponse[]>(
+    `/api/repos/${encodeURIComponent(repoId)}/commits?${params}`,
+  );
+  return body.map(toCommit);
+}
+
+export async function getCommit(repoId: string, hash: string) {
+  return getJson<CommitDetail>(
+    `/api/repos/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(hash)}`,
+  );
+}
+
+export async function getDiff(repoId: string, hash: string) {
+  const body = await getJson<{ diff: string }>(
+    `/api/repos/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(hash)}/diff`,
+  );
+  return body.diff;
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers: { accept: "application/json" } });
+  if (!response.ok) {
+    const message = await readError(response);
+    throw new Error(message);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function readError(response: Response) {
+  try {
+    const body = (await response.json()) as { error?: string };
+    return body.error ?? `Request failed with ${response.status}`;
+  } catch {
+    return `Request failed with ${response.status}`;
+  }
+}
+
+function toCommit(commit: CommitResponse): Commit {
+  return {
+    hash: commit.hash,
+    shortHash: commit.shortHash,
+    subject: commit.subject,
+    author: commit.author,
+    authorDate: commit.authorDate,
+    time: formatRelativeTime(commit.authorDate),
+    refs: commit.refs,
+    added: commit.added ?? 0,
+    deleted: commit.deleted ?? 0,
+    fileCount: commit.fileCount ?? 0,
+    files: [],
+    isMerge: commit.isMerge,
+    signed: commit.signed,
+    signatureStatus: commit.signatureStatus,
+    parents: commit.parents,
+    lane: commit.isMerge ? 1 : 0,
+  };
+}
+
+function formatRelativeTime(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}

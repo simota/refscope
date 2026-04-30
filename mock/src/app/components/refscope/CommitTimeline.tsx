@@ -1,4 +1,4 @@
-import { Bell, GitMerge, ShieldCheck, AlertTriangle, Pause, X } from "lucide-react";
+import { GitMerge, ShieldCheck, AlertTriangle } from "lucide-react";
 import type { Commit } from "./data";
 
 const LANE_COLORS = ["var(--rs-accent)", "var(--rs-git-merge)", "var(--rs-git-modified)"];
@@ -7,54 +7,91 @@ export function CommitTimeline({
   commits,
   selected,
   onSelect,
+  loading,
+  error,
+  eventNotice,
+  eventStatus,
+  activeFilters,
 }: {
   commits: Commit[];
   selected: string;
   onSelect: (hash: string) => void;
+  loading: boolean;
+  error: string;
+  eventNotice: string;
+  eventStatus: "connecting" | "connected" | "error";
+  activeFilters?: string[];
 }) {
+  const emptyState = activeFilters?.length
+    ? {
+        title: "No matching commits",
+        message: `No commits matched ${activeFilters.join(", ")} on the selected ref.`,
+      }
+    : {
+        title: "No commits",
+        message: "No commits were returned for the selected ref.",
+      };
+
   return (
     <main
       className="flex flex-col overflow-hidden"
       style={{ background: "var(--rs-bg-canvas)", flex: 1, minWidth: 0 }}
     >
-      <RewriteAlert />
-      <LiveBanner />
+      {error ? <MessageBanner tone="warning" title="API error" message={error} /> : null}
+      {eventNotice ? <MessageBanner title="Realtime update" message={eventNotice} /> : null}
 
       <div className="overflow-y-auto" style={{ flex: 1 }}>
-        <ul role="list" className="pb-6">
-          {commits.map((c, i) => (
-            <CommitRow
-              key={c.hash}
-              commit={c}
-              prev={commits[i - 1]}
-              next={commits[i + 1]}
-              selected={c.hash === selected}
-              onClick={() => onSelect(c.hash)}
-            />
-          ))}
-        </ul>
+        {loading ? (
+          <StateMessage title="Loading commits" message="Reading allowlisted repository history." />
+        ) : commits.length ? (
+          <ul role="list" className="pb-6">
+            {commits.map((c, i) => (
+              <CommitRow
+                key={c.hash}
+                commit={c}
+                prev={commits[i - 1]}
+                next={commits[i + 1]}
+                selected={c.hash === selected}
+                onClick={() => onSelect(c.hash)}
+              />
+            ))}
+          </ul>
+        ) : (
+          <StateMessage title={emptyState.title} message={emptyState.message} />
+        )}
       </div>
 
-      <StatusBar />
+      <StatusBar
+        status={eventStatus}
+        head={commits[0]?.shortHash ?? commits[0]?.hash.slice(0, 7)}
+        count={commits.length}
+      />
     </main>
   );
 }
 
-function RewriteAlert() {
+function MessageBanner({
+  title,
+  message,
+  tone = "accent",
+}: {
+  title: string;
+  message: string;
+  tone?: "accent" | "warning";
+}) {
+  const color = tone === "warning" ? "var(--rs-warning)" : "var(--rs-accent)";
   return (
     <div
       className="mx-4 mt-3 px-3 py-2.5 rounded-md flex items-start gap-2.5"
       role="alert"
       style={{
-        background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 12%)",
-        border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 55%)",
+        background: `color-mix(in oklab, var(--rs-bg-elevated), ${color} 12%)`,
+        border: `1px solid color-mix(in oklab, var(--rs-border), ${color} 55%)`,
       }}
     >
-      <AlertTriangle size={14} style={{ color: "var(--rs-warning)", marginTop: 2 }} />
+      <AlertTriangle size={14} style={{ color, marginTop: 2 }} />
       <div className="flex-1" style={{ fontSize: 12 }}>
-        <div style={{ color: "var(--rs-warning)", fontWeight: 600 }}>
-          main history was rewritten
-        </div>
+        <div style={{ color, fontWeight: 600 }}>{title}</div>
         <div
           style={{
             color: "var(--rs-text-secondary)",
@@ -63,46 +100,28 @@ function RewriteAlert() {
             fontSize: 11,
           }}
         >
-          old: 9e8f7a6 → new: a1b2c3d &nbsp;·&nbsp; possible cause: rebase / force push
-        </div>
-        <div className="flex gap-1.5 mt-2">
-          <button className="rs-btn rs-btn--warning">Reload timeline</button>
-          <button className="rs-btn rs-btn--ghost">Compare old/new</button>
-          <button className="rs-btn rs-btn--ghost">View reflog</button>
+          {message}
         </div>
       </div>
-      <button
-        aria-label="dismiss"
-        className="rs-icon-btn"
-        style={{ color: "var(--rs-text-muted)" }}
-      >
-        <X size={13} />
-      </button>
     </div>
   );
 }
 
-function LiveBanner() {
+function StateMessage({ title, message }: { title: string; message: string }) {
   return (
     <div
-      className="mx-4 mt-2 px-3 py-2 rounded-md flex items-center gap-2"
+      className="m-4 rounded-md px-4 py-5"
       style={{
-        background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 10%)",
-        border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 40%)",
+        background: "var(--rs-bg-panel)",
+        border: "1px solid var(--rs-border)",
       }}
     >
-      <Bell size={12} style={{ color: "var(--rs-accent)" }} />
-      <span style={{ fontSize: 12, color: "var(--rs-text-primary)" }}>
-        2 new commits on <span style={{ fontFamily: "var(--rs-mono)" }}>main</span>
-      </span>
-      <div className="flex-1" />
-      <button className="rs-btn rs-btn--accent">Show updates</button>
-      <button
-        className="rs-btn rs-btn--ghost flex items-center gap-1"
-        title="Pause live mode"
-      >
-        <Pause size={11} /> Pause
-      </button>
+      <div style={{ fontSize: 13, color: "var(--rs-text-primary)", fontWeight: 600 }}>
+        {title}
+      </div>
+      <div style={{ fontSize: 12, color: "var(--rs-text-secondary)", marginTop: 4 }}>
+        {message}
+      </div>
     </div>
   );
 }
@@ -121,6 +140,9 @@ function CommitRow({
   onClick: () => void;
 }) {
   const laneColor = LANE_COLORS[commit.lane] ?? LANE_COLORS[0];
+  const fileCount = commit.fileCount ?? commit.files.length;
+  const hasStats = commit.added > 0 || commit.deleted > 0 || fileCount > 0;
+
   return (
     <li
       role="listitem"
@@ -181,7 +203,7 @@ function CommitRow({
           ) : null}
           {commit.signed ? (
             <Badge tone="accent">
-              <ShieldCheck size={10} /> signed
+              <ShieldCheck size={10} /> {formatSignatureStatus(commit.signatureStatus)}
             </Badge>
           ) : null}
           {commit.refs?.map((r) => (
@@ -199,7 +221,7 @@ function CommitRow({
           <span>{commit.author}</span>
           <span>·</span>
           <span>{commit.time}</span>
-          {commit.added || commit.deleted ? (
+          {hasStats ? (
             <>
               <span>·</span>
               <span style={{ color: "var(--rs-git-added)", fontFamily: "var(--rs-mono)" }}>
@@ -208,7 +230,7 @@ function CommitRow({
               <span style={{ color: "var(--rs-git-deleted)", fontFamily: "var(--rs-mono)" }}>
                 -{commit.deleted}
               </span>
-              <span>· {commit.files.length} files</span>
+              <span>· {fileCount} files</span>
             </>
           ) : null}
         </div>
@@ -222,6 +244,11 @@ function CommitRow({
       </div>
     </li>
   );
+}
+
+function formatSignatureStatus(status: Commit["signatureStatus"]) {
+  if (!status || status === "valid") return "signed";
+  return status.replaceAll("-", " ");
 }
 
 function GraphCell({
@@ -357,7 +384,21 @@ function Avatar({ name }: { name: string }) {
   );
 }
 
-function StatusBar() {
+function StatusBar({
+  status,
+  head,
+  count,
+}: {
+  status: "connecting" | "connected" | "error";
+  head?: string;
+  count: number;
+}) {
+  const color =
+    status === "connected"
+      ? "var(--rs-git-added)"
+      : status === "error"
+      ? "var(--rs-warning)"
+      : "var(--rs-text-muted)";
   return (
     <div
       className="flex items-center gap-3 px-4"
@@ -370,13 +411,13 @@ function StatusBar() {
         fontFamily: "var(--rs-mono)",
       }}
     >
-      <span style={{ color: "var(--rs-git-added)" }}>● connected</span>
-      <span>HEAD a1b2c3d</span>
-      <span>events 1,284</span>
+      <span style={{ color }}>● {status}</span>
+      <span>HEAD {head ?? "unknown"}</span>
+      <span>{count} commits</span>
       <div className="flex-1" />
       <span>compact</span>
       <span>·</span>
-      <span>last fetch 2s ago</span>
+      <span>real API</span>
     </div>
   );
 }
