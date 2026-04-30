@@ -27,6 +27,10 @@ export function BranchSidebar({
         borderRight: "1px solid var(--rs-border)",
       }}
     >
+      <Section icon={<GitBranch size={11} />} title="REF MAP">
+        <RefMap refs={refs} selectedRef={selectedRef} />
+      </Section>
+
       <Section icon={<GitBranch size={11} />} title="BRANCHES">
         {branches.length ? (
           branches.map((ref) => (
@@ -101,6 +105,127 @@ export function BranchSidebar({
   );
 }
 
+function RefMap({ refs, selectedRef }: { refs: GitRef[]; selectedRef: string }) {
+  const branches = refs.filter((ref) => ref.type === "branch");
+  const remotes = refs.filter((ref) => ref.type === "remote");
+  const tags = refs.filter((ref) => ref.type === "tag");
+  const selected = refs.find((ref) => selectedRef === ref.name || selectedRef === ref.shortName);
+  const visibleRefs = refs.slice(0, 10);
+  const selectedLabel = selected?.shortName ?? (selectedRef || "none");
+
+  return (
+    <div
+      className="mx-1 rounded-md px-2 py-2"
+      aria-label={`Ref map with ${branches.length} branches, ${remotes.length} remotes, and ${tags.length} tags`}
+      style={{
+        background: "var(--rs-bg-canvas)",
+        border: "1px solid var(--rs-border)",
+      }}
+    >
+      <svg
+        width="100%"
+        height="64"
+        viewBox="0 0 216 64"
+        role="img"
+        aria-label={selected ? `Selected ref ${selected.shortName}` : "Repository ref map"}
+      >
+        <line
+          x1="16"
+          y1="32"
+          x2="200"
+          y2="32"
+          stroke="var(--rs-border)"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        {visibleRefs.map((ref, index) => {
+          const x = 20 + index * 19;
+          const y = ref.type === "tag" ? 16 : ref.type === "remote" ? 48 : 32;
+          const color = refColor(ref.type);
+          const active = selectedRef === ref.name || selectedRef === ref.shortName;
+          return (
+            <g key={ref.name}>
+              <line
+                x1={x}
+                y1="32"
+                x2={x}
+                y2={y}
+                stroke={color}
+                strokeWidth="1.5"
+                strokeOpacity="0.65"
+              />
+              <circle
+                cx={x}
+                cy={y}
+                r={active ? 5 : 3.5}
+                fill={color}
+                stroke={active ? "var(--rs-text-primary)" : "var(--rs-bg-canvas)"}
+                strokeWidth={active ? 1.5 : 1}
+              >
+                <title>{`${ref.shortName} ${ref.hash.slice(0, 7)}`}</title>
+              </circle>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="grid gap-1.5">
+        <RefMapBar label="Branches" count={branches.length} total={refs.length} color="var(--rs-accent)" />
+        <RefMapBar label="Remotes" count={remotes.length} total={refs.length} color="var(--rs-git-added)" />
+        <RefMapBar label="Tags" count={tags.length} total={refs.length} color="var(--rs-git-merge)" />
+      </div>
+      <div
+        className="mt-2 truncate"
+        style={{ color: "var(--rs-text-muted)", fontSize: 10, fontFamily: "var(--rs-mono)" }}
+        title={selected?.name}
+      >
+        Selected {selectedLabel}
+      </div>
+    </div>
+  );
+}
+
+function RefMapBar({
+  label,
+  count,
+  total,
+  color,
+}: {
+  label: string;
+  count: number;
+  total: number;
+  color: string;
+}) {
+  const width = total ? Math.max(6, Math.round((count / total) * 100)) : 0;
+  return (
+    <div className="grid items-center gap-2" style={{ gridTemplateColumns: "56px 1fr 22px" }}>
+      <span style={{ color: "var(--rs-text-muted)", fontSize: 10 }}>{label}</span>
+      <span
+        className="rounded-sm"
+        style={{
+          height: 5,
+          background: "var(--rs-bg-elevated)",
+          overflow: "hidden",
+        }}
+      >
+        <span
+          className="block h-full rounded-sm"
+          style={{ width: `${width}%`, background: color }}
+        />
+      </span>
+      <span style={{ color: "var(--rs-text-secondary)", fontSize: 10, fontFamily: "var(--rs-mono)" }}>
+        {count}
+      </span>
+    </div>
+  );
+}
+
+function refColor(type: GitRef["type"]) {
+  if (type === "tag") return "var(--rs-git-merge)";
+  if (type === "remote") return "var(--rs-git-added)";
+  if (type === "branch") return "var(--rs-accent)";
+  return "var(--rs-text-muted)";
+}
+
 function AlertRow({ alert }: { alert: RealtimeAlert }) {
   const observedTime = formatObservedTime(alert.observedAt);
   const incidentNote = formatIncidentNote(alert, observedTime);
@@ -119,6 +244,7 @@ function AlertRow({ alert }: { alert: RealtimeAlert }) {
       >
         <AlertTriangle size={11} aria-hidden /> History rewritten
       </div>
+      <RewriteFlow previousHash={alert.previousHash} currentHash={alert.currentHash} />
       <dl
         className="mt-2 grid gap-1"
         style={{ fontSize: 10, color: "var(--rs-text-secondary)", lineHeight: 1.4 }}
@@ -146,6 +272,60 @@ function AlertRow({ alert }: { alert: RealtimeAlert }) {
       >
         Copy note
       </button>
+    </div>
+  );
+}
+
+function RewriteFlow({
+  previousHash,
+  currentHash,
+}: {
+  previousHash: string;
+  currentHash: string;
+}) {
+  return (
+    <div
+      className="mt-2 rounded-md px-2 py-2"
+      aria-label={`Rewrite flow from ${previousHash} to ${currentHash}`}
+      style={{
+        background: "var(--rs-bg-canvas)",
+        border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 35%)",
+      }}
+    >
+      <svg width="100%" height="38" viewBox="0 0 192 38" role="img" aria-label="Rewrite before and after hashes">
+        <line
+          x1="22"
+          y1="19"
+          x2="170"
+          y2="19"
+          stroke="var(--rs-warning)"
+          strokeWidth="1.5"
+          strokeDasharray="4 4"
+          strokeLinecap="round"
+        />
+        <circle cx="22" cy="19" r="7" fill="var(--rs-git-deleted)" />
+        <path
+          d="M164 13 L172 19 L164 25"
+          fill="none"
+          stroke="var(--rs-warning)"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <circle cx="170" cy="19" r="7" fill="var(--rs-git-added)" />
+      </svg>
+      <div
+        className="grid items-center gap-2"
+        style={{ gridTemplateColumns: "1fr auto 1fr", fontFamily: "var(--rs-mono)", fontSize: 10 }}
+      >
+        <span className="truncate" title={previousHash} style={{ color: "var(--rs-git-deleted)" }}>
+          {shortHash(previousHash)}
+        </span>
+        <span style={{ color: "var(--rs-text-muted)" }}>to</span>
+        <span className="truncate text-right" title={currentHash} style={{ color: "var(--rs-git-added)" }}>
+          {shortHash(currentHash)}
+        </span>
+      </div>
     </div>
   );
 }

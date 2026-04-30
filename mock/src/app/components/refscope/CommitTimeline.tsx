@@ -135,6 +135,7 @@ function CommitActivityGraph({ commits }: { commits: Commit[] }) {
   const newCount = commits.filter((commit) => commit.isNew).length;
   const maxChange = Math.max(1, ...commits.map((commit) => commit.added + commit.deleted));
   const visibleCommits = commits.slice(0, 24);
+  const authors = summarizeAuthors(commits);
 
   return (
     <section
@@ -183,8 +184,70 @@ function CommitActivityGraph({ commits }: { commits: Commit[] }) {
           </div>
         )}
       </div>
+      {authors.length ? <AuthorGraph authors={authors} total={commits.length} /> : null}
     </section>
   );
+}
+
+function summarizeAuthors(commits: Commit[]) {
+  const counts = new Map<string, number>();
+  for (const commit of commits) {
+    counts.set(commit.author, (counts.get(commit.author) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([name, count], index) => ({ name, count, color: authorColor(index) }));
+}
+
+function AuthorGraph({
+  authors,
+  total,
+}: {
+  authors: Array<{ name: string; count: number; color: string }>;
+  total: number;
+}) {
+  return (
+    <div
+      className="mt-2 grid gap-1.5"
+      aria-label={`Author distribution for ${total} commits`}
+      style={{ maxWidth: 560 }}
+    >
+      {authors.map((author) => {
+        const width = total ? Math.max(8, Math.round((author.count / total) * 100)) : 0;
+        return (
+          <div
+            key={author.name}
+            className="grid items-center gap-2"
+            style={{ gridTemplateColumns: "86px 1fr 32px" }}
+          >
+            <span
+              className="truncate"
+              title={author.name}
+              style={{ color: "var(--rs-text-muted)", fontSize: 10 }}
+            >
+              {author.name}
+            </span>
+            <span
+              className="rounded-sm"
+              style={{ height: 5, background: "var(--rs-bg-canvas)", overflow: "hidden" }}
+              aria-hidden
+            >
+              <span className="block h-full rounded-sm" style={{ width: `${width}%`, background: author.color }} />
+            </span>
+            <span style={{ color: "var(--rs-text-secondary)", fontSize: 10, fontFamily: "var(--rs-mono)" }}>
+              {author.count}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function authorColor(index: number) {
+  const colors = ["var(--rs-accent)", "var(--rs-git-added)", "var(--rs-git-merge)", "var(--rs-git-modified)"];
+  return colors[index] ?? "var(--rs-text-muted)";
 }
 
 function GraphMetric({
@@ -281,6 +344,7 @@ function CompareBar({
           <CompareSummary>
             Ahead {result.ahead} / Behind {result.behind} / Files {result.files} / +{result.added} -{result.deleted}
           </CompareSummary>
+          <CompareGraph result={result} />
           <div className="mt-2 flex flex-wrap gap-2">
             <CopyCommand label="Copy log" command={result.commands.log} />
             <CopyCommand label="Copy stat" command={result.commands.stat} />
@@ -293,6 +357,81 @@ function CompareBar({
         <CompareSummary>Pin a selected commit or ref to compare branch movement.</CompareSummary>
       )}
     </section>
+  );
+}
+
+function CompareGraph({ result }: { result: CompareResult }) {
+  const totalDivergence = result.ahead + result.behind;
+  const aheadPercent = totalDivergence ? Math.round((result.ahead / totalDivergence) * 100) : 0;
+  const behindPercent = totalDivergence ? 100 - aheadPercent : 0;
+  const totalChurn = result.added + result.deleted;
+  const addedPercent = totalChurn ? Math.round((result.added / totalChurn) * 100) : 0;
+  const deletedPercent = totalChurn ? 100 - addedPercent : 0;
+
+  return (
+    <div
+      className="mt-2 grid gap-2"
+      aria-label={`Compare graph: ${result.ahead} ahead, ${result.behind} behind, ${result.added} additions, ${result.deleted} deletions`}
+      style={{ maxWidth: 520 }}
+    >
+      <CompareGraphRow
+        label="Divergence"
+        leftLabel={`${result.behind} behind`}
+        rightLabel={`${result.ahead} ahead`}
+        leftPercent={behindPercent}
+        rightPercent={aheadPercent}
+        leftColor="var(--rs-warning)"
+        rightColor="var(--rs-accent)"
+      />
+      <CompareGraphRow
+        label="Churn"
+        leftLabel={`-${result.deleted}`}
+        rightLabel={`+${result.added}`}
+        leftPercent={deletedPercent}
+        rightPercent={addedPercent}
+        leftColor="var(--rs-git-deleted)"
+        rightColor="var(--rs-git-added)"
+      />
+    </div>
+  );
+}
+
+function CompareGraphRow({
+  label,
+  leftLabel,
+  rightLabel,
+  leftPercent,
+  rightPercent,
+  leftColor,
+  rightColor,
+}: {
+  label: string;
+  leftLabel: string;
+  rightLabel: string;
+  leftPercent: number;
+  rightPercent: number;
+  leftColor: string;
+  rightColor: string;
+}) {
+  return (
+    <div className="grid items-center gap-2" style={{ gridTemplateColumns: "70px 1fr 104px" }}>
+      <span style={{ color: "var(--rs-text-muted)", fontSize: 10 }}>{label}</span>
+      <span
+        className="flex overflow-hidden rounded-sm"
+        style={{ height: 7, background: "var(--rs-bg-canvas)" }}
+        aria-hidden
+      >
+        <span style={{ width: `${leftPercent}%`, background: leftColor }} />
+        <span style={{ width: `${rightPercent}%`, background: rightColor }} />
+      </span>
+      <span
+        className="truncate"
+        style={{ color: "var(--rs-text-secondary)", fontSize: 10, fontFamily: "var(--rs-mono)" }}
+        title={`${leftLabel} / ${rightLabel}`}
+      >
+        {leftLabel} / {rightLabel}
+      </span>
+    </div>
   );
 }
 

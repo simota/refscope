@@ -217,6 +217,7 @@ export function TopBar({
               boxShadow: `0 0 0 3px color-mix(in oklab, ${liveColor}, transparent 75%)`,
             }}
           />
+          <LivePulse status={status} paused={livePaused} pendingUpdates={pendingUpdates} color={liveColor} />
           {livePaused
             ? `PAUSED ${pendingUpdates}`
             : status === "connected"
@@ -235,6 +236,47 @@ export function TopBar({
         </button>
       </div>
     </header>
+  );
+}
+
+function LivePulse({
+  status,
+  paused,
+  pendingUpdates,
+  color,
+}: {
+  status: "connecting" | "connected" | "error";
+  paused: boolean;
+  pendingUpdates: number;
+  color: string;
+}) {
+  const heights =
+    paused
+      ? [5, Math.min(16, 6 + pendingUpdates * 2), 5]
+      : status === "connected"
+        ? [7, 13, 9]
+        : status === "error"
+          ? [12, 12, 12]
+          : [5, 8, 11];
+  return (
+    <span
+      className="inline-flex items-end gap-0.5"
+      aria-hidden
+      style={{ width: 16, height: 16 }}
+    >
+      {heights.map((height, index) => (
+        <span
+          key={`${height}-${index}`}
+          className="rounded-sm"
+          style={{
+            width: 3,
+            height,
+            background: color,
+            opacity: paused ? 0.85 : 0.55 + index * 0.16,
+          }}
+        />
+      ))}
+    </span>
   );
 }
 

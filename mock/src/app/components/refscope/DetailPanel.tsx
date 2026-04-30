@@ -186,6 +186,14 @@ export function DetailPanel({
         {loading ? <Empty>Loading commit detail…</Empty> : null}
         {error ? <Empty>{error}</Empty> : null}
 
+        <Section title="CHANGE GRAPH" hint={`${commit.added} / ${commit.deleted}`}>
+          <ChangeGraph files={files} totalAdded={commit.added} totalDeleted={commit.deleted} />
+        </Section>
+
+        <Section title="FILE STATUS MIX" hint={`${files.length} files`}>
+          <FileStatusMix files={files} />
+        </Section>
+
         <Section title="CHANGED FILES" hint={`${files.length} files`}>
           {files.length === 0 ? (
             <Empty>{loading ? "Loading changed files…" : "No file changes returned for this commit."}</Empty>
@@ -222,6 +230,161 @@ export function DetailPanel({
       </div>
     </PanelShell>
   );
+}
+
+function ChangeGraph({
+  files,
+  totalAdded,
+  totalDeleted,
+}: {
+  files: Commit["files"];
+  totalAdded: number;
+  totalDeleted: number;
+}) {
+  const maxFileChange = Math.max(1, ...files.map((file) => file.added + file.deleted));
+  const totalChange = totalAdded + totalDeleted;
+  const addedPercent = totalChange ? Math.round((totalAdded / totalChange) * 100) : 0;
+  const deletedPercent = totalChange ? 100 - addedPercent : 0;
+
+  return (
+    <div
+      className="px-3 py-3"
+      aria-label={`Change graph with ${totalAdded} additions and ${totalDeleted} deletions`}
+      style={{ color: "var(--rs-text-secondary)", fontSize: 11 }}
+    >
+      <div className="flex items-center gap-2" style={{ fontFamily: "var(--rs-mono)" }}>
+        <span style={{ color: "var(--rs-git-added)" }}>+{totalAdded}</span>
+        <div
+          className="flex flex-1 overflow-hidden rounded-sm"
+          style={{ height: 8, background: "var(--rs-bg-canvas)" }}
+          aria-hidden
+        >
+          <span style={{ width: `${addedPercent}%`, background: "var(--rs-git-added)" }} />
+          <span style={{ width: `${deletedPercent}%`, background: "var(--rs-git-deleted)" }} />
+        </div>
+        <span style={{ color: "var(--rs-git-deleted)" }}>-{totalDeleted}</span>
+      </div>
+
+      {files.length ? (
+        <div className="mt-3 grid gap-1.5">
+          {files.slice(0, 8).map((file) => {
+            const width = Math.max(6, Math.round(((file.added + file.deleted) / maxFileChange) * 100));
+            return (
+              <div
+                key={file.path}
+                className="grid items-center gap-2"
+                style={{ gridTemplateColumns: "1fr 74px" }}
+              >
+                <span
+                  className="truncate"
+                  title={`${file.path}: +${file.added} -${file.deleted}`}
+                  style={{ color: "var(--rs-text-muted)", fontFamily: "var(--rs-mono)" }}
+                >
+                  {file.path}
+                </span>
+                <span
+                  className="rounded-sm"
+                  style={{
+                    height: 6,
+                    background: "var(--rs-bg-canvas)",
+                    overflow: "hidden",
+                  }}
+                  aria-hidden
+                >
+                  <span
+                    className="block h-full rounded-sm"
+                    style={{
+                      width: `${width}%`,
+                      background:
+                        file.deleted > file.added ? "var(--rs-git-deleted)" : "var(--rs-git-added)",
+                    }}
+                  />
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-2" style={{ color: "var(--rs-text-muted)" }}>
+          Change graph appears after file stats load.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FileStatusMix({ files }: { files: Commit["files"] }) {
+  const segments = summarizeFileStatuses(files);
+  return (
+    <div
+      className="px-3 py-3"
+      aria-label={`File status mix for ${files.length} files`}
+      style={{ color: "var(--rs-text-secondary)", fontSize: 11 }}
+    >
+      {segments.length ? (
+        <>
+          <div
+            className="flex overflow-hidden rounded-sm"
+            style={{ height: 10, background: "var(--rs-bg-canvas)" }}
+            aria-hidden
+          >
+            {segments.map((segment) => (
+              <span
+                key={segment.status}
+                style={{
+                  width: `${segment.percent}%`,
+                  background: segment.color,
+                }}
+              />
+            ))}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {segments.map((segment) => (
+              <span
+                key={segment.status}
+                className="inline-flex items-center gap-1"
+                style={{ fontFamily: "var(--rs-mono)", fontSize: 10 }}
+              >
+                <span
+                  className="rounded-sm"
+                  style={{ width: 8, height: 8, background: segment.color }}
+                  aria-hidden
+                />
+                <span style={{ color: "var(--rs-text-primary)" }}>{segment.status}</span>
+                <span style={{ color: "var(--rs-text-muted)" }}>{segment.count}</span>
+              </span>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div style={{ color: "var(--rs-text-muted)" }}>
+          File status mix appears after changed files load.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function summarizeFileStatuses(files: Commit["files"]) {
+  const counts = new Map<string, number>();
+  for (const file of files) {
+    counts.set(file.status, (counts.get(file.status) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([status, count]) => ({
+      status,
+      count,
+      percent: files.length ? Math.max(5, Math.round((count / files.length) * 100)) : 0,
+      color: fileStatusColor(status),
+    }));
+}
+
+function fileStatusColor(status: string) {
+  if (status === "A") return "var(--rs-git-added)";
+  if (status === "D") return "var(--rs-git-deleted)";
+  if (status === "M") return "var(--rs-git-modified)";
+  return "var(--rs-text-secondary)";
 }
 
 function formatSignatureStatus(status: Commit["signatureStatus"]) {
