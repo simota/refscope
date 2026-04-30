@@ -10,7 +10,7 @@ MAX_ITERATIONS ?= 30
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install dev dev-self dev-app dev-api dev-mock build build-api build-mock test test-api verify audit orbit recover clean status
+.PHONY: help install dev dev-self dev-app dev-api dev-mock validate-repos build build-api build-mock test test-api verify audit orbit recover clean status
 
 help:
 	@printf "Realtime Git Viewer commands\n\n"
@@ -45,7 +45,7 @@ dev:
 dev-self:
 	$(MAKE) dev-app RTGV_REPOS="viewer=$(CURDIR)"
 
-dev-app:
+dev-app: validate-repos
 	@if [[ -z "$(RTGV_REPOS)" ]]; then \
 		echo "RTGV_REPOS is required, e.g. make dev-app RTGV_REPOS=viewer=/absolute/path"; \
 		echo "For the current repository, run: make dev-self"; \
@@ -62,12 +62,15 @@ dev-app:
 	trap 'kill $$api_pid 2>/dev/null || true' EXIT INT TERM; \
 	VITE_RTGV_API_BASE_URL="$(VITE_RTGV_API_BASE_URL)" $(PNPM) dev:mock -- --host "$(MOCK_HOST)" --port "$(MOCK_PORT)" --strictPort
 
-dev-api:
+dev-api: validate-repos
 	@if [[ -z "$(RTGV_REPOS)" ]]; then \
 		echo "RTGV_REPOS is required, e.g. make dev-api RTGV_REPOS=viewer=/absolute/path"; \
 		exit 1; \
 	fi
 	RTGV_REPOS="$(RTGV_REPOS)" RTGV_REF_POLL_MS="$(RTGV_REF_POLL_MS)" $(PNPM) dev:api
+
+validate-repos:
+	@RTGV_REPOS="$(RTGV_REPOS)" bash scripts/dev/validate-repos.sh
 
 dev-mock:
 	VITE_RTGV_API_BASE_URL="$(VITE_RTGV_API_BASE_URL)" $(PNPM) dev:mock -- --host "$(MOCK_HOST)" --port "$(MOCK_PORT)" --strictPort

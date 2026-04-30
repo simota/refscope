@@ -38,6 +38,10 @@ To inspect another Git repository, pass an allowlisted repository path:
 make dev-app RTGV_REPOS=viewer=/absolute/path/to/git/repo
 ```
 
+`make dev-self`, `make dev-app`, and `make dev-api` validate the repository
+path before starting services. If the path is missing, relative, does not exist,
+or is not the Git root containing `.git`, the terminal explains what to fix.
+
 Equivalent explicit two-terminal setup:
 
 ```sh
