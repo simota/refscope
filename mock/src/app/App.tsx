@@ -39,6 +39,9 @@ export default function App() {
     "connecting",
   );
   const [eventNotice, setEventNotice] = useState("");
+  const [livePaused, setLivePaused] = useState(false);
+  const [pendingUpdates, setPendingUpdates] = useState(0);
+  const [liveAnnouncement, setLiveAnnouncement] = useState("");
   const [realtimeAlerts, setRealtimeAlerts] = useState<RealtimeAlert[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -53,7 +56,13 @@ export default function App() {
   const searchRef = useRef(search);
   const authorRef = useRef(author);
   const pathRef = useRef(path);
+  const livePausedRef = useRef(livePaused);
+  const pendingRealtimeEventsRef = useRef<Array<() => void>>([]);
   const realtimeNewCommitHashesRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    livePausedRef.current = livePaused;
+  }, [livePaused]);
 
   useEffect(() => {
     selectedRefRef.current = selectedRef;
@@ -189,46 +198,32 @@ export default function App() {
     source.addEventListener("connected", () => setEventStatus("connected"));
     source.addEventListener("commit_added", (event) => {
       const data = parseEvent(event);
-      setEventNotice(`New commit on ${eventRefName(data)}`);
-      if (data.type === "commit_added") {
-        rememberRealtimeNewCommit(data.commit.hash, realtimeNewCommitHashesRef.current);
-      }
-      void refreshTimeline(
-        selectedRepo,
-        selectedRefRef.current,
-        searchRef.current,
-        authorRef.current,
-        pathRef.current,
-      ).catch((err) => setError(errorMessage(err)));
+      const notice = `New commit on ${eventRefName(data)}`;
+      handleRealtimeEvent(notice, () => {
+        setEventNotice(notice);
+        if (data.type === "commit_added") {
+          rememberRealtimeNewCommit(data.commit.hash, realtimeNewCommitHashesRef.current);
+        }
+      });
     });
     source.addEventListener("history_rewritten", (event) => {
       const data = parseEvent(event);
-      setEventNotice(`History rewritten on ${eventRefName(data)}`);
-      if (data.type === "history_rewritten") {
-        const alert = toRealtimeAlert(data);
-        setRealtimeAlerts((current) => [
-          alert,
-          ...current.filter((item) => item.id !== alert.id),
-        ].slice(0, 5));
-      }
-      void refreshTimeline(
-        selectedRepo,
-        selectedRefRef.current,
-        searchRef.current,
-        authorRef.current,
-        pathRef.current,
-      ).catch((err) => setError(errorMessage(err)));
+      const notice = `History rewritten on ${eventRefName(data)}`;
+      handleRealtimeEvent(notice, () => {
+        setEventNotice(notice);
+        if (data.type === "history_rewritten") {
+          const alert = toRealtimeAlert(data);
+          setRealtimeAlerts((current) => [
+            alert,
+            ...current.filter((item) => item.id !== alert.id),
+          ].slice(0, 5));
+        }
+      });
     });
     for (const type of ["ref_created", "ref_updated", "ref_deleted"] as const) {
       source.addEventListener(type, () => {
-        setEventNotice("Refs changed");
-        void refreshTimeline(
-          selectedRepo,
-          selectedRefRef.current,
-          searchRef.current,
-          authorRef.current,
-          pathRef.current,
-        ).catch((err) => setError(errorMessage(err)));
+        const notice = "Refs changed";
+        handleRealtimeEvent(notice, () => setEventNotice(notice));
       });
     }
     source.onerror = (event) => {
@@ -288,6 +283,51 @@ export default function App() {
     });
   }
 
+  function handleRealtimeEvent(notice: string, applyEvent: () => void) {
+    if (livePausedRef.current) {
+      pendingRealtimeEventsRef.current.push(applyEvent);
+      setPendingUpdates((count) => {
+        const nextCount = count + 1;
+        setLiveAnnouncement(`Live updates paused. ${nextCount} updates pending.`);
+        return nextCount;
+      });
+      return;
+    }
+    applyEvent();
+    setLiveAnnouncement(notice);
+    void refreshTimeline(
+      selectedRepo,
+      selectedRefRef.current,
+      searchRef.current,
+      authorRef.current,
+      pathRef.current,
+    ).catch((err) => setError(errorMessage(err)));
+  }
+
+  function toggleLiveUpdates() {
+    if (!livePaused) {
+      setLivePaused(true);
+      setLiveAnnouncement("Live updates paused.");
+      return;
+    }
+    setLivePaused(false);
+    setLiveAnnouncement("Live updates resumed.");
+    if (pendingUpdates > 0) {
+      for (const applyEvent of pendingRealtimeEventsRef.current) {
+        applyEvent();
+      }
+      pendingRealtimeEventsRef.current = [];
+      setPendingUpdates(0);
+      void refreshTimeline(
+        selectedRepo,
+        selectedRefRef.current,
+        searchRef.current,
+        authorRef.current,
+        pathRef.current,
+      ).catch((err) => setError(errorMessage(err)));
+    }
+  }
+
   return (
     <div
       className="size-full flex flex-col"
@@ -308,6 +348,10 @@ export default function App() {
           realtimeNewCommitHashesRef.current.clear();
           setEventStatus("connecting");
           setEventNotice("");
+          setLivePaused(false);
+          setPendingUpdates(0);
+          setLiveAnnouncement("");
+          pendingRealtimeEventsRef.current = [];
           setRealtimeAlerts([]);
           setCompareBase("");
           setCompareTarget("");
@@ -321,6 +365,9 @@ export default function App() {
         repoName={repoName || "No repository"}
         refName={refName}
         status={eventStatus}
+        livePaused={livePaused}
+        pendingUpdates={pendingUpdates}
+        onToggleLiveUpdates={toggleLiveUpdates}
         search={search}
         onSearchChange={(value) => {
           setSearch(value);
@@ -355,6 +402,9 @@ export default function App() {
           error={error}
           eventNotice={eventNotice}
           eventStatus={eventStatus}
+          livePaused={livePaused}
+          pendingUpdates={pendingUpdates}
+          liveAnnouncement={liveAnnouncement}
           activeFilters={activeFilters(search, author, path)}
           refs={refs}
           selectedRef={selectedRef}
@@ -389,6 +439,8 @@ export default function App() {
         search={search}
         author={author}
         path={path}
+        livePaused={livePaused}
+        onToggleLiveUpdates={toggleLiveUpdates}
         onSearchChange={(value) => {
           setSearch(value);
           setSelected("");

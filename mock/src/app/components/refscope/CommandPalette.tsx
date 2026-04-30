@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileSearch, GitBranch, Hash, Search, Tag } from "lucide-react";
+import { FileSearch, GitBranch, Hash, Pause, Play, Search, Tag } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Commit, GitRef } from "./data";
 
@@ -19,6 +19,8 @@ export function CommandPalette({
   search,
   author,
   path,
+  livePaused,
+  onToggleLiveUpdates,
   onSearchChange,
   onAuthorChange,
   onPathChange,
@@ -31,6 +33,8 @@ export function CommandPalette({
   search: string;
   author: string;
   path: string;
+  livePaused: boolean;
+  onToggleLiveUpdates: () => void;
   onSearchChange: (value: string) => void;
   onAuthorChange: (value: string) => void;
   onPathChange: (value: string) => void;
@@ -101,14 +105,26 @@ export function CommandPalette({
         ]
       : [];
 
-    return [...refCommands, ...copyCommand, ...filterCommands];
+    const liveCommand: PaletteCommand = {
+      icon: livePaused ? Play : Pause,
+      label: livePaused ? "Resume live updates" : "Pause live updates",
+      hint: "live",
+      run: () => {
+        onToggleLiveUpdates();
+        onClose();
+      },
+    };
+
+    return [...refCommands, liveCommand, ...copyCommand, ...filterCommands];
   }, [
     author,
+    livePaused,
     onAuthorChange,
     onClose,
     onPathChange,
     onSearchChange,
     onSelectRef,
+    onToggleLiveUpdates,
     path,
     refs,
     search,

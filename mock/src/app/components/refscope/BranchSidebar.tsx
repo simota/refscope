@@ -105,6 +105,7 @@ function AlertRow({ alert }: { alert: RealtimeAlert }) {
   return (
     <div
       className="px-2 py-2 mx-1 rounded-md"
+      aria-label={`History rewritten on ${alert.refName}`}
       style={{
         background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 14%)",
         border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 40%)",
@@ -114,7 +115,7 @@ function AlertRow({ alert }: { alert: RealtimeAlert }) {
         className="flex items-center gap-1.5"
         style={{ fontSize: 11, color: "var(--rs-warning)", fontWeight: 600 }}
       >
-        <AlertTriangle size={11} /> rewritten
+        <AlertTriangle size={11} aria-hidden /> History rewritten
       </div>
       <div
         style={{

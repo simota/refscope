@@ -11,6 +11,9 @@ export function TopBar({
   repoName,
   refName,
   status,
+  livePaused,
+  pendingUpdates,
+  onToggleLiveUpdates,
   search,
   onSearchChange,
   author,
@@ -27,6 +30,9 @@ export function TopBar({
   repoName: string;
   refName: string;
   status: "connecting" | "connected" | "error";
+  livePaused: boolean;
+  pendingUpdates: number;
+  onToggleLiveUpdates: () => void;
   search: string;
   onSearchChange: (value: string) => void;
   author: string;
@@ -35,7 +41,9 @@ export function TopBar({
   onPathChange: (value: string) => void;
 }) {
   const liveColor =
-    status === "connected"
+    livePaused
+      ? "var(--rs-warning)"
+      : status === "connected"
       ? "var(--rs-git-added)"
       : status === "error"
         ? "var(--rs-warning)"
@@ -192,20 +200,39 @@ export function TopBar({
         </div>
       </div>
 
-      <div
-        className="flex items-center gap-1.5 px-2"
-        style={{ fontSize: 11, color: "var(--rs-text-secondary)", fontFamily: "var(--rs-mono)" }}
-      >
-        <span
-          className="inline-block rounded-full"
-          style={{
-            width: 7,
-            height: 7,
-            background: liveColor,
-            boxShadow: `0 0 0 3px color-mix(in oklab, ${liveColor}, transparent 75%)`,
-          }}
-        />
-        {status === "connected" ? "LIVE" : status.toUpperCase()}
+      <div className="flex items-center gap-2" style={{ fontFamily: "var(--rs-mono)" }}>
+        <div
+          className="flex items-center gap-1.5 px-2"
+          aria-label={
+            livePaused ? `Live updates paused, ${pendingUpdates} pending` : `Live status ${status}`
+          }
+          style={{ fontSize: 11, color: "var(--rs-text-secondary)" }}
+        >
+          <span
+            className="inline-block rounded-full"
+            style={{
+              width: 7,
+              height: 7,
+              background: liveColor,
+              boxShadow: `0 0 0 3px color-mix(in oklab, ${liveColor}, transparent 75%)`,
+            }}
+          />
+          {livePaused
+            ? `PAUSED ${pendingUpdates}`
+            : status === "connected"
+              ? "LIVE"
+              : status.toUpperCase()}
+        </div>
+        <button
+          type="button"
+          className="rs-compact-button"
+          onClick={onToggleLiveUpdates}
+          disabled={status === "error"}
+          aria-pressed={livePaused}
+          aria-label={livePaused ? "Resume live updates" : "Pause live updates"}
+        >
+          {livePaused ? "Resume" : "Pause"}
+        </button>
       </div>
     </header>
   );

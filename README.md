@@ -180,6 +180,9 @@ The web UI also marks commits observed through real `commit_added` SSE events as
 new in the timeline after the refreshed commit list includes those hashes. The
 highlight state is local to the current browser session and clears when
 switching repositories.
+Live updates can be paused from the top bar or command palette. While paused,
+incoming SSE events are counted and announced through a polite live region, but
+the timeline is not refreshed until updates are resumed.
 The timeline includes a read-only compare bar for pinning a base ref/commit and
 target ref, preserving selected commits across ref switches when possible, and
 copying local Git comparison commands.

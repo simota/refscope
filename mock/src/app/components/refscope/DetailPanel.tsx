@@ -167,6 +167,7 @@ export function DetailPanel({
                 {signed ? (
                   <span
                     className="px-1.5 rounded-full inline-flex items-center gap-1"
+                    aria-label={`Commit signature status: ${formatSignatureStatus(signatureStatus)}`}
                     style={{
                       fontSize: 10,
                       color: "var(--rs-accent)",
@@ -174,7 +175,7 @@ export function DetailPanel({
                         "1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 40%)",
                     }}
                   >
-                    <ShieldCheck size={10} /> {formatSignatureStatus(signatureStatus)}
+                    <ShieldCheck size={10} aria-hidden /> {formatSignatureStatus(signatureStatus)}
                   </span>
                 ) : null}
               </span>
@@ -224,8 +225,11 @@ export function DetailPanel({
 }
 
 function formatSignatureStatus(status: Commit["signatureStatus"]) {
-  if (!status || status === "valid") return "signed";
-  return status.replaceAll("-", " ");
+  if (!status || status === "valid") return "Signed";
+  return status
+    .split("-")
+    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 function PanelShell({ children }: { children: React.ReactNode }) {

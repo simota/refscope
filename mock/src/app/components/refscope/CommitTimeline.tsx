@@ -12,6 +12,9 @@ export function CommitTimeline({
   error,
   eventNotice,
   eventStatus,
+  livePaused,
+  pendingUpdates,
+  liveAnnouncement,
   activeFilters,
   refs,
   selectedRef,
@@ -34,6 +37,9 @@ export function CommitTimeline({
   error: string;
   eventNotice: string;
   eventStatus: "connecting" | "connected" | "error";
+  livePaused: boolean;
+  pendingUpdates: number;
+  liveAnnouncement: string;
   activeFilters?: string[];
   refs: GitRef[];
   selectedRef: string;
@@ -70,6 +76,9 @@ export function CommitTimeline({
         <MessageBanner tone="warning" title="Selection changed" message={selectionNotice} />
       ) : null}
       {eventNotice ? <MessageBanner title="Realtime update" message={eventNotice} /> : null}
+      <div aria-live="polite" className="sr-only">
+        {liveAnnouncement}
+      </div>
       <CompareBar
         refs={refs}
         selectedRef={selectedRef}
@@ -108,6 +117,8 @@ export function CommitTimeline({
 
       <StatusBar
         status={eventStatus}
+        paused={livePaused}
+        pendingUpdates={pendingUpdates}
         head={commits[0]?.shortHash ?? commits[0]?.hash.slice(0, 7)}
         count={commits.length}
       />
@@ -416,22 +427,23 @@ function CommitRow({
           >
             {commit.subject}
           </span>
+          {commit.isNew ? <Badge tone="accent" ariaLabel="New commit from live update">New</Badge> : null}
           {commit.isMerge ? (
-            <Badge tone="merge">
-              <GitMerge size={10} /> merge
+            <Badge tone="merge" ariaLabel="Merge commit">
+              <GitMerge size={10} aria-hidden /> Merge
             </Badge>
           ) : null}
           {commit.signed ? (
-            <Badge tone="accent">
-              <ShieldCheck size={10} /> {formatSignatureStatus(commit.signatureStatus)}
+            <Badge tone="accent" ariaLabel={`Commit signature status: ${formatSignatureStatus(commit.signatureStatus)}`}>
+              <ShieldCheck size={10} aria-hidden /> {formatSignatureStatus(commit.signatureStatus)}
             </Badge>
           ) : null}
           {commit.refs?.map((r) => (
-            <Badge key={r} tone="branch">
+            <Badge key={r} tone="branch" ariaLabel={`Commit ref ${r}`}>
               {r}
             </Badge>
           ))}
-          {commit.branch ? <Badge tone="branchAlt">{commit.branch}</Badge> : null}
+          {commit.branch ? <Badge tone="branchAlt" ariaLabel={`Commit branch ${commit.branch}`}>{commit.branch}</Badge> : null}
         </div>
         <div
           className="flex items-center gap-2"
@@ -467,8 +479,11 @@ function CommitRow({
 }
 
 function formatSignatureStatus(status: Commit["signatureStatus"]) {
-  if (!status || status === "valid") return "signed";
-  return status.replaceAll("-", " ");
+  if (!status || status === "valid") return "Signed";
+  return status
+    .split("-")
+    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 function GraphCell({
@@ -537,9 +552,11 @@ function GraphCell({
 function Badge({
   children,
   tone,
+  ariaLabel,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   tone: "merge" | "accent" | "branch" | "branchAlt";
+  ariaLabel?: string;
 }) {
   const styles: Record<string, React.CSSProperties> = {
     merge: {
@@ -566,6 +583,7 @@ function Badge({
   return (
     <span
       className="inline-flex items-center gap-1 rounded-full"
+      aria-label={ariaLabel}
       style={{
         padding: "1px 8px",
         fontSize: 10,
@@ -606,15 +624,21 @@ function Avatar({ name }: { name: string }) {
 
 function StatusBar({
   status,
+  paused,
+  pendingUpdates,
   head,
   count,
 }: {
   status: "connecting" | "connected" | "error";
+  paused: boolean;
+  pendingUpdates: number;
   head?: string;
   count: number;
 }) {
   const color =
-    status === "connected"
+    paused
+      ? "var(--rs-warning)"
+      : status === "connected"
       ? "var(--rs-git-added)"
       : status === "error"
       ? "var(--rs-warning)"
@@ -631,7 +655,8 @@ function StatusBar({
         fontFamily: "var(--rs-mono)",
       }}
     >
-      <span style={{ color }}>● {status}</span>
+      <span style={{ color }}>● {paused ? "paused" : status}</span>
+      {paused ? <span>{pendingUpdates} pending updates</span> : null}
       <span>HEAD {head ?? "unknown"}</span>
       <span>{count} commits</span>
       <div className="flex-1" />
