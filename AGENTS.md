@@ -2,9 +2,10 @@
 
 ## Project Structure & Module Organization
 
-This repository currently contains the specification for a realtime Git log viewer.
+This repository contains the specification and Vite React mock for a realtime Git log viewer.
 
 - `docs/spec-v0.md`: initial architecture and product design.
+- `mock/`: Vite React mock UI for the proposed viewer.
 - `AGENTS.md`: contributor and agent guidance for future work.
 
 When implementation begins, separate source code by runtime:
@@ -16,16 +17,14 @@ When implementation begins, separate source code by runtime:
 
 ## Build, Test, and Development Commands
 
-No build system is configured yet. Do not invent commands without adding project files.
+Use pnpm from the repository root. The root `pnpm-lock.yaml` is the only dependency lockfile.
 
-Once a stack is introduced, document canonical commands here:
+- `pnpm install`: install workspace dependencies.
+- `pnpm dev`: start the mock UI.
+- `pnpm build`: build the mock UI.
+- `pnpm audit --audit-level high`: check for high-severity dependency issues.
 
-- `npm install`: install JavaScript dependencies.
-- `npm run dev`: start the local development server.
-- `npm test`: run automated tests.
-- `npm run lint`: run formatting and lint checks.
-
-Prefer one package manager per implementation area and commit the matching lockfile.
+No test or lint script is configured yet. Add scripts before documenting them as required checks.
 
 ## Coding Style & Naming Conventions
 
@@ -51,7 +50,7 @@ Include fixtures for representative Git histories: fast-forward commits, merge c
 
 ## Commit & Pull Request Guidelines
 
-This repository has no commit history yet, so no local convention is established. Use concise, imperative messages:
+Use concise, imperative commit messages:
 
 - `Add initial API server scaffold`
 - `Implement ref snapshot comparison`

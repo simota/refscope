@@ -1,11 +1,25 @@
+# Realtime Git Viewer Mock
 
-  # Create it
+This package contains the Vite React mock UI for Realtime Git Viewer. It is intended as an interactive design and frontend reference while the production web/API implementation is planned.
 
-  This is a code bundle for Create it. The original project is available at https://www.figma.com/design/HPk606QdVQBmaDJ9nIcFl8/Create-it.
+## Running from the repository root
 
-  ## Running the code
+Install dependencies with the root workspace:
 
-  Run `npm i` to install the dependencies.
+```sh
+pnpm install
+```
 
-  Run `npm run dev` to start the development server.
-  
+Start the mock UI:
+
+```sh
+pnpm dev:mock
+```
+
+Build the mock UI:
+
+```sh
+pnpm build:mock
+```
+
+The repository keeps dependency resolution in the root `pnpm-lock.yaml`; do not add package-manager lockfiles inside this package.
