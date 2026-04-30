@@ -1,5 +1,6 @@
 import { GitMerge, ShieldCheck, AlertTriangle } from "lucide-react";
-import type { Commit } from "./data";
+import type { ReactNode } from "react";
+import type { Commit, CompareResult, GitRef } from "./data";
 
 const LANE_COLORS = ["var(--rs-accent)", "var(--rs-git-merge)", "var(--rs-git-modified)"];
 
@@ -12,6 +13,19 @@ export function CommitTimeline({
   eventNotice,
   eventStatus,
   activeFilters,
+  refs,
+  selectedRef,
+  selectedCommit,
+  selectionNotice,
+  compareBase,
+  compareTarget,
+  compareResult,
+  compareLoading,
+  onCompareBaseChange,
+  onCompareTargetChange,
+  onPinSelectedAsBase,
+  onPinCurrentRefAsTarget,
+  onClearCompare,
 }: {
   commits: Commit[];
   selected: string;
@@ -21,6 +35,19 @@ export function CommitTimeline({
   eventNotice: string;
   eventStatus: "connecting" | "connected" | "error";
   activeFilters?: string[];
+  refs: GitRef[];
+  selectedRef: string;
+  selectedCommit: Commit | null;
+  selectionNotice: string;
+  compareBase: string;
+  compareTarget: string;
+  compareResult: CompareResult | null;
+  compareLoading: boolean;
+  onCompareBaseChange: (value: string) => void;
+  onCompareTargetChange: (value: string) => void;
+  onPinSelectedAsBase: () => void;
+  onPinCurrentRefAsTarget: () => void;
+  onClearCompare: () => void;
 }) {
   const emptyState = activeFilters?.length
     ? {
@@ -39,7 +66,24 @@ export function CommitTimeline({
     >
       {error ? <MessageBanner tone="warning" title="API error" message={error} /> : null}
       {isApiConnectionError(error) ? <ApiRecoveryHint /> : null}
+      {selectionNotice ? (
+        <MessageBanner tone="warning" title="Selection changed" message={selectionNotice} />
+      ) : null}
       {eventNotice ? <MessageBanner title="Realtime update" message={eventNotice} /> : null}
+      <CompareBar
+        refs={refs}
+        selectedRef={selectedRef}
+        selectedCommit={selectedCommit}
+        base={compareBase}
+        target={compareTarget}
+        result={compareResult}
+        loading={compareLoading}
+        onBaseChange={onCompareBaseChange}
+        onTargetChange={onCompareTargetChange}
+        onPinSelectedAsBase={onPinSelectedAsBase}
+        onPinCurrentRefAsTarget={onPinCurrentRefAsTarget}
+        onClear={onClearCompare}
+      />
 
       <div className="overflow-y-auto" style={{ flex: 1 }}>
         {loading ? (
@@ -69,6 +113,139 @@ export function CommitTimeline({
       />
     </main>
   );
+}
+
+function CompareBar({
+  refs,
+  selectedRef,
+  selectedCommit,
+  base,
+  target,
+  result,
+  loading,
+  onBaseChange,
+  onTargetChange,
+  onPinSelectedAsBase,
+  onPinCurrentRefAsTarget,
+  onClear,
+}: {
+  refs: GitRef[];
+  selectedRef: string;
+  selectedCommit: Commit | null;
+  base: string;
+  target: string;
+  result: CompareResult | null;
+  loading: boolean;
+  onBaseChange: (value: string) => void;
+  onTargetChange: (value: string) => void;
+  onPinSelectedAsBase: () => void;
+  onPinCurrentRefAsTarget: () => void;
+  onClear: () => void;
+}) {
+  const active = Boolean(base || target);
+  return (
+    <section
+      className="mx-4 mt-3 rounded-md px-3 py-2"
+      style={{
+        background: active ? "var(--rs-bg-elevated)" : "var(--rs-bg-panel)",
+        border: "1px solid var(--rs-border)",
+      }}
+      aria-label="Compare refs and commits"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span style={{ color: "var(--rs-text-primary)", fontSize: 12, fontWeight: 650 }}>
+          Compare
+        </span>
+        <CompareSelect label="Base" value={base} refs={refs} onChange={onBaseChange} />
+        <span style={{ color: "var(--rs-text-muted)", fontFamily: "var(--rs-mono)", fontSize: 12 }}>
+          ..
+        </span>
+        <CompareSelect label="Target" value={target} refs={refs} onChange={onTargetChange} />
+        <button className="rs-compact-button" type="button" onClick={onPinSelectedAsBase} disabled={!selectedCommit}>
+          Base = selected
+        </button>
+        <button className="rs-compact-button" type="button" onClick={onPinCurrentRefAsTarget} disabled={!selectedRef}>
+          Target = current ref
+        </button>
+        <button className="rs-compact-button" type="button" onClick={onClear} disabled={!active}>
+          Clear
+        </button>
+      </div>
+      {loading ? (
+        <CompareSummary>Comparing refs...</CompareSummary>
+      ) : result ? (
+        <>
+          <CompareSummary>
+            Ahead {result.ahead} / Behind {result.behind} / Files {result.files} / +{result.added} -{result.deleted}
+          </CompareSummary>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <CopyCommand label="Copy log" command={result.commands.log} />
+            <CopyCommand label="Copy stat" command={result.commands.stat} />
+            <CopyCommand label="Copy diff" command={result.commands.diff} />
+          </div>
+        </>
+      ) : active ? (
+        <CompareSummary>Choose both base and target to compare.</CompareSummary>
+      ) : (
+        <CompareSummary>Pin a selected commit or ref to compare branch movement.</CompareSummary>
+      )}
+    </section>
+  );
+}
+
+function CompareSelect({
+  label,
+  value,
+  refs,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  refs: GitRef[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="rs-compare-select">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">Choose...</option>
+        <option value="HEAD">HEAD</option>
+        {refs.map((ref) => (
+          <option key={ref.name} value={ref.name}>
+            {ref.type === "branch" ? ref.shortName : `${ref.type}: ${ref.shortName}`}
+          </option>
+        ))}
+        {value && refs.every((ref) => ref.name !== value) && value !== "HEAD" ? (
+          <option value={value}>{shortRevision(value)}</option>
+        ) : null}
+      </select>
+    </label>
+  );
+}
+
+function CompareSummary({ children }: { children: ReactNode }) {
+  return (
+    <div className="mt-2" style={{ color: "var(--rs-text-secondary)", fontSize: 12 }}>
+      {children}
+    </div>
+  );
+}
+
+function CopyCommand({ label, command }: { label: string; command: string }) {
+  return (
+    <button
+      className="rs-compact-button"
+      type="button"
+      onClick={() => void navigator.clipboard?.writeText(command)}
+      title={command}
+    >
+      {label}
+    </button>
+  );
+}
+
+function shortRevision(value: string) {
+  return value.length === 40 ? value.slice(0, 7) : value;
 }
 
 function isApiConnectionError(message: string) {

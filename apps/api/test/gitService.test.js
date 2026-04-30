@@ -140,6 +140,46 @@ test("rejects abbreviated commit diff hashes before running git", async () => {
   });
 });
 
+test("rejects malformed compare base before running git", async () => {
+  const service = createGitService({
+    repositories: new Map(),
+    gitTimeoutMs: 1000,
+    diffMaxBytes: 1024,
+  });
+
+  const result = await service.compareRefs(
+    { id: "demo", name: "demo", path: "/tmp/not-needed" },
+    new URLSearchParams({ base: "refs/heads/main.", target: "HEAD" }),
+  );
+
+  assert.deepEqual(result, {
+    status: 400,
+    body: { error: "Invalid base parameter" },
+  });
+});
+
+test("rejects duplicate compare target before running git", async () => {
+  const service = createGitService({
+    repositories: new Map(),
+    gitTimeoutMs: 1000,
+    diffMaxBytes: 1024,
+  });
+
+  const result = await service.compareRefs(
+    { id: "demo", name: "demo", path: "/tmp/not-needed" },
+    new URLSearchParams([
+      ["base", "HEAD"],
+      ["target", "main"],
+      ["target", "develop"],
+    ]),
+  );
+
+  assert.deepEqual(result, {
+    status: 400,
+    body: { error: "Duplicate target parameter" },
+  });
+});
+
 test("classifies created, updated, and deleted refs", () => {
   const previous = new Map([
     [

@@ -61,6 +61,11 @@ export function createRequestHandler(config, gitService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "compare") {
+        const result = await gitService.compareRefs(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "events") {
         await sendEventStream(req, res, config, gitService, repo.value);
         return;
@@ -87,6 +92,7 @@ function matchRoute(method, pathname) {
   const repoId = parts[2];
   if (parts.length === 4 && parts[3] === "refs") return { name: "refs", params: { repoId } };
   if (parts.length === 4 && parts[3] === "commits") return { name: "commits", params: { repoId } };
+  if (parts.length === 4 && parts[3] === "compare") return { name: "compare", params: { repoId } };
   if (parts.length === 5 && parts[3] === "commits") {
     return { name: "commit", params: { repoId, hash: parts[4] } };
   }

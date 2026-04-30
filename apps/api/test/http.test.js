@@ -28,6 +28,40 @@ test("returns a public 400 error for malformed percent-encoded paths", async () 
   assert.deepEqual(JSON.parse(response.body), { error: "Invalid request path" });
 });
 
+test("routes compare requests to the git service", async () => {
+  const handler = createRequestHandler(
+    { allowedOrigins: new Set() },
+    {
+      getRepository(repoId) {
+        return { id: repoId, name: repoId, path: "/tmp/repo" };
+      },
+      async compareRefs(repo, query) {
+        assert.equal(repo.id, "demo");
+        assert.equal(query.get("base"), "main");
+        assert.equal(query.get("target"), "feature");
+        return { status: 200, body: { base: "main", target: "feature", ahead: 1, behind: 0 } };
+      },
+    },
+  );
+  const response = createMockResponse();
+
+  await handler(
+    createMockRequest({
+      method: "GET",
+      url: "/api/repos/demo/compare?base=main&target=feature",
+    }),
+    response,
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(JSON.parse(response.body), {
+    base: "main",
+    target: "feature",
+    ahead: 1,
+    behind: 0,
+  });
+});
+
 function createMockRequest({ method, url }) {
   const request = new EventEmitter();
   request.method = method;

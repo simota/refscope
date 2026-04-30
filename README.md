@@ -129,6 +129,7 @@ Available read-only endpoints:
 - `GET /api/repos/:repoId/commits?ref=HEAD&limit=50&search=message&author=name&path=src/app.ts`
 - `GET /api/repos/:repoId/commits/:hash`
 - `GET /api/repos/:repoId/commits/:hash/diff`
+- `GET /api/repos/:repoId/compare?base=main&target=feature/refscope`
 - `GET /api/repos/:repoId/events`
 
 Commit detail responses include metadata, refs, and a bounded changed-file summary
@@ -154,6 +155,10 @@ public `400` error.
 Commit-list query parameters are scalar: duplicate `ref`, `limit`, `search`,
 `author`, or `path` parameters return a public `400` error instead of being
 silently collapsed to one value.
+Compare responses summarize `base..target` with ahead/behind counts,
+changed-file totals, added/deleted line totals, merge-base information when
+available, and copyable local Git commands for `log`, `diff --stat`, and
+`diff`.
 When message, author, or path filters are active and the API returns no
 commits, the web UI shows a filter-specific empty state so a zero-result search
 is distinguishable from an unfiltered empty ref.
@@ -175,6 +180,9 @@ The web UI also marks commits observed through real `commit_added` SSE events as
 new in the timeline after the refreshed commit list includes those hashes. The
 highlight state is local to the current browser session and clears when
 switching repositories.
+The timeline includes a read-only compare bar for pinning a base ref/commit and
+target ref, preserving selected commits across ref switches when possible, and
+copying local Git comparison commands.
 If the SSE stream emits a typed `error` event, the web UI surfaces the sanitized
 API error message in the timeline instead of silently dropping the event.
 
@@ -209,6 +217,8 @@ API error message in the timeline instead of silently dropping the event.
   integer, then clamped to 200 before reaching Git.
 - Duplicate public commit-list query parameters are rejected before Git
   execution so conflicting scalar inputs are not silently ignored.
+- Public compare `base` and `target` inputs must be conservative Git ref-like
+  names or full 40-character object IDs before any comparison command runs.
 - Public commit detail and diff `:hash` path input must be a full 40-character
   hexadecimal object ID; abbreviated or non-hex values are rejected before Git
   execution.

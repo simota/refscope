@@ -7,11 +7,13 @@ import { CommandPalette } from "./components/refscope/CommandPalette";
 import type {
   Commit,
   CommitDetail,
+  CompareResult,
   GitRef,
   RealtimeAlert,
   Repository,
 } from "./components/refscope/data";
 import {
+  compareRefs,
   eventsUrl,
   getCommit,
   getDiff,
@@ -42,6 +44,11 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
   const [path, setPath] = useState("");
+  const [selectionNotice, setSelectionNotice] = useState("");
+  const [compareBase, setCompareBase] = useState("");
+  const [compareTarget, setCompareTarget] = useState("");
+  const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
   const selectedRefRef = useRef(selectedRef);
   const searchRef = useRef(search);
   const authorRef = useRef(author);
@@ -92,14 +99,25 @@ export default function App() {
     loadRepositoryState(selectedRepo, selectedRef, search, author, path)
       .then(({ nextRefs, nextRef, nextCommits }) => {
         if (cancelled) return;
+        const markedCommits = markRealtimeNewCommits(
+          nextCommits,
+          realtimeNewCommitHashesRef.current,
+        );
         setRefs(nextRefs);
         setSelectedRef(nextRef);
-        setCommits(markRealtimeNewCommits(nextCommits, realtimeNewCommitHashesRef.current));
-        setSelected((current) =>
-          nextCommits.some((commit) => commit.hash === current)
-            ? current
-            : nextCommits[0]?.hash || "",
-        );
+        setCommits(markedCommits);
+        setSelected((current) => {
+          if (!current) {
+            setSelectionNotice("");
+            return markedCommits[0]?.hash || "";
+          }
+          if (markedCommits.some((commit) => commit.hash === current)) {
+            setSelectionNotice("");
+            return current;
+          }
+          setSelectionNotice("Previous selection is not on this ref; selected the latest visible commit.");
+          return markedCommits[0]?.hash || "";
+        });
         setError("");
       })
       .catch((err) => {
@@ -112,6 +130,33 @@ export default function App() {
       cancelled = true;
     };
   }, [selectedRepo, selectedRef, search, author, path]);
+
+  useEffect(() => {
+    if (!selectedRepo || !compareBase || !compareTarget) {
+      setCompareResult(null);
+      return;
+    }
+    let cancelled = false;
+    setCompareLoading(true);
+    compareRefs(selectedRepo, compareBase, compareTarget)
+      .then((result) => {
+        if (cancelled) return;
+        setCompareResult(result);
+        setError("");
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setCompareResult(null);
+          setError(errorMessage(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCompareLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRepo, compareBase, compareTarget]);
 
   useEffect(() => {
     if (!selectedRepo || !selected) {
@@ -227,10 +272,20 @@ export default function App() {
     );
     setRefs(nextRefs);
     setSelectedRef(nextRef);
-    setCommits(markRealtimeNewCommits(nextCommits, realtimeNewCommitHashesRef.current));
-    setSelected((current) =>
-      nextCommits.some((commit) => commit.hash === current) ? current : nextCommits[0]?.hash || "",
-    );
+    const markedCommits = markRealtimeNewCommits(nextCommits, realtimeNewCommitHashesRef.current);
+    setCommits(markedCommits);
+    setSelected((current) => {
+      if (!current) {
+        setSelectionNotice("");
+        return markedCommits[0]?.hash || "";
+      }
+      if (markedCommits.some((commit) => commit.hash === current)) {
+        setSelectionNotice("");
+        return current;
+      }
+      setSelectionNotice("Previous selection is not on this ref; selected the latest visible commit.");
+      return markedCommits[0]?.hash || "";
+    });
   }
 
   return (
@@ -254,12 +309,14 @@ export default function App() {
           setEventStatus("connecting");
           setEventNotice("");
           setRealtimeAlerts([]);
+          setCompareBase("");
+          setCompareTarget("");
+          setCompareResult(null);
         }}
         refs={refs}
         selectedRef={selectedRef}
         onSelectRef={(ref) => {
           setSelectedRef(ref);
-          setSelected("");
         }}
         repoName={repoName || "No repository"}
         refName={refName}
@@ -286,7 +343,6 @@ export default function App() {
           selectedRef={selectedRef}
           onSelectRef={(ref) => {
             setSelectedRef(ref);
-            setSelected("");
           }}
           headHash={commits[0]?.shortHash ?? commits[0]?.hash.slice(0, 7)}
           alerts={realtimeAlerts}
@@ -300,6 +356,25 @@ export default function App() {
           eventNotice={eventNotice}
           eventStatus={eventStatus}
           activeFilters={activeFilters(search, author, path)}
+          refs={refs}
+          selectedRef={selectedRef}
+          selectedCommit={current}
+          selectionNotice={selectionNotice}
+          compareBase={compareBase}
+          compareTarget={compareTarget}
+          compareResult={compareResult}
+          compareLoading={compareLoading}
+          onCompareBaseChange={setCompareBase}
+          onCompareTargetChange={setCompareTarget}
+          onPinSelectedAsBase={() => {
+            if (current) setCompareBase(current.hash);
+          }}
+          onPinCurrentRefAsTarget={() => setCompareTarget(selectedRef)}
+          onClearCompare={() => {
+            setCompareBase("");
+            setCompareTarget("");
+            setCompareResult(null);
+          }}
         />
         <DetailPanel commit={current} detail={detail} diff={diff} loading={detailLoading} error={error} />
       </div>
@@ -310,7 +385,6 @@ export default function App() {
         selectedCommit={current}
         onSelectRef={(ref) => {
           setSelectedRef(ref);
-          setSelected("");
         }}
         search={search}
         author={author}
@@ -463,6 +537,50 @@ function RefScopeTokens() {
       }
       .rs-chip:hover {
         background: color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 10%);
+      }
+      .rs-compact-button {
+        height: 26px;
+        padding: 0 9px;
+        border-radius: var(--rs-radius-sm);
+        border: 1px solid var(--rs-border);
+        background: var(--rs-bg-canvas);
+        color: var(--rs-text-secondary);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .rs-compact-button:not(:disabled) {
+        cursor: pointer;
+      }
+      .rs-compact-button:disabled {
+        opacity: 0.45;
+      }
+      .rs-compact-button:not(:disabled):hover {
+        color: var(--rs-text-primary);
+        border-color: color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%);
+      }
+      .rs-compare-select {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 26px;
+        padding: 0 8px;
+        border-radius: var(--rs-radius-sm);
+        border: 1px solid var(--rs-border);
+        background: var(--rs-bg-canvas);
+        color: var(--rs-text-secondary);
+        font-size: 11px;
+      }
+      .rs-compare-select select {
+        max-width: 170px;
+        background: transparent;
+        color: var(--rs-text-primary);
+        border: 0;
+        outline: 0;
+        font: inherit;
+      }
+      .rs-compare-select option {
+        background: var(--rs-bg-elevated);
+        color: var(--rs-text-primary);
       }
       .rs-btn {
         display: inline-flex;

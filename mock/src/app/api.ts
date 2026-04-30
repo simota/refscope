@@ -1,6 +1,7 @@
 import type {
   Commit,
   CommitDetail,
+  CompareResult,
   GitRef,
   Repository,
   SignatureStatus,
@@ -77,6 +78,11 @@ export async function getDiff(repoId: string, hash: string) {
     `/api/repos/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(hash)}/diff`,
   );
   return body.diff;
+}
+
+export async function compareRefs(repoId: string, base: string, target: string) {
+  const params = new URLSearchParams({ base, target });
+  return getJson<CompareResult>(`/api/repos/${encodeURIComponent(repoId)}/compare?${params}`);
 }
 
 async function getJson<T>(path: string): Promise<T> {

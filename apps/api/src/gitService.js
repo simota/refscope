@@ -286,7 +286,61 @@ export function createGitService(config) {
         },
       };
     },
+
+    async compareRefs(repo, query) {
+      const queryValues = readCompareQuery(query);
+      if (!queryValues.ok) {
+        return { status: 400, body: { error: queryValues.error } };
+      }
+
+      const { base, target } = queryValues.value;
+      const [ahead, behind, numstat, mergeBase] = await Promise.all([
+        runGit(repo, ["rev-list", "--count", `${base}..${target}`], {
+          timeoutMs: config.gitTimeoutMs,
+        }),
+        runGit(repo, ["rev-list", "--count", `${target}..${base}`], {
+          timeoutMs: config.gitTimeoutMs,
+        }),
+        runGit(repo, ["diff", "--numstat", "--no-ext-diff", "--no-color", `${base}..${target}`, "--"], {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: config.diffMaxBytes,
+        }),
+        readMergeBase(repo, base, target, config.gitTimeoutMs),
+      ]);
+      const stats = parseNumstatSummary(numstat.stdout.split("\n"));
+
+      return {
+        status: 200,
+        body: {
+          base,
+          target,
+          mergeBase,
+          ahead: parseCount(ahead.stdout),
+          behind: parseCount(behind.stdout),
+          files: stats.fileCount,
+          added: stats.added,
+          deleted: stats.deleted,
+          commands: {
+            log: `git log --oneline ${base}..${target}`,
+            stat: `git diff --stat ${base}..${target}`,
+            diff: `git diff ${base}..${target}`,
+          },
+        },
+      };
+    },
   };
+}
+
+async function readMergeBase(repo, base, target, timeoutMs) {
+  try {
+    const { stdout } = await runGit(repo, ["merge-base", base, target], { timeoutMs });
+    return stdout.trim() || null;
+  } catch (error) {
+    if (error instanceof GitCommandError && error.exitCode === 1) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function readCommitListQuery(query) {
@@ -299,6 +353,26 @@ function readCommitListQuery(query) {
     values[name] = allValues[0] ?? "";
   }
   return { ok: true, value: values };
+}
+
+function readCompareQuery(query) {
+  const values = {};
+  for (const name of ["base", "target"]) {
+    const allValues = query.getAll(name);
+    if (allValues.length > 1) {
+      return { ok: false, error: `Duplicate ${name} parameter` };
+    }
+    const value = allValues[0] ?? "";
+    if (!isValidCompareRevision(value)) {
+      return { ok: false, error: `Invalid ${name} parameter` };
+    }
+    values[name] = value;
+  }
+  return { ok: true, value: values };
+}
+
+function isValidCompareRevision(value) {
+  return isValidObjectId(value) || isValidGitRef(value);
 }
 
 export function compareRefSnapshots(previousSnapshot, currentSnapshot) {
@@ -472,6 +546,11 @@ function parseNameStatusLine(line, stats) {
 
 function parseStatCount(value) {
   const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function parseCount(value) {
+  const parsed = Number(value.trim());
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 

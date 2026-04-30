@@ -51,6 +51,22 @@ export type GitRef = {
   updatedAt: string | null;
 };
 
+export type CompareResult = {
+  base: string;
+  target: string;
+  mergeBase: string | null;
+  ahead: number;
+  behind: number;
+  files: number;
+  added: number;
+  deleted: number;
+  commands: {
+    log: string;
+    stat: string;
+    diff: string;
+  };
+};
+
 export type RealtimeAlert = {
   id: string;
   type: "history_rewritten";
