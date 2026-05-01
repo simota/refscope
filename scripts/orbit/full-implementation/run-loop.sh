@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 LOOP_DIR="${LOOP_DIR:-${SCRIPT_DIR}}"
 
-MAX_ITERATIONS="${MAX_ITERATIONS:-20}"
+MAX_ITERATIONS="${MAX_ITERATIONS:-50}"
 RETRY_LIMIT="${RETRY_LIMIT:-3}"
 RETRY_BACKOFF_BASE="${RETRY_BACKOFF_BASE:-2}"
 ITER_TIMEOUT="${ITER_TIMEOUT:-900}"
@@ -16,12 +16,16 @@ AUTOCOMMIT="${AUTOCOMMIT:-false}"
 COMMIT_MSG_PREFIX="${COMMIT_MSG_PREFIX:-loop}"
 MAX_LOG_SIZE="${MAX_LOG_SIZE:-5242880}"
 STRUCTURED_LOG="${STRUCTURED_LOG:-true}"
+SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-false}"
 CIRCUIT_BREAKER="${CIRCUIT_BREAKER:-true}"
 CIRCUIT_THRESHOLD="${CIRCUIT_THRESHOLD:-3}"
 CIRCUIT_COOLDOWN="${CIRCUIT_COOLDOWN:-300}"
 DEDUP_WINDOW="${DEDUP_WINDOW:-5}"
 CONVERGENCE_WINDOW="${CONVERGENCE_WINDOW:-3}"
 CONVERGENCE_THRESHOLD="${CONVERGENCE_THRESHOLD:-0.85}"
+CODEX_MODEL="${CODEX_MODEL:-}"
+CODEX_SANDBOX="${CODEX_SANDBOX:-workspace-write}"
+AUTOCOMMIT_PATHS="${AUTOCOMMIT_PATHS:-apps mock docs scripts package.json pnpm-lock.yaml pnpm-workspace.yaml README.md AGENTS.md .agents}"
 
 STATE_FILE="${LOOP_DIR}/state.env"
 PROGRESS_FILE="${LOOP_DIR}/progress.md"
@@ -32,6 +36,7 @@ JSONL_LOG="${LOOP_DIR}/runner.jsonl"
 LOCK_FILE="${LOOP_DIR}/.run-loop.lock"
 CIRCUIT_FILE="${LOOP_DIR}/.circuit-state"
 ACTION_LOG="${LOOP_DIR}/actions.log"
+DIRTY_BASELINE_FILE="${LOOP_DIR}/dirty-baseline.txt"
 
 cd "${PROJECT_ROOT}"
 
@@ -93,6 +98,10 @@ STATE
 }
 
 preflight_check() {
+  if [[ "${SKIP_PREFLIGHT}" == "true" ]]; then
+    echo "[PREFLIGHT] Skipped (SKIP_PREFLIGHT=true)"
+    return 0
+  fi
   mkdir -p "${LOOP_DIR}"
   for required in "${GOAL_FILE}" "${PROGRESS_FILE}" "${PROMPT_FILE}" "${LOOP_DIR}/verify.sh"; do
     if [[ ! -f "${required}" ]]; then
@@ -128,6 +137,61 @@ preflight_check() {
     return 1
   fi
   echo "[PREFLIGHT] All checks passed"
+}
+
+capture_dirty_baseline() {
+  if [[ -f "${DIRTY_BASELINE_FILE}" ]]; then
+    return 0
+  fi
+  git status --short --untracked-files=all | awk '{print $2}' > "${DIRTY_BASELINE_FILE}"
+}
+
+is_dirty_baseline_path() {
+  local candidate="$1"
+  [[ -s "${DIRTY_BASELINE_FILE}" ]] || return 1
+  grep -Fxq "${candidate}" "${DIRTY_BASELINE_FILE}"
+}
+
+stage_loop_changes() {
+  local path staged_any=false
+  while IFS= read -r path; do
+    [[ -n "${path}" ]] || continue
+    case "${path}" in
+      node_modules/*|mock/node_modules/*|mock/dist/*|.DS_Store|scripts/orbit/full-implementation/runner.log*|scripts/orbit/full-implementation/runner.jsonl|scripts/orbit/full-implementation/state.env|scripts/orbit/full-implementation/state.env.sha256|scripts/orbit/full-implementation/.circuit-state|scripts/orbit/full-implementation/actions.log)
+        continue
+        ;;
+    esac
+    if is_dirty_baseline_path "${path}"; then
+      echo "[AUTOCOMMIT:SKIP] dirty-baseline path: ${path}" | tee -a "${RUNNER_LOG}"
+      continue
+    fi
+    git add -- "${path}"
+    staged_any=true
+  done < <(git status --short --untracked-files=all ${AUTOCOMMIT_PATHS} | awk '{print $2}')
+
+  [[ "${staged_any}" == "true" ]]
+}
+
+run_codex_iteration() {
+  local prompt_tmp="$1"
+  local output_tmp="$2"
+  local cmd=(codex exec --full-auto -s "${CODEX_SANDBOX}" -C "${PROJECT_ROOT}")
+  if [[ -n "${CODEX_MODEL}" ]]; then
+    cmd+=(-m "${CODEX_MODEL}")
+  fi
+  cmd+=("$(cat "${prompt_tmp}")")
+  portable_timeout "${ITER_TIMEOUT}" "${cmd[@]}" 2>&1 | tee -a "${RUNNER_LOG}" | tee "${output_tmp}"
+}
+
+parse_loop_status() {
+  local output_file="$1"
+  local parsed
+  parsed="$(grep -E '^NEXUS_LOOP_STATUS: (CONTINUE|DONE)$' "${output_file}" | tail -1 | awk '{print $2}' || true)"
+  if [[ "${parsed}" == "DONE" || "${parsed}" == "CONTINUE" ]]; then
+    echo "${parsed}"
+    return 0
+  fi
+  echo "CONTINUE"
 }
 
 rotate_log() {
@@ -253,6 +317,7 @@ fi
 
 echo "$$" > "${LOCK_FILE}"
 rotate_log
+capture_dirty_baseline
 
 if [[ ! -f "${STATE_FILE}" ]]; then
   atomic_state_write 1 READY
@@ -269,6 +334,24 @@ fi
 source "${STATE_FILE}"
 ITER="${NEXT_ITERATION:-1}"
 STATUS="${LAST_STATUS:-READY}"
+
+if [[ "${STATUS}" != "DONE" && "${ITER}" -gt "${MAX_ITERATIONS}" ]]; then
+  STATUS="BLOCKED"
+  atomic_state_write "${ITER}" BLOCKED
+  {
+    echo ""
+    echo "## Iteration ${ITER} - BLOCKED"
+    echo "- Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    echo "- MAX_ITER: NEXT_ITERATION=${ITER} exceeds MAX_ITERATIONS=${MAX_ITERATIONS}."
+    echo "- Recovery: rerun with a higher MAX_ITERATIONS value, or inspect progress.md and mark DONE if all acceptance criteria are satisfied."
+    echo "- Decision: CONTINUE"
+  } >> "${PROGRESS_FILE}"
+  echo "[MAX_ITER:BLOCKED] NEXT_ITERATION=${ITER} exceeds MAX_ITERATIONS=${MAX_ITERATIONS}" | tee -a "${RUNNER_LOG}"
+  echo ""
+  echo "NEXUS_LOOP_STATUS: CONTINUE"
+  echo "NEXUS_LOOP_SUMMARY: MAX_ITER reached at iteration ${ITER}; raise MAX_ITERATIONS or close the loop with done.md evidence."
+  exit 1
+fi
 
 while [[ "${STATUS}" != "DONE" && "${ITER}" -le "${MAX_ITERATIONS}" ]]; do
   if ! check_circuit; then
@@ -294,6 +377,7 @@ while [[ "${STATUS}" != "DONE" && "${ITER}" -le "${MAX_ITERATIONS}" ]]; do
   }
 
   prompt_tmp="$(mktemp "${LOOP_DIR}/prompt.${ITER}.XXXXXX")"
+  output_tmp="$(mktemp "${LOOP_DIR}/output.${ITER}.XXXXXX")"
   build_iteration_prompt "${prompt_tmp}"
 
   echo "=== Iteration ${ITER}/${MAX_ITERATIONS} ===" | tee -a "${RUNNER_LOG}"
@@ -303,7 +387,7 @@ while [[ "${STATUS}" != "DONE" && "${ITER}" -le "${MAX_ITERATIONS}" ]]; do
 
   while [[ "${RETRY_COUNT}" -lt "${RETRY_LIMIT}" ]]; do
     LAST_EXIT_CODE=0
-    portable_timeout "${ITER_TIMEOUT}" codex exec --full-auto -C "${PROJECT_ROOT}" "$(cat "${prompt_tmp}")" 2>&1 | tee -a "${RUNNER_LOG}" || LAST_EXIT_CODE=$?
+    run_codex_iteration "${prompt_tmp}" "${output_tmp}" || LAST_EXIT_CODE=$?
     TOTAL_API_CALLS=$((TOTAL_API_CALLS + 1))
     if [[ "${LAST_EXIT_CODE}" -eq 0 ]]; then
       EXEC_SUCCESS=true
@@ -321,6 +405,7 @@ while [[ "${STATUS}" != "DONE" && "${ITER}" -le "${MAX_ITERATIONS}" ]]; do
   rm -f "${prompt_tmp}"
 
   if [[ "${EXEC_SUCCESS}" != "true" ]]; then
+    rm -f "${output_tmp}"
     STATUS="BLOCKED"
     {
       echo ""
@@ -339,13 +424,16 @@ while [[ "${STATUS}" != "DONE" && "${ITER}" -le "${MAX_ITERATIONS}" ]]; do
   fi
 
   if [[ "${AUTOCOMMIT}" == "true" ]]; then
-    git add -A -- ':!node_modules' ':!mock/node_modules' ':!mock/dist' ':!.DS_Store'
+    stage_loop_changes || true
     if ! git diff --cached --quiet; then
       git commit -m "${COMMIT_MSG_PREFIX}(iter-${ITER}): advance implementation [verify=${VERIFY_RESULT}]"
     fi
   fi
 
-  if [[ -f "${LOOP_DIR}/done.md" && "${VERIFY_RESULT}" == "PASS" ]]; then
+  CODEX_STATUS="$(parse_loop_status "${output_tmp}")"
+  rm -f "${output_tmp}"
+
+  if [[ "${CODEX_STATUS}" == "DONE" && -f "${LOOP_DIR}/done.md" && "${VERIFY_RESULT}" == "PASS" ]]; then
     STATUS="DONE"
   else
     STATUS="CONTINUE"

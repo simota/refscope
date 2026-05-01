@@ -16,10 +16,12 @@ Required behavior:
 
 - Do not delete or overwrite unrelated user changes.
 - Do not commit unless explicitly asked by the runner configuration or user.
+- Keep each iteration to the smallest useful implementation slice.
 - Do not introduce unsafe Git command execution.
 - Validate public inputs and keep repository paths allowlisted.
 - Update documentation when setup, API, configuration, or security behavior changes.
 - Run relevant verification commands before declaring completion.
+- If verification cannot run, append the exact blocker to `scripts/orbit/full-implementation/progress.md`.
 
 Completion protocol:
 
@@ -31,4 +33,3 @@ Completion protocol:
 NEXUS_LOOP_STATUS: CONTINUE | DONE
 NEXUS_LOOP_SUMMARY: <single-line operational summary>
 ```
-

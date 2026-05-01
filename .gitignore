@@ -13,7 +13,11 @@ pnpm-debug.log*
 # Orbit runtime state
 scripts/orbit/full-implementation/.circuit-state
 scripts/orbit/full-implementation/actions.log
+scripts/orbit/full-implementation/archive/
+scripts/orbit/full-implementation/dirty-baseline.txt
+scripts/orbit/full-implementation/output.*
 scripts/orbit/full-implementation/progress.md
+scripts/orbit/full-implementation/prompt.*
 scripts/orbit/full-implementation/runner.jsonl
 scripts/orbit/full-implementation/runner.log*
 scripts/orbit/full-implementation/state.env
