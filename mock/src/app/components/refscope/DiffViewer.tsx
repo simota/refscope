@@ -764,7 +764,8 @@ function HunkBlock({
         role="row"
         className="grid items-center px-2"
         style={{
-          gridTemplateColumns: "44px 44px 1fr",
+          gridTemplateColumns: "44px 44px auto",
+          minWidth: "100%",
           minHeight: 22,
           background: "color-mix(in oklab, var(--rs-bg-canvas), var(--rs-accent) 6%)",
           color: "var(--rs-text-muted)",
@@ -776,7 +777,7 @@ function HunkBlock({
         <span role="gridcell" />
         <span role="gridcell" />
         <span role="gridcell" className="flex items-center gap-3" style={{ minWidth: 0 }}>
-          <span style={{ color: "var(--rs-text-secondary)" }}>
+          <span style={{ color: "var(--rs-text-secondary)", whiteSpace: "nowrap" }}>
             {`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`}
           </span>
           {hunk.sectionHeading ? (
@@ -815,7 +816,8 @@ function DiffLineRow({
       role="row"
       className="grid px-2"
       style={{
-        gridTemplateColumns: "44px 44px 1fr",
+        gridTemplateColumns: wordWrap ? "44px 44px 1fr" : "44px 44px auto",
+        minWidth: "100%",
         minHeight: 20,
         background: backgroundForLine(line),
         color: line.kind === "no-newline" ? "var(--rs-text-muted)" : "var(--rs-text-primary)",
@@ -867,8 +869,7 @@ function DiffLineRow({
           style={{
             whiteSpace: wordWrap ? "pre-wrap" : "pre",
             wordBreak: wordWrap ? "break-word" : "normal",
-            flex: 1,
-            minWidth: 0,
+            ...(wordWrap ? { flex: 1, minWidth: 0 } : { flexShrink: 0 }),
           }}
         >
           {showWhitespace ? renderWhitespace(textOf(line)) : textOf(line)}

@@ -638,7 +638,7 @@ function CommitRow({
       <GraphCell commit={commit} prev={prev} next={next} laneColor={laneColor} />
 
       <div className="min-w-0 flex flex-col" style={{ gap: 3 }}>
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
           <span
             style={{
               fontFamily: "var(--rs-mono)",
