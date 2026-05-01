@@ -46,7 +46,9 @@ export function DetailPanel({
   // even while no commit is selected (e.g. fresh repo load with pending
   // worktree changes).
   if (workTreeSelected) {
-    return <WorkTreePanel workTree={workTree} />;
+    return (
+      <WorkTreePanel workTree={workTree} onOpenFileHistory={onOpenFileHistory} />
+    );
   }
 
   if (!commit) {
@@ -282,6 +284,7 @@ export function DetailPanel({
               onFullscreenChange={onDiffFullscreenChange}
               viewMode={diffViewMode}
               onViewModeChange={onDiffViewModeChange}
+              onOpenFileHistory={onOpenFileHistory}
             />
           ) : (
             <Empty>{loading ? "Loading diff…" : "No diff returned for this commit."}</Empty>
@@ -306,7 +309,13 @@ export function DetailPanel({
  *   that includes the active tab so switching tabs resets transient viewer
  *   state (collapse, query) the same way switching commits does.
  */
-function WorkTreePanel({ workTree }: { workTree: WorkTreeResponse | null }) {
+function WorkTreePanel({
+  workTree,
+  onOpenFileHistory,
+}: {
+  workTree: WorkTreeResponse | null;
+  onOpenFileHistory: (path: string) => void;
+}) {
   const [activeTab, setActiveTab] = useState<"staged" | "unstaged">("staged");
 
   if (!workTree) {
@@ -416,6 +425,7 @@ function WorkTreePanel({ workTree }: { workTree: WorkTreeResponse | null }) {
             // key. Encoding the side keeps fullscreen / filter state from
             // bleeding across tabs and across snapshots.
             commitHash={`worktree:${effectiveTab}:${workTree.snapshotAt}`}
+            onOpenFileHistory={onOpenFileHistory}
           />
         ) : (
           <Empty>

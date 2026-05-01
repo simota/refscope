@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, Maximize2, Minimize2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, History, Maximize2, Minimize2 } from "lucide-react";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "../ui/context-menu";
 import {
   countFileChanges,
   countTotalChanges,
@@ -35,6 +41,7 @@ export function DiffViewer({
   onFullscreenChange,
   viewMode: viewModeProp,
   onViewModeChange,
+  onOpenFileHistory,
 }: {
   diff: string;
   truncated: boolean;
@@ -44,6 +51,9 @@ export function DiffViewer({
   onFullscreenChange?: (next: boolean) => void;
   viewMode?: "all" | "single";
   onViewModeChange?: (next: "all" | "single") => void;
+  // Right-click on a file row opens that file's history. Optional because
+  // standalone callers (story scaffolding, snapshot tests) may not need it.
+  onOpenFileHistory?: (path: string) => void;
 }) {
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const totals = useMemo(() => countTotalChanges(parsed), [parsed]);
@@ -287,6 +297,7 @@ export function DiffViewer({
           collapsedKeys={collapsedKeys}
           onKeyDown={handleListKeyDown}
           listStyle={fileListStyle}
+          onOpenFileHistory={onOpenFileHistory}
         />
         <div
           className={fullscreen ? "flex-1 overflow-auto" : "flex-1 overflow-x-auto"}
@@ -555,6 +566,7 @@ function FileList({
   collapsedKeys,
   onKeyDown,
   listStyle,
+  onOpenFileHistory,
 }: {
   files: DiffFile[];
   selectedIndex: number;
@@ -563,6 +575,7 @@ function FileList({
   collapsedKeys: Set<string>;
   onKeyDown: (event: React.KeyboardEvent<HTMLUListElement>) => void;
   listStyle?: React.CSSProperties;
+  onOpenFileHistory?: (path: string) => void;
 }) {
   return (
     <ul
@@ -587,7 +600,14 @@ function FileList({
         const counts = countFileChanges(file);
         const isSelected = index === selectedIndex;
         const annotation = annotateFile(file);
-        return (
+        // For renames, `displayPath` already resolves to the new path; for
+        // deletions it falls back to the old path. `(unknown)` means the
+        // parser could not extract a path — in that case the menu item is
+        // disabled because there is nothing meaningful to query history for.
+        const historyPath = file.displayPath;
+        const historyAvailable =
+          Boolean(onOpenFileHistory) && historyPath !== "(unknown)";
+        const row = (
           <li
             key={fileKey(file)}
             role="option"
@@ -635,6 +655,23 @@ function FileList({
               {annotation ? <span>{annotation}</span> : null}
             </div>
           </li>
+        );
+        // Skip wrapping when there's no handler; keeps the row tree identical
+        // to the pre-context-menu shape for callers that don't opt in.
+        if (!onOpenFileHistory) return row;
+        return (
+          <ContextMenu key={fileKey(file)}>
+            <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuItem
+                disabled={!historyAvailable}
+                onSelect={() => onOpenFileHistory(historyPath)}
+              >
+                <History />
+                Open file history
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
         );
       })}
     </ul>
