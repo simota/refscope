@@ -842,11 +842,18 @@ function DiffLineRow({
     <div
       role="row"
       className={rowClass}
+      // NOTE: use `backgroundColor` (longhand), not `background` (shorthand).
+      // The `background:` shorthand resets `background-image: none`, which would
+      // wipe out the diagonal-stripe pattern that
+      // `[data-color-vision="cvd-safe"] .rs-diff-del { background-image: ... }`
+      // attaches via the rs-diff-* class.  Inline styles win against external
+      // CSS only on the properties they actually set, so a longhand
+      // `background-color` lets the CSS rule's `background-image` apply.
       style={{
         gridTemplateColumns: wordWrap ? "44px 44px 1fr" : "44px 44px auto",
         minWidth: "100%",
         minHeight: 20,
-        background: backgroundForLine(line),
+        backgroundColor: backgroundForLine(line),
         color: line.kind === "no-newline" ? "var(--rs-text-muted)" : "var(--rs-text-primary)",
         fontStyle: line.kind === "no-newline" ? "italic" : "normal",
       }}

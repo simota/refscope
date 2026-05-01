@@ -1031,7 +1031,13 @@ function RefScopeTokens() {
       [data-color-vision="cvd-safe"] .rs-prism .token.atrule,
       [data-color-vision="cvd-safe"] .rs-prism .token.important,
       [data-color-vision="cvd-safe"] .rs-prism .token.rule {
-        color: oklch(62% 0.18 25);
+        /* Wong vermilion. Was oklch(62% 0.18 25) — failed WCAG 2.2 AA
+           (4.24:1 vs canvas, 0.26pt short of 4.5:1). On the dark canvas
+           (L≈16%) we need to raise lightness, not lower it. L=68% with
+           reduced chroma (0.16) keeps the Wong vermilion identity (hue 25°,
+           >30° from add 55° and del 240° anchors) while clearing AA on
+           canvas (7.02:1), add bg (5.80:1), and del bg (6.37:1). */
+        color: oklch(68% 0.16 25);
       }
       [data-color-vision="cvd-safe"] .rs-prism .token.string,
       [data-color-vision="cvd-safe"] .rs-prism .token.char,

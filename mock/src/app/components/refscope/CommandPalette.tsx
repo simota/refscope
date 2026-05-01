@@ -151,7 +151,9 @@ export function CommandPalette({
 
     const cvdCommand: PaletteCommand = {
       icon: Eye,
-      label: "Toggle CVD-safe theme",
+      // Long-form label so palette substring search hits "color", "blind",
+      // "safe", "CVD", or "theme" — all natural search terms for this feature.
+      label: "Toggle color-blind safe theme (CVD)",
       hint: isCvdSafe ? "on (Wong palette)" : "off",
       run: () => {
         onToggleColorVision();
