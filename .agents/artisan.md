@@ -32,6 +32,14 @@
 - keyword vs add-bg tint: 5.80:1 (PASS WCAG AA 4.5:1)
 - keyword vs del-bg tint: 6.37:1 (PASS WCAG AA 4.5:1)
 
+### Collapsible accordion pattern (2026-05-01)
+- Radix `Collapsible` (from `components/ui/collapsible.tsx`) controls open state externally via `open` prop.
+- `CollapsibleTrigger asChild` wraps a `<button>` for full keyboard/a11y. aria-controls must be set manually (Radix doesn't inject it automatically).
+- `CollapsibleContent` accepts an `id` for aria-controls linkage.
+- Force-expand logic: `isOpen = overrideCondition || !collapsed`. When override is true, `onOpenChange` skips calling the toggle.
+- ChevronDown rotation via inline `style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 120ms ease-out" }}`. Quiet mode (transition: 0ms !important) is handled globally — no extra logic needed.
+- `useTimelinePrefs` hook mirrors `useLayoutPrefs`: rAF coalesce, schema version check, try/catch localStorage, default fallback on corrupt data.
+
 ### Inline-style vs CSS-class background pitfall (Echo R1)
 - `style={{ background: ... }}` is a SHORTHAND that resets `background-image: none`.
 - DiffLineRow originally used the shorthand, which silently wiped the

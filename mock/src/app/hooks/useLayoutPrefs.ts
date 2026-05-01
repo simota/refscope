@@ -3,12 +3,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 const STORAGE_KEY = "refscope.layoutPrefs.v1";
 const SCHEMA_VERSION = 1;
 
-// Default ratios re-tuned from the original ~25/50/25 toward giving the diff pane
-// room to breathe — sidebar shrinks, detail pane grows. Sums to 100.
+// Default ratios re-tuned to give the diff pane the largest share — the commit
+// list only needs to fit hash + subject + meta, while the diff viewer benefits
+// from every extra column. Sums to 100.
 export const DEFAULT_PANEL_SIZES: PanelSizes = {
   sidebar: 18,
-  center: 42,
-  detail: 40,
+  center: 32,
+  detail: 50,
 };
 
 export type PanelSizes = {

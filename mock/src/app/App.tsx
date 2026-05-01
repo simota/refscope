@@ -16,6 +16,7 @@ import {
 } from "./components/ui/resizable";
 import { useQuietMode } from "./hooks/useQuietMode";
 import { useLayoutPrefs } from "./hooks/useLayoutPrefs";
+import { useTimelinePrefs } from "./hooks/useTimelinePrefs";
 import { useColorVisionTheme } from "./hooks/useColorVisionTheme";
 import type {
   Commit,
@@ -86,6 +87,12 @@ export default function App() {
     toggleSidebar,
     setPanelSizes,
   } = useLayoutPrefs();
+  const {
+    compareBarCollapsed,
+    activityGraphCollapsed,
+    toggleCompareBar,
+    toggleActivityGraph,
+  } = useTimelinePrefs();
   const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
   // Track collapse intent vs. actual panel state so the imperative API is only
   // called when they diverge — react-resizable-panels' collapse() is idempotent
@@ -599,6 +606,11 @@ export default function App() {
                 setCompareTarget("");
                 setCompareResult(null);
               }}
+              compareBarCollapsed={compareBarCollapsed}
+              activityGraphCollapsed={activityGraphCollapsed}
+              onToggleCompareBar={toggleCompareBar}
+              onToggleActivityGraph={toggleActivityGraph}
+              summaryViewOpen={summaryViewOpen}
             />
           </div>
         </ResizablePanel>
@@ -776,7 +788,7 @@ function RefScopeTokens() {
         --rs-border: oklch(34% 0.025 255);
         --rs-text-primary: oklch(92% 0.015 255);
         --rs-text-secondary: oklch(72% 0.02 255);
-        --rs-text-muted: oklch(55% 0.02 255);
+        --rs-text-muted: oklch(62% 0.02 255);
         --rs-accent: oklch(72% 0.14 235);
         --rs-git-added: oklch(72% 0.14 150);
         --rs-git-deleted: oklch(70% 0.16 25);
@@ -933,7 +945,7 @@ function RefScopeTokens() {
       .rs-prism .token.prolog,
       .rs-prism .token.cdata,
       .rs-prism .token.doctype {
-        color: oklch(60% 0.03 255);
+        color: oklch(63% 0.03 255);
         font-style: italic;
       }
       .rs-prism .token.punctuation {
@@ -1074,7 +1086,7 @@ function RefScopeTokens() {
       [data-color-vision="cvd-safe"] .rs-prism .token.prolog,
       [data-color-vision="cvd-safe"] .rs-prism .token.cdata,
       [data-color-vision="cvd-safe"] .rs-prism .token.doctype {
-        color: oklch(55% 0.02 255);
+        color: oklch(62% 0.02 255);
         font-style: italic;
       }
       [data-color-vision="cvd-safe"] .rs-prism .token.tag,
