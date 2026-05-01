@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CalendarRange, Eye, FileSearch, GitBranch, Hash, Maximize2, Moon, PanelLeftClose, Pause, Play, Search, Tag } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { SearchMode } from "../../api";
 import type { Commit, GitRef } from "./data";
 
 type PaletteCommand = {
@@ -19,6 +20,8 @@ export function CommandPalette({
   search,
   author,
   path,
+  searchMode,
+  searchPattern,
   livePaused,
   quietMode,
   isQuiet,
@@ -31,6 +34,7 @@ export function CommandPalette({
   onSearchChange,
   onAuthorChange,
   onPathChange,
+  onSearchPatternChange,
   diffAvailable,
   diffFullscreen,
   onToggleDiffFullscreen,
@@ -45,6 +49,8 @@ export function CommandPalette({
   search: string;
   author: string;
   path: string;
+  searchMode: SearchMode;
+  searchPattern: string;
   livePaused: boolean;
   quietMode: boolean;
   isQuiet: boolean;
@@ -57,6 +63,7 @@ export function CommandPalette({
   onSearchChange: (value: string) => void;
   onAuthorChange: (value: string) => void;
   onPathChange: (value: string) => void;
+  onSearchPatternChange: (value: string) => void;
   diffAvailable: boolean;
   diffFullscreen: boolean;
   onToggleDiffFullscreen: () => void;
@@ -77,14 +84,26 @@ export function CommandPalette({
       },
     }));
 
+    const searchModeLabelMap: Record<SearchMode, string> = {
+      subject: "message search",
+      pickaxe: "pickaxe search (-S)",
+      regex: "regex search (-G)",
+      message: "message grep (--grep)",
+    };
+    // Subject mode uses `search`; other modes use `searchPattern`.
+    const activeSearchValue = searchMode === "subject" ? search : searchPattern;
     const filterCommands = [
-      search
+      activeSearchValue
         ? {
             icon: FileSearch,
-            label: "Clear message search",
+            label: `Clear ${searchModeLabelMap[searchMode]}`,
             hint: "search",
             run: () => {
-              onSearchChange("");
+              if (searchMode === "subject") {
+                onSearchChange("");
+              } else {
+                onSearchPatternChange("");
+              }
               onClose();
             },
           }
@@ -220,6 +239,7 @@ export function CommandPalette({
     onClose,
     onPathChange,
     onSearchChange,
+    onSearchPatternChange,
     onSelectRef,
     onToggleColorVision,
     onToggleDiffFullscreen,
@@ -231,6 +251,8 @@ export function CommandPalette({
     quietMode,
     refs,
     search,
+    searchMode,
+    searchPattern,
     selectedCommit,
     sidebarCollapsed,
     summaryViewOpen,

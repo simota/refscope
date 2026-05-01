@@ -35,6 +35,7 @@ import {
   listRefs,
   listRepositories,
   type DiffPayload,
+  type SearchMode,
   type ViewerEvent,
 } from "./api";
 
@@ -66,6 +67,11 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
   const [path, setPath] = useState("");
+  // State A: subject-mode value lives in `search`; pickaxe/regex/message values live in `searchPattern`.
+  // Keeping them separate prevents mode-switch cross-contamination and maps 1-to-1 onto the API contract
+  // (`search` param vs `mode`+`pattern` params).
+  const [searchMode, setSearchMode] = useState<SearchMode>("subject");
+  const [searchPattern, setSearchPattern] = useState("");
   const [selectionNotice, setSelectionNotice] = useState("");
   const [compareBase, setCompareBase] = useState("");
   const [compareTarget, setCompareTarget] = useState("");
@@ -75,6 +81,8 @@ export default function App() {
   const searchRef = useRef(search);
   const authorRef = useRef(author);
   const pathRef = useRef(path);
+  const searchModeRef = useRef(searchMode);
+  const searchPatternRef = useRef(searchPattern);
   const livePausedRef = useRef(livePaused);
   const pendingRealtimeEventsRef = useRef<Array<() => void>>([]);
   const realtimeNewCommitHashesRef = useRef<Set<string>>(new Set());
@@ -138,6 +146,14 @@ export default function App() {
   }, [path]);
 
   useEffect(() => {
+    searchModeRef.current = searchMode;
+  }, [searchMode]);
+
+  useEffect(() => {
+    searchPatternRef.current = searchPattern;
+  }, [searchPattern]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     listRepositories()
@@ -162,7 +178,7 @@ export default function App() {
     if (!selectedRepo) return;
     let cancelled = false;
     setLoading(true);
-    loadRepositoryState(selectedRepo, selectedRef, search, author, path)
+    loadRepositoryState(selectedRepo, selectedRef, search, author, path, searchMode, searchPattern)
       .then(({ nextRefs, nextRef, nextCommits }) => {
         if (cancelled) return;
         const markedCommits = markRealtimeNewCommits(
@@ -195,7 +211,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedRepo, selectedRef, search, author, path]);
+  }, [selectedRepo, selectedRef, search, author, path, searchMode, searchPattern]);
 
   useEffect(() => {
     if (!selectedRepo || !compareBase || !compareTarget) {
@@ -319,6 +335,9 @@ export default function App() {
   const handleSummaryDrilldown = useCallback(
     (_commitHashes: string[], context: { kind: "prefix" | "path" | "author"; key: string }) => {
       if (context.kind === "prefix" && context.key !== "uncategorized") {
+        // Drilldown always uses subject mode so the prefix colon-search maps cleanly.
+        setSearchMode("subject");
+        setSearchPattern("");
         setSearch(`${context.key}:`);
         setAuthor("");
         setPath("");
@@ -343,6 +362,8 @@ export default function App() {
     searchTerm: string,
     authorTerm: string,
     pathTerm: string,
+    mode: SearchMode,
+    pattern: string,
   ) {
     const { nextRefs, nextRef, nextCommits } = await loadRepositoryState(
       repoId,
@@ -350,6 +371,8 @@ export default function App() {
       searchTerm,
       authorTerm,
       pathTerm,
+      mode,
+      pattern,
     );
     setRefs(nextRefs);
     setSelectedRef(nextRef);
@@ -392,6 +415,8 @@ export default function App() {
       searchRef.current,
       authorRef.current,
       pathRef.current,
+      searchModeRef.current,
+      searchPatternRef.current,
     ).catch((err) => setError(errorMessage(err)));
   }
 
@@ -408,6 +433,8 @@ export default function App() {
       searchRef.current,
       authorRef.current,
       pathRef.current,
+      searchModeRef.current,
+      searchPatternRef.current,
     ).catch((err) => setError(errorMessage(err)));
     // refreshTimeline is stable through refs; selectedRepo is the only reactive input.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -527,6 +554,16 @@ export default function App() {
           setPath(value);
           setSelected("");
         }}
+        searchMode={searchMode}
+        onSearchModeChange={(mode) => {
+          setSearchMode(mode);
+          setSelected("");
+        }}
+        searchPattern={searchPattern}
+        onSearchPatternChange={(value) => {
+          setSearchPattern(value);
+          setSelected("");
+        }}
         summaryViewOpen={summaryViewOpen}
         onToggleSummaryView={toggleSummaryView}
         sidebarCollapsed={sidebarCollapsed}
@@ -598,7 +635,7 @@ export default function App() {
               livePaused={livePaused}
               pendingUpdates={pendingUpdates}
               liveAnnouncement={liveAnnouncement}
-              activeFilters={activeFilters(search, author, path)}
+              activeFilters={activeFilters(search, author, path, searchMode, searchPattern)}
               refs={refs}
               selectedRef={selectedRef}
               selectedCommit={current}
@@ -656,6 +693,8 @@ export default function App() {
         search={search}
         author={author}
         path={path}
+        searchMode={searchMode}
+        searchPattern={searchPattern}
         livePaused={livePaused}
         quietMode={quietMode}
         isQuiet={isQuiet}
@@ -682,6 +721,10 @@ export default function App() {
           setPath(value);
           setSelected("");
         }}
+        onSearchPatternChange={(value) => {
+          setSearchPattern(value);
+          setSelected("");
+        }}
       />
     </div>
   );
@@ -691,9 +734,25 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected error";
 }
 
-function activeFilters(search: string, author: string, path: string) {
+function activeFilters(
+  search: string,
+  author: string,
+  path: string,
+  searchMode: SearchMode,
+  searchPattern: string,
+) {
+  const modeLabels: Record<SearchMode, string> = {
+    subject: "Subject",
+    pickaxe: "Pickaxe -S",
+    regex: "Regex -G",
+    message: "Message --grep",
+  };
+  const searchFilter =
+    searchMode === "subject"
+      ? search.trim() ? `${modeLabels.subject}: "${search.trim()}"` : ""
+      : searchPattern.trim() ? `${modeLabels[searchMode]}: "${searchPattern.trim()}"` : "";
   return [
-    search.trim() ? `message "${search.trim()}"` : "",
+    searchFilter,
     author.trim() ? `author "${author.trim()}"` : "",
     path.trim() ? `path "${path.trim()}"` : "",
   ].filter(Boolean);
@@ -705,10 +764,20 @@ async function loadRepositoryState(
   searchTerm: string,
   authorTerm: string,
   pathTerm: string,
+  searchMode: SearchMode = "subject",
+  searchPattern = "",
 ) {
   const nextRefs = await listRefs(repoId);
   const nextRef = resolveSelectableRef(requestedRef, nextRefs);
-  const nextCommits = await listCommits(repoId, nextRef, searchTerm, authorTerm, pathTerm);
+  const nextCommits = await listCommits(
+    repoId,
+    nextRef,
+    searchTerm,
+    authorTerm,
+    pathTerm,
+    searchMode,
+    searchPattern,
+  );
   return { nextRefs, nextRef, nextCommits };
 }
 

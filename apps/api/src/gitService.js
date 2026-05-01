@@ -7,6 +7,8 @@ import {
   parseGroupByQuery,
   parseLimitQuery,
   parsePathQuery,
+  parsePatternQuery,
+  parseSearchModeQuery,
   parseSearchQuery,
 } from "./validation.js";
 
@@ -204,14 +206,27 @@ export function createGitService(config) {
       if (!path.ok) {
         return { status: 400, body: { error: path.error } };
       }
+      const mode = parseSearchModeQuery(queryValues.value.mode);
+      if (!mode.ok) {
+        return { status: 400, body: { error: mode.error } };
+      }
+      const pattern = parsePatternQuery(queryValues.value.pattern);
+      if (!pattern.ok) {
+        return { status: 400, body: { error: pattern.error } };
+      }
+
+      // `search` is the legacy subject-search parameter. Combining it with a
+      // non-subject mode is ambiguous — reject early to surface the conflict.
+      if (search.value && mode.value !== "subject") {
+        return { status: 400, body: { error: "Cannot combine search and mode parameters" } };
+      }
+
       const commitishRef = await resolveCommitishRevision(repo, ref, config.gitTimeoutMs);
       if (!commitishRef.ok) {
         return commitishRef.result;
       }
 
-      const searchArgs = search.value
-        ? ["--regexp-ignore-case", "--extended-regexp", `--grep=${escapeGitRegexLiteral(search.value)}`]
-        : [];
+      const searchArgs = buildSearchModeArgs(mode.value, pattern.value, search.value);
       const authorArgs = author.value
         ? ["--regexp-ignore-case", "--extended-regexp", `--author=${escapeGitRegexLiteral(author.value)}`]
         : [];
@@ -455,7 +470,7 @@ async function readMergeBase(repo, base, target, timeoutMs) {
 
 function readCommitListQuery(query) {
   const values = {};
-  for (const name of ["limit", "ref", "search", "author", "path"]) {
+  for (const name of ["limit", "ref", "search", "author", "path", "mode", "pattern"]) {
     const allValues = query.getAll(name);
     if (allValues.length > 1) {
       return { ok: false, error: `Duplicate ${name} parameter` };
@@ -820,6 +835,34 @@ function refType(refName) {
 
 export function escapeGitRegexLiteral(value) {
   return value.replace(/[.[\](){}?*+^$|\\]/g, "\\$&");
+}
+
+/**
+ * Build `git log` search arguments for the requested mode. Attached form
+ * (`-SPATTERN`, `-GPATTERN`) is used for pickaxe and regex so hyphen-leading
+ * patterns never collide with Git option parsing, even without `--end-of-options`.
+ *
+ * @param {"subject"|"pickaxe"|"regex"|"message"} mode
+ * @param {string} pattern  Validated pattern value (may be empty string).
+ * @param {string} searchValue  Legacy `search` param value (subject mode only).
+ * @returns {string[]}
+ */
+export function buildSearchModeArgs(mode, pattern, searchValue) {
+  switch (mode) {
+    case "pickaxe":
+      return pattern ? [`-S${pattern}`] : [];
+    case "regex":
+      return pattern ? [`-G${pattern}`] : [];
+    case "message":
+      return pattern
+        ? ["--regexp-ignore-case", "--extended-regexp", `--grep=${pattern}`]
+        : [];
+    default:
+      // subject (default): use the legacy escaped search value for backward compatibility
+      return searchValue
+        ? ["--regexp-ignore-case", "--extended-regexp", `--grep=${escapeGitRegexLiteral(searchValue)}`]
+        : [];
+  }
 }
 
 export function formatLiteralPathspec(value) {

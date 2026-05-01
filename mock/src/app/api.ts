@@ -56,11 +56,30 @@ export async function listRefs(repoId: string) {
   return body.refs;
 }
 
-export async function listCommits(repoId: string, ref: string, search = "", author = "", path = "") {
+export type SearchMode = "subject" | "pickaxe" | "regex" | "message";
+
+export async function listCommits(
+  repoId: string,
+  ref: string,
+  search = "",
+  author = "",
+  path = "",
+  searchMode: SearchMode = "subject",
+  searchPattern = "",
+) {
   const params = new URLSearchParams({ ref, limit: "100" });
-  const normalizedSearch = search.trim();
-  if (normalizedSearch) {
-    params.set("search", normalizedSearch);
+  // subject mode uses the legacy `search` param; other modes use `mode`+`pattern`.
+  if (searchMode === "subject") {
+    const normalizedSearch = search.trim();
+    if (normalizedSearch) {
+      params.set("search", normalizedSearch);
+    }
+  } else {
+    const normalizedPattern = searchPattern.trim();
+    if (normalizedPattern) {
+      params.set("mode", searchMode);
+      params.set("pattern", normalizedPattern);
+    }
   }
   const normalizedAuthor = author.trim();
   if (normalizedAuthor) {
