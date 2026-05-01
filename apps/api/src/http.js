@@ -46,6 +46,11 @@ export function createRequestHandler(config, gitService) {
         sendJson(res, 200, { refs: await gitService.listRefs(repo.value) });
         return;
       }
+      if (route.name === "refsDrift") {
+        const result = await gitService.getRefDrift(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "commits") {
         const result = await gitService.listCommits(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
@@ -68,6 +73,11 @@ export function createRequestHandler(config, gitService) {
       }
       if (route.name === "compare") {
         const result = await gitService.compareRefs(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "fileHistory") {
+        const result = await gitService.getFileHistory(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
         return;
       }
@@ -96,6 +106,13 @@ function matchRoute(method, pathname) {
 
   const repoId = parts[2];
   if (parts.length === 4 && parts[3] === "refs") return { name: "refs", params: { repoId } };
+  // `/refs/drift` is a literal sub-path that lives one segment deeper than
+  // `/refs`. Distinct `parts.length` keeps the two from colliding, but we
+  // match the longer form first for symmetry with the `/commits/summary`
+  // pattern used elsewhere in this router.
+  if (parts.length === 5 && parts[3] === "refs" && parts[4] === "drift") {
+    return { name: "refsDrift", params: { repoId } };
+  }
   if (parts.length === 4 && parts[3] === "commits") return { name: "commits", params: { repoId } };
   if (parts.length === 4 && parts[3] === "compare") return { name: "compare", params: { repoId } };
   // `/commits/summary` is matched before the generic `/commits/:hash` route so
@@ -108,6 +125,11 @@ function matchRoute(method, pathname) {
   }
   if (parts.length === 6 && parts[3] === "commits" && parts[5] === "diff") {
     return { name: "diff", params: { repoId, hash: parts[4] } };
+  }
+  // File-history view: `/files/history` is a literal sub-path so the file path
+  // itself stays in the query string (where validation owns the contract).
+  if (parts.length === 5 && parts[3] === "files" && parts[4] === "history") {
+    return { name: "fileHistory", params: { repoId } };
   }
   if (parts.length === 4 && parts[3] === "events") return { name: "events", params: { repoId } };
   return null;

@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Copy, ExternalLink, ShieldCheck } from "lucide-react";
+import { Copy, ExternalLink, History, ShieldCheck } from "lucide-react";
 import type { Commit, CommitDetail } from "./data";
 import type { DiffPayload } from "../../api";
 import { DiffViewer } from "./DiffViewer";
+import { FileHistoryView } from "./FileHistoryView";
 
 export function DetailPanel({
   commit,
@@ -12,6 +13,8 @@ export function DetailPanel({
   error,
   diffFullscreen,
   onDiffFullscreenChange,
+  repoId,
+  refName,
 }: {
   commit: Commit | null;
   detail: CommitDetail | null;
@@ -20,8 +23,13 @@ export function DetailPanel({
   error: string;
   diffFullscreen?: boolean;
   onDiffFullscreenChange?: (next: boolean) => void;
+  repoId: string;
+  refName: string;
 }) {
   const [copyStatus, setCopyStatus] = useState("");
+  // History overlay is owned at the panel level so opening it while the diff
+  // is loading or while the commit changes does not race the network calls.
+  const [historyPath, setHistoryPath] = useState<string | null>(null);
 
   if (!commit) {
     return (
@@ -225,6 +233,18 @@ export function DetailPanel({
                 </span>
                 <span style={{ color: "var(--rs-git-added)" }}>+{f.added}</span>
                 <span style={{ color: "var(--rs-git-deleted)" }}>-{f.deleted}</span>
+                <button
+                  type="button"
+                  className="rs-icon-btn"
+                  aria-label={`Open file history for ${f.path}`}
+                  title="Open file history"
+                  // Disabled when we lack a repoId — the API needs both repo + path.
+                  disabled={!repoId}
+                  onClick={() => setHistoryPath(f.path)}
+                  style={{ width: 22, height: 22 }}
+                >
+                  <History size={12} />
+                </button>
               </div>
             ))
           )}
@@ -248,6 +268,14 @@ export function DetailPanel({
           )}
         </Section>
       </div>
+      {historyPath ? (
+        <FileHistoryView
+          repoId={repoId}
+          filePath={historyPath}
+          ref={refName}
+          onClose={() => setHistoryPath(null)}
+        />
+      ) : null}
     </PanelShell>
   );
 }

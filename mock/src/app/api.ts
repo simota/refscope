@@ -150,6 +150,75 @@ export type CommitsSummary = {
   truncated: boolean;
 };
 
+export type FileHistoryEntry = {
+  hash: string;
+  shortHash: string;
+  parents: string[];
+  author: string;
+  authorEmail: string;
+  authorDate: string;
+  subject: string;
+  patch: string;
+};
+
+export type FileHistoryResponse = {
+  path: string;
+  ref: { input: string; resolved: string };
+  entries: FileHistoryEntry[];
+  truncated: boolean;
+  limit: number;
+};
+
+export async function fetchFileHistory(
+  repoId: string,
+  params: { path: string; ref?: string; limit?: number },
+  signal?: AbortSignal,
+): Promise<FileHistoryResponse> {
+  const search = new URLSearchParams();
+  search.set("path", params.path);
+  if (params.ref) search.set("ref", params.ref);
+  if (typeof params.limit === "number" && Number.isFinite(params.limit)) {
+    search.set("limit", String(params.limit));
+  }
+  return getJson<FileHistoryResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/files/history?${search}`,
+    signal,
+  );
+}
+
+export type RefDriftEntry = {
+  name: string;
+  type: "branch" | "remote" | "tag" | "other";
+  ahead: number;
+  behind: number;
+  mergeBase: string | null;
+  hash: string;
+};
+
+export type RefDriftResponse = {
+  base: { input: string; resolved: string };
+  refs: RefDriftEntry[];
+  truncated: boolean;
+  limit: number;
+};
+
+export async function fetchRefDrift(
+  repoId: string,
+  params?: { base?: string; limit?: number },
+  signal?: AbortSignal,
+): Promise<RefDriftResponse> {
+  const search = new URLSearchParams();
+  if (params?.base) search.set("base", params.base);
+  if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+    search.set("limit", String(params.limit));
+  }
+  const querySuffix = search.toString();
+  return getJson<RefDriftResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/refs/drift${querySuffix ? `?${querySuffix}` : ""}`,
+    signal,
+  );
+}
+
 export async function fetchCommitsSummary(
   repoId: string,
   params: {

@@ -29,15 +29,18 @@ import type {
 import {
   compareRefs,
   eventsUrl,
+  fetchRefDrift,
   getCommit,
   getDiff,
   listCommits,
   listRefs,
   listRepositories,
   type DiffPayload,
+  type RefDriftEntry,
   type SearchMode,
   type ViewerEvent,
 } from "./api";
+import type { RefDriftSummary } from "./components/refscope/BranchSidebar";
 
 const EMPTY_DIFF: DiffPayload = { diff: "", truncated: false, maxBytes: 0 };
 
@@ -77,6 +80,14 @@ export default function App() {
   const [compareTarget, setCompareTarget] = useState("");
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
   const [compareLoading, setCompareLoading] = useState(false);
+  // Branch Drift Halo: drift fetch is independent of the timeline fetch and
+  // is a dedicated batched endpoint, so we keep it in its own state. The
+  // value is a Map keyed by full ref name (`refs/heads/foo`) so BranchSidebar
+  // can look up O(1) per row without re-scanning the array.
+  const [driftMap, setDriftMap] = useState<Map<string, RefDriftSummary>>(() => new Map());
+  const [driftBaseShortName, setDriftBaseShortName] = useState<string>("HEAD");
+  const driftAbortRef = useRef<AbortController | null>(null);
+  const driftDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRefRef = useRef(selectedRef);
   const searchRef = useRef(search);
   const authorRef = useRef(author);
@@ -269,6 +280,69 @@ export default function App() {
     };
   }, [selectedRepo, selected]);
 
+  // Branch Drift Halo: refetch the batched drift payload. Cancels any
+  // in-flight request via AbortController so a fast burst of SSE events
+  // doesn't pile up parallel network calls. Base stays at "HEAD" for the
+  // MVP; the API accepts an explicit base parameter for future use.
+  const refreshDrift = useCallback(
+    (repoId: string) => {
+      if (!repoId) {
+        setDriftMap(new Map());
+        return;
+      }
+      driftAbortRef.current?.abort();
+      const controller = new AbortController();
+      driftAbortRef.current = controller;
+      fetchRefDrift(repoId, { base: "HEAD" }, controller.signal)
+        .then((response) => {
+          if (controller.signal.aborted) return;
+          setDriftMap(buildDriftMap(response.refs));
+          setDriftBaseShortName(shortenBaseLabel(response.base.input));
+        })
+        .catch((err) => {
+          // Aborts are routine (rapid SSE bursts cancel the previous in-flight
+          // request) — they are not user-visible errors. Anything else surfaces
+          // through the existing error banner so users can see the API issue.
+          if (controller.signal.aborted) return;
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setError(errorMessage(err));
+        });
+    },
+    [],
+  );
+
+  // Debounce SSE-driven drift refetches. Multiple ref_* events can fire in
+  // quick succession (rapid push, branch tidy-up); we coalesce them into one
+  // request so the API isn't hammered. 500 ms is the spec-recommended value
+  // — fast enough that the halo feels live, slow enough to absorb bursts.
+  const scheduleDriftRefresh = useCallback(
+    (repoId: string) => {
+      if (driftDebounceRef.current) {
+        clearTimeout(driftDebounceRef.current);
+      }
+      driftDebounceRef.current = setTimeout(() => {
+        driftDebounceRef.current = null;
+        refreshDrift(repoId);
+      }, 500);
+    },
+    [refreshDrift],
+  );
+
+  useEffect(() => {
+    if (!selectedRepo) {
+      setDriftMap(new Map());
+      return;
+    }
+    refreshDrift(selectedRepo);
+    return () => {
+      driftAbortRef.current?.abort();
+      if (driftDebounceRef.current) {
+        clearTimeout(driftDebounceRef.current);
+        driftDebounceRef.current = null;
+      }
+    };
+  }, [selectedRepo, refreshDrift]);
+
   useEffect(() => {
     if (!selectedRepo) return;
     const source = new EventSource(eventsUrl(selectedRepo));
@@ -282,6 +356,10 @@ export default function App() {
           rememberRealtimeNewCommit(data.commit.hash, realtimeNewCommitHashesRef.current);
         }
       });
+      // A new commit on the base advances HEAD and shifts every other ref's
+      // ahead/behind by one; on a non-base ref it shifts that single ref's
+      // ahead. Either way drift needs a refresh.
+      scheduleDriftRefresh(selectedRepo);
     });
     source.addEventListener("history_rewritten", (event) => {
       const data = parseEvent(event);
@@ -296,11 +374,17 @@ export default function App() {
           ].slice(0, 5));
         }
       });
+      // History rewrites change ahead/behind against base, so refresh drift.
+      scheduleDriftRefresh(selectedRepo);
     });
     for (const type of ["ref_created", "ref_updated", "ref_deleted"] as const) {
       source.addEventListener(type, () => {
         const notice = "Refs changed";
         handleRealtimeEvent(notice, () => setEventNotice(notice));
+        // Any ref topology change can shift drift on every other ref (e.g.
+        // moving HEAD changes ahead/behind for all branches). Debounced
+        // refresh coalesces bursts.
+        scheduleDriftRefresh(selectedRepo);
       });
     }
     source.onerror = (event) => {
@@ -311,6 +395,11 @@ export default function App() {
       }
     };
     return () => source.close();
+    // `scheduleDriftRefresh` and other callbacks read from refs/state via
+    // their useCallback closures; the only reactive identifier the EventSource
+    // itself depends on is `selectedRepo`, mirroring existing precedent in
+    // this file.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepo]);
 
   useEffect(() => {
@@ -604,6 +693,8 @@ export default function App() {
             }}
             headHash={commits[0]?.shortHash ?? commits[0]?.hash.slice(0, 7)}
             alerts={realtimeAlerts}
+            driftMap={driftMap}
+            driftBaseShortName={driftBaseShortName}
           />
         </ResizablePanel>
         <ResizableHandle withHandle aria-label="Resize branch sidebar" />
@@ -679,6 +770,8 @@ export default function App() {
             error={error}
             diffFullscreen={diffFullscreen}
             onDiffFullscreenChange={setDiffFullscreen}
+            repoId={selectedRepo}
+            refName={selectedRef}
           />
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -841,6 +934,33 @@ function toRealtimeAlert(
       event.explanation ??
       "The current commit is not a descendant of the previously observed commit.",
   };
+}
+
+function buildDriftMap(entries: RefDriftEntry[]) {
+  // Keyed by full ref name so BranchSidebar can do `driftMap.get(ref.name)`
+  // without ambiguity (`shortName` collides between branches and same-named
+  // tags). The payload's `name` is already the full ref name from
+  // `for-each-ref %(refname)`.
+  const next = new Map<string, RefDriftSummary>();
+  for (const entry of entries) {
+    next.set(entry.name, {
+      ahead: entry.ahead,
+      behind: entry.behind,
+      mergeBase: entry.mergeBase,
+    });
+  }
+  return next;
+}
+
+function shortenBaseLabel(input: string) {
+  // Display label for the halo's aria-text. We strip the well-known prefixes
+  // for readability ("of main" beats "of refs/heads/main") but otherwise
+  // surface the input verbatim — never inferring a friendly name.
+  if (input === "HEAD") return "HEAD";
+  return input
+    .replace(/^refs\/heads\//, "")
+    .replace(/^refs\/tags\//, "")
+    .replace(/^refs\/remotes\//, "");
 }
 
 function rememberRealtimeNewCommit(hash: string, hashes: Set<string>) {

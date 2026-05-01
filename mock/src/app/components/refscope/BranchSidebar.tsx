@@ -1,22 +1,44 @@
 import { GitBranch, Tag, Cloud, AlertTriangle, ChevronRight } from "lucide-react";
 import type { GitRef, RealtimeAlert } from "./data";
 
+export type RefDriftSummary = {
+  ahead: number;
+  behind: number;
+  mergeBase: string | null;
+};
+
 export function BranchSidebar({
   refs,
   selectedRef,
   onSelectRef,
   headHash,
   alerts,
+  driftMap,
+  driftBaseShortName,
 }: {
   refs: GitRef[];
   selectedRef: string;
   onSelectRef: (ref: string) => void;
   headHash?: string;
   alerts: RealtimeAlert[];
+  // Observation fact: each ref's literal `git rev-list --count` output. The
+  // halo's bar length is the only derivation, normalised against the visible
+  // max so a 1000-commit ref doesn't squash a 5-commit one to a single pixel.
+  driftMap?: Map<string, RefDriftSummary>;
+  // Used in halo aria-label and tooltip. Falls back to "base" when omitted so
+  // the screen-reader text always says "of <something>" — the rendered halo
+  // still shows raw numbers, the base label is just for context.
+  driftBaseShortName?: string;
 }) {
   const branches = refs.filter((ref) => ref.type === "branch");
   const tags = refs.filter((ref) => ref.type === "tag");
   const remotes = refs.filter((ref) => ref.type === "remote");
+  // Halo bars are normalised against the largest observed ahead+behind across
+  // currently-visible drift entries. We compute it once at the sidebar level
+  // so every halo in branches + remotes shares a single scale; otherwise a
+  // 50-ahead branch and a 5-ahead branch would look identical at full width.
+  const driftScale = computeDriftScale(driftMap);
+  const baseLabel = driftBaseShortName ?? "base";
 
   return (
     <aside
@@ -39,6 +61,9 @@ export function BranchSidebar({
               dot="var(--rs-accent)"
               name={ref.shortName}
               hint={ref.hash.slice(0, 7)}
+              drift={driftMap?.get(ref.name) ?? null}
+              driftScale={driftScale}
+              baseLabel={baseLabel}
               onClick={() => onSelectRef(ref.name)}
             />
           ))
@@ -70,6 +95,9 @@ export function BranchSidebar({
               name={ref.shortName}
               muted
               active={selectedRef === ref.shortName || selectedRef === ref.name}
+              drift={driftMap?.get(ref.name) ?? null}
+              driftScale={driftScale}
+              baseLabel={baseLabel}
               onClick={() => onSelectRef(ref.name)}
             />
           ))
@@ -425,6 +453,9 @@ function BranchRow({
   active,
   dot,
   muted,
+  drift,
+  driftScale,
+  baseLabel,
   onClick,
 }: {
   name: string;
@@ -432,6 +463,9 @@ function BranchRow({
   active?: boolean;
   dot?: string;
   muted?: boolean;
+  drift?: RefDriftSummary | null;
+  driftScale?: number;
+  baseLabel?: string;
   onClick?: () => void;
 }) {
   return (
@@ -466,6 +500,14 @@ function BranchRow({
         }}
       />
       <span className="flex-1 truncate">{name}</span>
+      {drift ? (
+        <DriftHalo
+          ahead={drift.ahead}
+          behind={drift.behind}
+          scale={driftScale ?? 1}
+          baseLabel={baseLabel ?? "base"}
+        />
+      ) : null}
       {hint ? (
         <span
           className="px-1.5 rounded"
@@ -480,6 +522,100 @@ function BranchRow({
       ) : null}
     </button>
   );
+}
+
+/**
+ * DriftHalo renders the literal `ahead` / `behind` counts as two stacked SVG
+ * bars. The numbers themselves come straight from `git rev-list --count` —
+ * the only derivation here is the bar's pixel length, normalised against the
+ * largest observed ahead+behind in the visible set so a 50-ahead branch and
+ * a 5-ahead branch don't look identical.
+ *
+ * Accessibility: the raw numbers always reach the screen reader via
+ * `aria-label`. The visual bars are decorative (`role="img"` + the same
+ * label, no extra `aria-hidden` indirection). The full text also lives in
+ * `title` so a hover tooltip surfaces the same fact as the screen reader.
+ */
+function DriftHalo({
+  ahead,
+  behind,
+  scale,
+  baseLabel,
+}: {
+  ahead: number;
+  behind: number;
+  scale: number;
+  baseLabel: string;
+}) {
+  // Both bars are drawn on the same 18-pixel-wide track. We compute the bar
+  // width as a fraction of the visible-set scale, then clamp to [0, MAX_BAR]
+  // so a count of 0 collapses to invisible (not a single pixel sliver) and
+  // a count exactly equal to scale fills the track end-to-end.
+  const TRACK_WIDTH = 18;
+  const MAX_BAR = TRACK_WIDTH;
+  const aheadWidth = scale > 0 ? Math.round((ahead / scale) * MAX_BAR) : 0;
+  const behindWidth = scale > 0 ? Math.round((behind / scale) * MAX_BAR) : 0;
+  const label = `${ahead} ahead, ${behind} behind of ${baseLabel}`;
+
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      style={{ display: "inline-flex", alignItems: "center", lineHeight: 0 }}
+    >
+      <svg width={TRACK_WIDTH} height={12} viewBox={`0 0 ${TRACK_WIDTH} 12`} aria-hidden>
+        {/* ahead bar (top): accent — observation is "commits on this ref not on base" */}
+        <rect
+          x={0}
+          y={1}
+          width={TRACK_WIDTH}
+          height={4}
+          rx={1}
+          fill="var(--rs-bg-elevated)"
+        />
+        {aheadWidth > 0 ? (
+          <rect x={0} y={1} width={aheadWidth} height={4} rx={1} fill="var(--rs-accent)" />
+        ) : null}
+        {/* behind bar (bottom): muted — observation is "commits on base not on this ref" */}
+        <rect
+          x={0}
+          y={7}
+          width={TRACK_WIDTH}
+          height={4}
+          rx={1}
+          fill="var(--rs-bg-elevated)"
+        />
+        {behindWidth > 0 ? (
+          <rect
+            x={0}
+            y={7}
+            width={behindWidth}
+            height={4}
+            rx={1}
+            fill="var(--rs-text-muted)"
+          />
+        ) : null}
+      </svg>
+    </span>
+  );
+}
+
+/**
+ * Compute the normalisation scale for the halo. We use the largest single
+ * `ahead + behind` sum across visible drift entries (not the global max of
+ * each axis independently) so the halo's full width corresponds to "the most
+ * total drift in this view". A floor of 1 keeps division well-defined when
+ * every visible ref is exactly at base.
+ */
+function computeDriftScale(driftMap?: Map<string, RefDriftSummary>) {
+  if (!driftMap || driftMap.size === 0) return 1;
+  let max = 1;
+  for (const drift of driftMap.values()) {
+    const total = drift.ahead + drift.behind;
+    if (total > max) max = total;
+  }
+  return max;
 }
 
 function EmptyRow({ children }: { children: React.ReactNode }) {

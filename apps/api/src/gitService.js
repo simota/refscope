@@ -20,6 +20,21 @@ export const SUMMARY_READ_LIMIT = SUMMARY_COMMIT_HARD_CAP + 1;
 export const SUMMARY_SAMPLE_SUBJECTS_MAX = 10;
 export const SUMMARY_DEFAULT_GROUP_BY = "prefix";
 
+// File-history hard caps. Default is 20 commits, capped at 50. We always read
+// `limit + 1` so we can detect over-cap responses and emit `truncated: true`
+// without leaking the extra commit. These bounds are observation-side limits
+// (how many commits to surface), independent of `SUMMARY_COMMIT_HARD_CAP`.
+export const FILE_HISTORY_DEFAULT_LIMIT = 20;
+export const FILE_HISTORY_MAX_LIMIT = 50;
+
+// Ref-drift hard caps. Drift fans out to `2 * N + N` git calls (ahead + behind
+// + merge-base) per request, all parallelised through `Promise.all`. We cap
+// the number of refs surfaced so a repository with 1000+ branches doesn't
+// pin a Node worker. Default 50, max 100; we read `limit + 1` to detect
+// over-cap responses without leaking the extra ref into the payload.
+export const REF_DRIFT_DEFAULT_LIMIT = 50;
+export const REF_DRIFT_MAX_LIMIT = 100;
+
 // Conventional-commit prefix grouping uses a literal regex match on the
 // commit subject. `feat`, `fix`, `chore`, … with optional scope, then a colon
 // + space. Subjects that do not match are kept as observed data and isolated
@@ -358,6 +373,116 @@ export function createGitService(config) {
           groups,
           uncategorized,
           truncated,
+        },
+      };
+    },
+
+    async getFileHistory(repo, query) {
+      const queryValues = readFileHistoryQuery(query);
+      if (!queryValues.ok) {
+        return { status: 400, body: { error: queryValues.error } };
+      }
+      const { ref, limit, path: pathValue } = queryValues.value;
+      if (!isValidGitRef(ref)) {
+        return { status: 400, body: { error: "Invalid ref parameter" } };
+      }
+
+      const commitishRef = await resolveCommitishRevision(repo, ref, config.gitTimeoutMs);
+      if (!commitishRef.ok) {
+        return commitishRef.result;
+      }
+
+      // Read `limit + 1` so a 21-record response triggers `truncated: true`
+      // without exposing the extra commit to the caller. The patches stay raw
+      // — UI parses them with the same `parseUnifiedDiff` used elsewhere.
+      const readLimit = limit + 1;
+      const { stdout } = await runGit(
+        repo,
+        fileHistoryLogArgs({
+          revision: commitishRef.hash,
+          pathspec: formatLiteralPathspec(pathValue),
+          maxCount: readLimit,
+        }),
+        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+      );
+
+      const parsed = parseFileHistoryRecords(stdout);
+      const truncated = parsed.length > limit;
+      const entries = (truncated ? parsed.slice(0, limit) : parsed).map((entry) => ({
+        hash: entry.hash,
+        shortHash: entry.hash.slice(0, 7),
+        parents: entry.parents,
+        author: entry.author,
+        authorEmail: entry.authorEmail,
+        authorDate: entry.authorDate,
+        subject: entry.subject,
+        // Raw patch as observed from `git log --patch`. Keep verbatim — the UI
+        // feeds it into `parseUnifiedDiff` exactly as it does for the per-commit
+        // diff endpoint. We never reinterpret rename similarity here; Git's
+        // `R<NN>` marker stays inside the patch text.
+        patch: entry.patch,
+      }));
+
+      return {
+        status: 200,
+        body: {
+          path: pathValue,
+          ref: { input: ref, resolved: commitishRef.hash },
+          entries,
+          truncated,
+          limit,
+        },
+      };
+    },
+
+    async getRefDrift(repo, query) {
+      const queryValues = readRefDriftQuery(query);
+      if (!queryValues.ok) {
+        return { status: 400, body: { error: queryValues.error } };
+      }
+      const { base, limit } = queryValues.value;
+
+      const baseRevision = await resolveCommitishRevision(repo, base, config.gitTimeoutMs);
+      if (!baseRevision.ok) {
+        return baseRevision.result;
+      }
+
+      const allRefs = await listRefs(repo);
+      // Drift only makes semantic sense for moving heads (branches) and the
+      // shadows of remote heads. Tags are anchored to a fixed commit by
+      // definition — ahead/behind against HEAD is a snapshot, not drift —
+      // and surfacing it would dilute the signal Branch Drift Halo is meant
+      // to carry. Filter is applied here, not in the UI, so the wire payload
+      // already reflects the contract.
+      const driftEligibleRefs = allRefs.filter(
+        (ref) => ref.type === "branch" || ref.type === "remote",
+      );
+
+      // Read `limit + 1` so an over-cap fanout triggers `truncated: true`
+      // without exposing the extra ref's drift to the caller. We slice before
+      // dispatching git so we never spend the extra `2N+N` calls on a ref we
+      // intend to drop.
+      const truncated = driftEligibleRefs.length > limit;
+      const refsToProcess = truncated
+        ? driftEligibleRefs.slice(0, limit)
+        : driftEligibleRefs;
+
+      // Drift per ref runs in parallel; the outer Promise.all unions all
+      // refs, and `computeRefDrift` itself runs ahead/behind/merge-base in
+      // parallel internally. Total fanout is 3 * processedRefs git calls.
+      const driftEntries = await Promise.all(
+        refsToProcess.map((ref) =>
+          computeRefDrift(repo, baseRevision.hash, ref, config.gitTimeoutMs),
+        ),
+      );
+
+      return {
+        status: 200,
+        body: {
+          base: { input: base, resolved: baseRevision.hash },
+          refs: driftEntries,
+          truncated,
+          limit,
         },
       };
     },
@@ -979,6 +1104,192 @@ export function parseSummaryRecords(stdout) {
       };
     })
     .filter((record) => record.hash.length === 40);
+}
+
+function readRefDriftQuery(query) {
+  const values = {};
+  for (const name of ["base", "limit"]) {
+    const allValues = query.getAll(name);
+    if (allValues.length > 1) {
+      return { ok: false, error: `Duplicate ${name} parameter` };
+    }
+    values[name] = allValues[0] ?? "";
+  }
+
+  // `base` defaults to HEAD when omitted. Validation must run after the
+  // default fill so an empty query string still yields a usable default,
+  // mirroring the `readSummaryQuery` / `readCommitListQuery` pattern.
+  const base = values.base || "HEAD";
+  if (!isValidGitRef(base)) {
+    return { ok: false, error: "Invalid base parameter" };
+  }
+  const limit = parseLimitQuery(
+    values.limit,
+    REF_DRIFT_DEFAULT_LIMIT,
+    REF_DRIFT_MAX_LIMIT,
+  );
+  if (!limit.ok) {
+    return { ok: false, error: limit.error };
+  }
+
+  return { ok: true, value: { base, limit: limit.value } };
+}
+
+/**
+ * Compute drift for a single ref against the resolved base hash. Observation
+ * fact: ahead is `git rev-list --count <ref>..<base>`'s reverse — i.e.
+ * commits reachable from the ref but not from the base — and behind is the
+ * mirror count. We never recompute these in-process; the numbers come from
+ * Git literally.
+ *
+ * Short-circuit: when the ref already points at the base commit, ahead and
+ * behind are trivially zero and the merge-base is the base hash itself. We
+ * skip the three git calls in that case to keep large branch lists cheap.
+ *
+ * Internally we run ahead, behind, and merge-base in parallel — they share
+ * no state and the Git invocation is cheap individually.
+ *
+ * @param {{ id: string, name: string, path: string }} repo
+ * @param {string} baseHash  Already resolved object id for the base ref.
+ * @param {{ name: string, type: "branch"|"remote"|"tag"|"other", hash: string }} ref
+ * @param {number} timeoutMs
+ */
+async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
+  if (ref.hash === baseHash) {
+    return {
+      name: ref.name,
+      type: ref.type,
+      ahead: 0,
+      behind: 0,
+      mergeBase: baseHash,
+      hash: ref.hash,
+    };
+  }
+  const [ahead, behind, mergeBase] = await Promise.all([
+    runGit(repo, compareRevListArgs(ref.hash, baseHash), { timeoutMs }),
+    runGit(repo, compareRevListArgs(baseHash, ref.hash), { timeoutMs }),
+    readMergeBase(repo, baseHash, ref.hash, timeoutMs),
+  ]);
+  return {
+    name: ref.name,
+    type: ref.type,
+    ahead: parseCount(ahead.stdout),
+    behind: parseCount(behind.stdout),
+    mergeBase,
+    hash: ref.hash,
+  };
+}
+
+function readFileHistoryQuery(query) {
+  const values = {};
+  for (const name of ["path", "ref", "limit"]) {
+    const allValues = query.getAll(name);
+    if (allValues.length > 1) {
+      return { ok: false, error: `Duplicate ${name} parameter` };
+    }
+    values[name] = allValues[0] ?? "";
+  }
+
+  // `path` is required for file history — there is no useful "history of
+  // nothing" view. We surface the missing-input case explicitly rather than
+  // silently defaulting to an empty pathspec (which would degrade into a full
+  // commit log).
+  const trimmedPath = values.path.trim();
+  if (!trimmedPath) {
+    return { ok: false, error: "Missing path parameter" };
+  }
+  const path = parsePathQuery(values.path);
+  if (!path.ok) {
+    return { ok: false, error: path.error };
+  }
+
+  const limit = parseLimitQuery(
+    values.limit,
+    FILE_HISTORY_DEFAULT_LIMIT,
+    FILE_HISTORY_MAX_LIMIT,
+  );
+  if (!limit.ok) {
+    return { ok: false, error: limit.error };
+  }
+
+  return {
+    ok: true,
+    value: {
+      ref: values.ref || "HEAD",
+      limit: limit.value,
+      path: path.value,
+    },
+  };
+}
+
+/**
+ * Build the `git log` arguments for file-history retrieval. Uses `--follow`
+ * to keep the history connected across renames (Git emits `R<NN>` extended
+ * headers inside the patch — we surface them verbatim, never re-judge the
+ * rename ourselves). Mirrors the hardening of `commitSummaryLogArgs`:
+ * no signature verification, no ext-diff/textconv, option parsing terminated
+ * before the resolved revision, pathspec passed after `--`.
+ *
+ * @param {{ revision: string, pathspec: string, maxCount: number }} args
+ */
+export function fileHistoryLogArgs({ revision, pathspec, maxCount }) {
+  return [
+    "log",
+    `--max-count=${maxCount}`,
+    "--follow",
+    "--find-renames",
+    "--date=iso-strict",
+    "--no-show-signature",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--patch",
+    `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%P%x00%an%x00%ae%x00%aI%x00%s`,
+    "--end-of-options",
+    revision,
+    "--",
+    pathspec,
+  ];
+}
+
+/**
+ * Parse the RECORD_SEPARATOR-separated stream produced by
+ * `fileHistoryLogArgs`. Each record's first line is the NUL-separated metadata
+ * block; everything after the first line is the raw `git log --patch` output
+ * for that commit, preserved verbatim (including blank lines and `\ No newline`
+ * markers) so the UI can feed it into `parseUnifiedDiff` directly.
+ *
+ * Records lacking a 40-char hex hash are dropped — that is observation hygiene
+ * (the format always emits one), not derivation.
+ *
+ * @param {string} stdout
+ * @returns {Array<{ hash: string, parents: string[], author: string, authorEmail: string, authorDate: string, subject: string, patch: string }>}
+ */
+export function parseFileHistoryRecords(stdout) {
+  return stdout
+    .split(COMMIT_RECORD_SEPARATOR)
+    .map((record) => record.replace(/^\n+/, ""))
+    .filter((record) => record.length > 0)
+    .map((record) => {
+      const newlineIndex = record.indexOf("\n");
+      const metadata = newlineIndex === -1 ? record : record.slice(0, newlineIndex);
+      const rest = newlineIndex === -1 ? "" : record.slice(newlineIndex + 1);
+      const [hash, parents, author, authorEmail, authorDate, subject] =
+        metadata.split(COMMIT_FIELD_SEPARATOR);
+      return {
+        hash: hash ?? "",
+        parents: splitParents(parents ?? ""),
+        author: author ?? "",
+        authorEmail: authorEmail ?? "",
+        authorDate: authorDate ?? "",
+        subject: subject ?? "",
+        // Strip the blank-line padding Git emits between the format line and
+        // the patch body, plus any trailing newlines, but keep internal blank
+        // lines (`@@` headers and hunk bodies need their structure intact).
+        patch: rest.replace(/^\n+/, "").replace(/\n+$/, ""),
+      };
+    })
+    .filter((record) => /^[A-Fa-f0-9]{40}$/.test(record.hash));
 }
 
 function parseSummaryNumstatLine(line) {
