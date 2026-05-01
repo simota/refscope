@@ -287,8 +287,8 @@ export function CommandPalette({
     <div
       role="dialog"
       aria-modal
-      className="fixed inset-0 grid place-items-start justify-center pt-[18vh] z-50"
-      style={{ background: "color-mix(in oklab, black, transparent 50%)" }}
+      className="fixed inset-0 grid place-items-start justify-center pt-[18vh]"
+      style={{ background: "color-mix(in oklab, black, transparent 50%)", zIndex: "var(--rs-z-modal)" }}
       onClick={onClose}
     >
       <div

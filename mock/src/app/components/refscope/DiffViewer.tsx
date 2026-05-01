@@ -314,7 +314,7 @@ export function DiffViewer({
         style={{
           position: "fixed",
           inset: 0,
-          zIndex: 50,
+          zIndex: "var(--rs-z-modal)",
           background: "var(--rs-bg-canvas)",
           display: "flex",
           flexDirection: "column",
@@ -375,7 +375,7 @@ function DiffToolbar({
       style={{
         position: "sticky",
         top: 0,
-        zIndex: 1,
+        zIndex: "var(--rs-z-elevated)",
         background: "var(--rs-bg-elevated)",
         borderBottom: "1px solid var(--rs-border)",
       }}
@@ -475,8 +475,12 @@ function DiffToolbar({
             : "var(--rs-border)",
         }}
       >
-        {fullscreen ? <Minimize2 size={11} aria-hidden /> : <Maximize2 size={11} aria-hidden />}
-        {fullscreen ? " Exit" : " Full"}
+        {fullscreen ? (
+          <Minimize2 size={11} aria-hidden style={{ marginRight: 4 }} />
+        ) : (
+          <Maximize2 size={11} aria-hidden style={{ marginRight: 4 }} />
+        )}
+        {fullscreen ? "Exit" : "Full"}
       </button>
       <button
         type="button"
@@ -484,7 +488,7 @@ function DiffToolbar({
         onClick={onCopy}
         aria-label="Copy diff text"
       >
-        <Copy size={11} aria-hidden /> Copy
+        <Copy size={11} aria-hidden style={{ marginRight: 4 }} /> Copy
       </button>
       <span
         aria-live="polite"
