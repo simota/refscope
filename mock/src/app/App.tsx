@@ -919,6 +919,70 @@ function RefScopeTokens() {
       [data-quiet="true"] .rs-btn--ghost:hover {
         background: var(--rs-bg-elevated);
       }
+      /* Prism token colors. Scoped to .rs-prism so we never bleed into the
+         rest of the UI. Hue picked to harmonize with the existing rs-* palette
+         and to keep contrast on top of the +/- background tints. */
+      .rs-prism .token.comment,
+      .rs-prism .token.prolog,
+      .rs-prism .token.cdata,
+      .rs-prism .token.doctype {
+        color: oklch(60% 0.03 255);
+        font-style: italic;
+      }
+      .rs-prism .token.punctuation {
+        color: oklch(72% 0.02 255);
+      }
+      .rs-prism .token.namespace {
+        opacity: 0.7;
+      }
+      .rs-prism .token.string,
+      .rs-prism .token.char,
+      .rs-prism .token.attr-value,
+      .rs-prism .token.regex,
+      .rs-prism .token.template-string {
+        color: oklch(78% 0.13 145);
+      }
+      .rs-prism .token.number,
+      .rs-prism .token.boolean,
+      .rs-prism .token.constant,
+      .rs-prism .token.symbol {
+        color: oklch(78% 0.15 80);
+      }
+      .rs-prism .token.keyword,
+      .rs-prism .token.atrule,
+      .rs-prism .token.important,
+      .rs-prism .token.rule {
+        color: oklch(74% 0.15 285);
+      }
+      .rs-prism .token.tag,
+      .rs-prism .token.selector,
+      .rs-prism .token.deleted {
+        color: oklch(72% 0.14 25);
+      }
+      .rs-prism .token.attr-name,
+      .rs-prism .token.builtin,
+      .rs-prism .token.property,
+      .rs-prism .token.entity,
+      .rs-prism .token.url,
+      .rs-prism .token.variable {
+        color: oklch(78% 0.13 195);
+      }
+      .rs-prism .token.function,
+      .rs-prism .token.class-name {
+        color: oklch(80% 0.14 95);
+      }
+      .rs-prism .token.operator {
+        color: oklch(82% 0.04 255);
+      }
+      .rs-prism .token.inserted {
+        color: oklch(72% 0.14 150);
+      }
+      .rs-prism .token.bold {
+        font-weight: 600;
+      }
+      .rs-prism .token.italic {
+        font-style: italic;
+      }
     `}</style>
   );
 }

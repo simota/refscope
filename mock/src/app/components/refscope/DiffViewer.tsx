@@ -10,6 +10,12 @@ import {
   type DiffHunk,
   type DiffLine,
 } from "../../lib/parseUnifiedDiff";
+import {
+  detectLanguage,
+  flattenTokens,
+  tokenizeLine,
+  type HighlightedRun,
+} from "../../lib/syntaxHighlight";
 
 /**
  * Structured unified-diff viewer. Receives the raw `git show --patch` output
@@ -206,7 +212,7 @@ export function DiffViewer({
 
   const inner = (
     <div
-      className="flex flex-col"
+      className="rs-prism flex flex-col"
       style={{
         background: "var(--rs-bg-canvas)",
         fontFamily: "var(--rs-mono)",
@@ -637,6 +643,10 @@ function FileBlock({
     file.changeKind === "renamed" || file.changeKind === "copied"
       ? `${file.oldPath ?? "?"} → ${file.newPath ?? "?"}`
       : null;
+  const language = useMemo(
+    () => detectLanguage(file.newPath ?? file.oldPath ?? file.displayPath),
+    [file.newPath, file.oldPath, file.displayPath],
+  );
   return (
     <section
       id={`rs-diff-file-${commitHash}-${fileKey(file)}`}
@@ -686,7 +696,12 @@ function FileBlock({
         </button>
       </header>
       {collapsed ? null : (
-        <FileBody file={file} wordWrap={wordWrap} showWhitespace={showWhitespace} />
+        <FileBody
+          file={file}
+          wordWrap={wordWrap}
+          showWhitespace={showWhitespace}
+          language={language}
+        />
       )}
     </section>
   );
@@ -696,10 +711,12 @@ function FileBody({
   file,
   wordWrap,
   showWhitespace,
+  language,
 }: {
   file: DiffFile;
   wordWrap: boolean;
   showWhitespace: boolean;
+  language: string | null;
 }) {
   if (file.isBinary) {
     return (
@@ -743,6 +760,7 @@ function FileBody({
           hunk={hunk}
           wordWrap={wordWrap}
           showWhitespace={showWhitespace}
+          language={language}
         />
       ))}
     </div>
@@ -753,10 +771,12 @@ function HunkBlock({
   hunk,
   wordWrap,
   showWhitespace,
+  language,
 }: {
   hunk: DiffHunk;
   wordWrap: boolean;
   showWhitespace: boolean;
+  language: string | null;
 }) {
   return (
     <>
@@ -793,6 +813,7 @@ function HunkBlock({
           line={line}
           wordWrap={wordWrap}
           showWhitespace={showWhitespace}
+          language={language}
         />
       ))}
     </>
@@ -803,10 +824,12 @@ function DiffLineRow({
   line,
   wordWrap,
   showWhitespace,
+  language,
 }: {
   line: DiffLine;
   wordWrap: boolean;
   showWhitespace: boolean;
+  language: string | null;
 }) {
   const sigil = sigilFor(line);
   const oldNo = line.kind === "context" || line.kind === "del" ? line.oldLineNo : "";
@@ -872,7 +895,7 @@ function DiffLineRow({
             ...(wordWrap ? { flex: 1, minWidth: 0 } : { flexShrink: 0 }),
           }}
         >
-          {showWhitespace ? renderWhitespace(textOf(line)) : textOf(line)}
+          {renderLineContent(textOf(line), language, line.kind, showWhitespace)}
         </span>
       </span>
     </div>
@@ -918,6 +941,42 @@ function backgroundForLine(line: DiffLine): string {
     case "context":
       return "transparent";
   }
+}
+
+function renderLineContent(
+  text: string,
+  language: string | null,
+  kind: DiffLine["kind"],
+  showWhitespace: boolean,
+) {
+  // `no-newline` markers are diff metadata, not source — never highlight.
+  if (kind === "no-newline" || !language) {
+    return showWhitespace ? renderWhitespace(text) : text;
+  }
+  const tokens = tokenizeLine(text, language);
+  if (!tokens) {
+    return showWhitespace ? renderWhitespace(text) : text;
+  }
+  const runs = flattenTokens(tokens);
+  return runs.map((run, index) => (
+    <HighlightedRunSpan
+      key={index}
+      run={run}
+      showWhitespace={showWhitespace}
+    />
+  ));
+}
+
+function HighlightedRunSpan({
+  run,
+  showWhitespace,
+}: {
+  run: HighlightedRun;
+  showWhitespace: boolean;
+}) {
+  const content = showWhitespace ? renderWhitespace(run.text) : run.text;
+  if (!run.className) return <>{content}</>;
+  return <span className={run.className}>{content}</span>;
 }
 
 function renderWhitespace(text: string) {
