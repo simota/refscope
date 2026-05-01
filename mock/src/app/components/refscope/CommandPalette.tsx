@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarRange, Eye, FileSearch, GitBranch, Hash, Maximize2, Moon, PanelLeftClose, Pause, Play, Search, Tag } from "lucide-react";
+import {
+  CalendarRange,
+  Eye,
+  FileSearch,
+  GitBranch,
+  Hash,
+  Maximize2,
+  Moon,
+  PanelLeftClose,
+  Pause,
+  Play,
+  RefreshCw,
+  Search,
+  Tag,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { SearchMode } from "../../api";
 import type { Commit, GitRef } from "./data";
@@ -40,6 +54,9 @@ export function CommandPalette({
   onToggleDiffFullscreen,
   sidebarCollapsed,
   onToggleSidebar,
+  workTreeAvailable,
+  onShowWorkTree,
+  onRefreshWorkTree,
 }: {
   open: boolean;
   onClose: () => void;
@@ -69,6 +86,13 @@ export function CommandPalette({
   onToggleDiffFullscreen: () => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  // `workTreeAvailable` is true when the API confirmed at least one tracked
+  // change. We hide the "Show working tree changes" command when the
+  // working tree is clean; the refresh command stays visible regardless so
+  // the user can re-poll after committing or staging.
+  workTreeAvailable: boolean;
+  onShowWorkTree: () => void;
+  onRefreshWorkTree: () => void;
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -217,6 +241,35 @@ export function CommandPalette({
         ]
       : [];
 
+    // Working-tree commands. Refresh is always offered (the worktree might
+    // be clean now and dirty after the user stages something); the
+    // "Show changes" entry only appears when the API has confirmed at least
+    // one tracked change, mirroring the copyCommand visibility pattern.
+    const workTreeCommands: PaletteCommand[] = [
+      {
+        icon: RefreshCw,
+        label: "Refresh working tree",
+        hint: "worktree",
+        run: () => {
+          onRefreshWorkTree();
+          onClose();
+        },
+      },
+      ...(workTreeAvailable
+        ? [
+            {
+              icon: FileSearch,
+              label: "Show working tree changes",
+              hint: "uncommitted",
+              run: () => {
+                onShowWorkTree();
+                onClose();
+              },
+            },
+          ]
+        : []),
+    ];
+
     return [
       ...refCommands,
       sidebarCommand,
@@ -224,6 +277,7 @@ export function CommandPalette({
       quietCommand,
       cvdCommand,
       liveCommand,
+      ...workTreeCommands,
       ...diffFullscreenCommand,
       ...copyCommand,
       ...filterCommands,
@@ -244,6 +298,8 @@ export function CommandPalette({
     onToggleColorVision,
     onToggleDiffFullscreen,
     onToggleLiveUpdates,
+    onRefreshWorkTree,
+    onShowWorkTree,
     onToggleQuietMode,
     onToggleSidebar,
     onToggleSummaryView,
@@ -256,6 +312,7 @@ export function CommandPalette({
     selectedCommit,
     sidebarCollapsed,
     summaryViewOpen,
+    workTreeAvailable,
   ]);
 
   useEffect(() => {

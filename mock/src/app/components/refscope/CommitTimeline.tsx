@@ -1,6 +1,7 @@
-import { GitMerge, ShieldCheck, AlertTriangle, ChevronDown } from "lucide-react";
+import { GitMerge, ShieldCheck, AlertTriangle, ChevronDown, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Commit, CompareResult, GitRef } from "./data";
+import type { WorkTreeResponse } from "../../api";
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -39,6 +40,10 @@ export function CommitTimeline({
   onToggleCompareBar,
   onToggleActivityGraph,
   summaryViewOpen,
+  workTree,
+  isWorkTreeSelected,
+  onSelectWorkTree,
+  onRefreshWorkTree,
 }: {
   commits: Commit[];
   selected: string;
@@ -69,6 +74,14 @@ export function CommitTimeline({
   onToggleCompareBar: () => void;
   onToggleActivityGraph: () => void;
   summaryViewOpen: boolean;
+  // Working-tree pseudo-row inputs. The timeline only renders the row when
+  // `workTree` is non-null (parent gates this on "any side has fileCount > 0").
+  // Refscope never infers worktree state itself — this is the parent's
+  // observation fact handed in.
+  workTree: WorkTreeResponse | null;
+  isWorkTreeSelected: boolean;
+  onSelectWorkTree: () => void;
+  onRefreshWorkTree: () => void;
 }) {
   const emptyState = activeFilters?.length
     ? {
@@ -122,19 +135,39 @@ export function CommitTimeline({
           <StateMessage title="Loading commits" message="Reading allowlisted repository history." />
         ) : commits.length ? (
           <ul role="list" className="pb-6">
+            {workTree ? (
+              <WorkTreeRow
+                workTree={workTree}
+                selected={isWorkTreeSelected}
+                onSelect={onSelectWorkTree}
+                onRefresh={onRefreshWorkTree}
+              />
+            ) : null}
             {commits.map((c, i) => (
               <CommitRow
                 key={c.hash}
                 commit={c}
                 prev={commits[i - 1]}
                 next={commits[i + 1]}
-                selected={c.hash === selected}
+                selected={c.hash === selected && !isWorkTreeSelected}
                 onClick={() => onSelect(c.hash)}
               />
             ))}
           </ul>
         ) : (
-          <StateMessage title={emptyState.title} message={emptyState.message} />
+          <>
+            {workTree ? (
+              <ul role="list">
+                <WorkTreeRow
+                  workTree={workTree}
+                  selected={isWorkTreeSelected}
+                  onSelect={onSelectWorkTree}
+                  onRefresh={onRefreshWorkTree}
+                />
+              </ul>
+            ) : null}
+            <StateMessage title={emptyState.title} message={emptyState.message} />
+          </>
         )}
       </div>
 
@@ -894,6 +927,210 @@ function CommitRow({
       </div>
     </li>
   );
+}
+
+/**
+ * Pseudo-row representing the working tree (HEAD vs index + index vs worktree).
+ *
+ * Boundary discipline:
+ * - The summary numbers come straight from the API's numstat aggregation —
+ *   the literal sum of Git's `--numstat` output, not a refscope-derived
+ *   total.
+ * - The "Not yet committed" badge plus the dashed top border mark this row
+ *   as an observation-zone artefact that is *not* a commit. The visual
+ *   treatment is intentionally distinct from a committed `CommitRow` so
+ *   users never confuse uncommitted state for history.
+ * - The row is keyboard-accessible (Enter/Space) and exposes
+ *   `aria-pressed` so assistive tech reads selection state correctly.
+ */
+function WorkTreeRow({
+  workTree,
+  selected,
+  onSelect,
+  onRefresh,
+}: {
+  workTree: WorkTreeResponse;
+  selected: boolean;
+  onSelect: () => void;
+  onRefresh: () => void;
+}) {
+  const totalFiles =
+    workTree.staged.summary.fileCount + workTree.unstaged.summary.fileCount;
+  const totalAdded =
+    workTree.staged.summary.added + workTree.unstaged.summary.added;
+  const totalDeleted =
+    workTree.staged.summary.deleted + workTree.unstaged.summary.deleted;
+  const stagedFiles = workTree.staged.summary.fileCount;
+  const unstagedFiles = workTree.unstaged.summary.fileCount;
+
+  return (
+    <li
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      aria-label={`Working tree: ${totalFiles} files changed (staged ${stagedFiles}, unstaged ${unstagedFiles}). Not yet committed.`}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className="grid cursor-pointer items-stretch group"
+      style={{
+        gridTemplateColumns: "56px 1fr auto",
+        gap: 12,
+        padding: "10px 16px",
+        background: selected
+          ? "color-mix(in oklab, var(--rs-bg-panel), var(--rs-warning) 12%)"
+          : "color-mix(in oklab, var(--rs-bg-canvas), var(--rs-warning) 4%)",
+        boxShadow: selected ? "inset 2px 0 0 var(--rs-warning)" : undefined,
+        // Dashed top border + solid bottom border: observation-zone vs
+        // history-zone separator. Same token palette as the rest of the
+        // timeline — no new variables introduced.
+        borderTop: "1px dashed color-mix(in oklab, var(--rs-border), var(--rs-warning) 50%)",
+        borderBottom: "1px solid var(--rs-border)",
+      }}
+      onMouseEnter={(e) => {
+        if (!selected)
+          (e.currentTarget as HTMLElement).style.background =
+            "color-mix(in oklab, var(--rs-bg-panel), var(--rs-warning) 8%)";
+      }}
+      onMouseLeave={(e) => {
+        if (!selected)
+          (e.currentTarget as HTMLElement).style.background =
+            "color-mix(in oklab, var(--rs-bg-canvas), var(--rs-warning) 4%)";
+      }}
+    >
+      <div className="relative" style={{ width: 56 }} aria-hidden>
+        <span
+          className="absolute"
+          style={{
+            left: 9,
+            top: "calc(50% - 7px)",
+            width: 14,
+            height: 14,
+            borderRadius: 4,
+            border: "1.5px dashed var(--rs-warning)",
+            background: "transparent",
+          }}
+        />
+      </div>
+
+      <div className="min-w-0 flex flex-col" style={{ gap: 3 }}>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+          <span
+            style={{
+              fontFamily: "var(--rs-mono)",
+              fontSize: 10,
+              letterSpacing: "0.06em",
+              color: "var(--rs-warning)",
+              fontWeight: 700,
+            }}
+          >
+            WORKING TREE
+          </span>
+          <span
+            className="px-1.5 rounded-full inline-flex items-center"
+            style={{
+              fontSize: 10,
+              fontFamily: "var(--rs-mono)",
+              height: 18,
+              padding: "1px 8px",
+              color: "var(--rs-warning)",
+              background:
+                "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 14%)",
+              border:
+                "1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 50%)",
+            }}
+          >
+            Not yet committed
+          </span>
+          <span
+            className="px-1.5 rounded-full inline-flex items-center"
+            style={{
+              fontSize: 10,
+              fontFamily: "var(--rs-mono)",
+              height: 18,
+              padding: "1px 8px",
+              color: "var(--rs-text-muted)",
+              border: "1px solid var(--rs-border)",
+            }}
+            title="Derived view: aggregated from `git diff` and `git diff --cached`"
+          >
+            DRV
+          </span>
+        </div>
+        <div
+          className="flex flex-wrap items-center gap-2"
+          style={{ fontSize: 11, color: "var(--rs-text-secondary)" }}
+        >
+          <span style={{ color: "var(--rs-text-primary)", fontWeight: 600 }}>
+            {totalFiles} {totalFiles === 1 ? "file" : "files"} changed
+          </span>
+          <span>·</span>
+          <span style={{ color: "var(--rs-git-added)", fontFamily: "var(--rs-mono)" }}>
+            +{totalAdded}
+          </span>
+          <span style={{ color: "var(--rs-git-deleted)", fontFamily: "var(--rs-mono)" }}>
+            -{totalDeleted}
+          </span>
+          <span>·</span>
+          <span style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)" }}>
+            staged: {stagedFiles}
+          </span>
+          <span style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)" }}>
+            unstaged: {unstagedFiles}
+          </span>
+          <span>·</span>
+          <span style={{ color: "var(--rs-text-muted)" }}>
+            {formatRelativeTime(workTree.snapshotAt)}
+          </span>
+        </div>
+      </div>
+
+      <div className="self-center flex items-center gap-1">
+        <button
+          type="button"
+          className="rs-icon-btn"
+          aria-label="Refresh working tree"
+          title="Refresh working tree"
+          onClick={(e) => {
+            // Prevent the row's click handler from firing — refreshing
+            // should not change selection.
+            e.stopPropagation();
+            onRefresh();
+          }}
+          onKeyDown={(e) => {
+            // Stop Space/Enter from bubbling to the row's keydown handler.
+            if (e.key === "Enter" || e.key === " ") {
+              e.stopPropagation();
+            }
+          }}
+          style={{ width: 22, height: 22 }}
+        >
+          <RefreshCw size={12} aria-hidden />
+        </button>
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Simple "Xs ago" / "Xm ago" formatter for the snapshot timestamp. Mirrors
+ * the relative-time helper in `api.ts` but kept local so this component
+ * doesn't need to import from outside its visual scope.
+ */
+function formatRelativeTime(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 function formatSignatureStatus(status: Commit["signatureStatus"]) {

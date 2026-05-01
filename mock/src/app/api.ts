@@ -186,6 +186,38 @@ export async function fetchFileHistory(
   );
 }
 
+/**
+ * Working-tree changes payload. The API returns the literal `git diff` /
+ * `git diff --cached` output; the UI feeds each side's `diff` straight into
+ * `parseUnifiedDiff` (same parser used for committed diffs and file history).
+ *
+ * `notes.untrackedExcluded` is a boundary marker: refscope's gitRunner
+ * allowlist does not include `status` or `ls-files`, so this view only
+ * observes tracked changes. The UI renders that fact as an in-panel notice.
+ */
+export type WorkTreeSection = {
+  diff: string;
+  summary: { fileCount: number; added: number; deleted: number };
+  truncated: boolean;
+};
+
+export type WorkTreeResponse = {
+  staged: WorkTreeSection;
+  unstaged: WorkTreeSection;
+  snapshotAt: string;
+  notes: { untrackedExcluded: boolean };
+};
+
+export async function fetchWorkTree(
+  repoId: string,
+  signal?: AbortSignal,
+): Promise<WorkTreeResponse> {
+  return getJson<WorkTreeResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/worktree`,
+    signal,
+  );
+}
+
 export type RefDriftEntry = {
   name: string;
   type: "branch" | "remote" | "tag" | "other";

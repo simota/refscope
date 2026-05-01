@@ -30,6 +30,7 @@ import {
   compareRefs,
   eventsUrl,
   fetchRefDrift,
+  fetchWorkTree,
   getCommit,
   getDiff,
   listCommits,
@@ -39,6 +40,7 @@ import {
   type RefDriftEntry,
   type SearchMode,
   type ViewerEvent,
+  type WorkTreeResponse,
 } from "./api";
 import type { RefDriftSummary } from "./components/refscope/BranchSidebar";
 
@@ -88,6 +90,16 @@ export default function App() {
   const [driftBaseShortName, setDriftBaseShortName] = useState<string>("HEAD");
   const driftAbortRef = useRef<AbortController | null>(null);
   const driftDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Working tree state: HEAD vs index ("staged") + index vs worktree ("unstaged").
+  // Independent of the commit timeline state — we keep `selectedWorkTree` as a
+  // separate boolean so the existing `selected` (commit hash) doesn't pick up a
+  // sentinel value. Switching to worktree clears the commit selection and
+  // vice versa, mirroring how mutually-exclusive panels are wired in the
+  // BranchSidebar / DetailPanel pairing.
+  const [workTree, setWorkTree] = useState<WorkTreeResponse | null>(null);
+  const [selectedWorkTree, setSelectedWorkTree] = useState(false);
+  const workTreeAbortRef = useRef<AbortController | null>(null);
+  const workTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRefRef = useRef(selectedRef);
   const searchRef = useRef(search);
   const authorRef = useRef(author);
@@ -343,6 +355,66 @@ export default function App() {
     };
   }, [selectedRepo, refreshDrift]);
 
+  // Working-tree fetch. Same Abort-based pattern as `refreshDrift`: any
+  // in-flight request is cancelled when the inputs change or a fresh refresh
+  // fires, so the UI never shows a stale snapshot. Errors surface through the
+  // existing error banner — except `AbortError`, which is routine.
+  const refreshWorkTree = useCallback((repoId: string) => {
+    if (!repoId) {
+      setWorkTree(null);
+      return;
+    }
+    workTreeAbortRef.current?.abort();
+    const controller = new AbortController();
+    workTreeAbortRef.current = controller;
+    fetchWorkTree(repoId, controller.signal)
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        setWorkTree(response);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(errorMessage(err));
+      });
+  }, []);
+
+  // Window focus + repo-change refresh. Multiple focus events can fire in
+  // quick succession when the user alt-tabs through several windows; we
+  // debounce them so the API isn't hammered with redundant snapshots. 500 ms
+  // mirrors `scheduleDriftRefresh` for consistency.
+  const scheduleWorkTreeRefresh = useCallback(
+    (repoId: string) => {
+      if (workTreeDebounceRef.current) {
+        clearTimeout(workTreeDebounceRef.current);
+      }
+      workTreeDebounceRef.current = setTimeout(() => {
+        workTreeDebounceRef.current = null;
+        refreshWorkTree(repoId);
+      }, 500);
+    },
+    [refreshWorkTree],
+  );
+
+  useEffect(() => {
+    if (!selectedRepo) {
+      setWorkTree(null);
+      setSelectedWorkTree(false);
+      return;
+    }
+    refreshWorkTree(selectedRepo);
+    const onFocus = () => scheduleWorkTreeRefresh(selectedRepo);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      workTreeAbortRef.current?.abort();
+      if (workTreeDebounceRef.current) {
+        clearTimeout(workTreeDebounceRef.current);
+        workTreeDebounceRef.current = null;
+      }
+    };
+  }, [selectedRepo, refreshWorkTree, scheduleWorkTreeRefresh]);
+
   useEffect(() => {
     if (!selectedRepo) return;
     const source = new EventSource(eventsUrl(selectedRepo));
@@ -417,6 +489,31 @@ export default function App() {
   const repoName = repositories.find((repo) => repo.id === selectedRepo)?.name ?? selectedRepo;
   const refName = displayRefName(selectedRef, refs);
   const toggleSummaryView = useCallback(() => setSummaryViewOpen((prev) => !prev), []);
+
+  // Mutual exclusion: selecting a commit must clear the worktree selection
+  // (the DetailPanel can only show one of the two), and vice versa. Keeping
+  // the wiring at App.tsx level means the children only need a single
+  // callback per direction.
+  const handleSelectCommit = useCallback((hash: string) => {
+    setSelected(hash);
+    setSelectedWorkTree(false);
+  }, []);
+  const handleSelectWorkTree = useCallback(() => {
+    setSelectedWorkTree(true);
+    setSelected("");
+  }, []);
+  const handleRefreshWorkTree = useCallback(() => {
+    if (!selectedRepo) return;
+    refreshWorkTree(selectedRepo);
+  }, [selectedRepo, refreshWorkTree]);
+  // Whether the worktree pseudo-row should be visible at all. Derived from
+  // the literal Git facts: if both summaries report zero file changes, there
+  // is nothing to show.
+  const workTreeHasChanges = Boolean(
+    workTree &&
+      (workTree.staged.summary.fileCount > 0 ||
+        workTree.unstaged.summary.fileCount > 0),
+  );
 
   // Drilldown intentionally routes group keys back through the existing search /
   // path / author filters rather than tracking a separate hash highlight set.
@@ -597,6 +694,7 @@ export default function App() {
           setSelectedRepo(repoId);
           setSelectedRef("HEAD");
           setSelected("");
+          setSelectedWorkTree(false);
           realtimeNewCommitHashesRef.current.clear();
           setEventStatus("connecting");
           setEventNotice("");
@@ -657,6 +755,8 @@ export default function App() {
         onToggleSummaryView={toggleSummaryView}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={toggleSidebar}
+        onRefreshWorkTree={handleRefreshWorkTree}
+        workTreeAvailable={Boolean(selectedRepo)}
       />
       <ResizablePanelGroup
         direction="horizontal"
@@ -718,7 +818,7 @@ export default function App() {
             <CommitTimeline
               commits={commits}
               selected={selected}
-              onSelect={setSelected}
+              onSelect={handleSelectCommit}
               loading={loading}
               error={error}
               eventNotice={eventNotice}
@@ -751,6 +851,10 @@ export default function App() {
               onToggleCompareBar={toggleCompareBar}
               onToggleActivityGraph={toggleActivityGraph}
               summaryViewOpen={summaryViewOpen}
+              workTree={workTreeHasChanges ? workTree : null}
+              isWorkTreeSelected={selectedWorkTree}
+              onSelectWorkTree={handleSelectWorkTree}
+              onRefreshWorkTree={handleRefreshWorkTree}
             />
           </div>
         </ResizablePanel>
@@ -772,6 +876,8 @@ export default function App() {
             onDiffFullscreenChange={setDiffFullscreen}
             repoId={selectedRepo}
             refName={selectedRef}
+            workTreeSelected={selectedWorkTree}
+            workTree={workTree}
           />
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -818,6 +924,9 @@ export default function App() {
           setSearchPattern(value);
           setSelected("");
         }}
+        workTreeAvailable={workTreeHasChanges}
+        onShowWorkTree={handleSelectWorkTree}
+        onRefreshWorkTree={handleRefreshWorkTree}
       />
     </div>
   );

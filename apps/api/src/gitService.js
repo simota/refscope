@@ -487,6 +487,76 @@ export function createGitService(config) {
       };
     },
 
+    async getWorkTreeChanges(repo) {
+      // Working tree changes: HEAD -> index ("staged") and index -> worktree
+      // ("unstaged"). Each side is sourced literally from `git diff` — the
+      // staged side adds `--cached`. We fan out four `runGit` calls so
+      // numstat (summary aggregation) and the raw patch (UI parses verbatim
+      // through `parseUnifiedDiff`) are read in parallel.
+      //
+      // Boundary discipline:
+      // - The patch text is preserved exactly as Git emits it. We never
+      //   re-judge renames, never synthesize hunks, never normalize line
+      //   endings.
+      // - Untracked files are deliberately excluded. `git status` and
+      //   `ls-files` are *not* on the gitRunner allowlist, and we won't sneak
+      //   them in here. We surface that boundary explicitly in
+      //   `notes.untrackedExcluded` so the UI can render an honest disclaimer
+      //   and the API client can detect the limit.
+      // - `truncated` mirrors `getDiff`: the runner emits GitCommandError on
+      //   `diffMaxBytes` overflow, which bubbles to http.js as a 504. The
+      //   field stays in the payload so the UI's contract stays uniform with
+      //   other truncation-aware endpoints, but is always `false` on success.
+      const [stagedNumstat, stagedPatch, unstagedNumstat, unstagedPatch] = await Promise.all([
+        runGit(repo, workTreeNumstatArgs({ staged: true }), {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: config.diffMaxBytes,
+        }),
+        runGit(repo, workTreePatchArgs({ staged: true }), {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: config.diffMaxBytes,
+        }),
+        runGit(repo, workTreeNumstatArgs({ staged: false }), {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: config.diffMaxBytes,
+        }),
+        runGit(repo, workTreePatchArgs({ staged: false }), {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: config.diffMaxBytes,
+        }),
+      ]);
+
+      return {
+        status: 200,
+        body: {
+          staged: {
+            diff: stagedPatch.stdout,
+            summary: parseNumstatSummary(stagedNumstat.stdout.split("\n")),
+            // Mirrors `getDiff`: the runner throws on `diffMaxBytes`
+            // overflow, so by the time we get here the diff was read in
+            // full. We keep the field so the UI contract stays uniform with
+            // other truncation-aware endpoints; flipping to `true` requires
+            // a separate signaling mechanism that doesn't exist on the
+            // current runner surface.
+            truncated: false,
+          },
+          unstaged: {
+            diff: unstagedPatch.stdout,
+            summary: parseNumstatSummary(unstagedNumstat.stdout.split("\n")),
+            truncated: false,
+          },
+          snapshotAt: new Date().toISOString(),
+          notes: {
+            // Boundary marker: the gitRunner allowlist does not include
+            // `status` or `ls-files`, so we cannot surface untracked files
+            // without expanding the allowlist. We choose to not. UI must
+            // surface this caveat to the user.
+            untrackedExcluded: true,
+          },
+        },
+      };
+    },
+
     async compareRefs(repo, query) {
       const queryValues = readCompareQuery(query);
       if (!queryValues.ok) {
@@ -739,6 +809,54 @@ export function commitDiffShowArgs(hash) {
     "--no-color",
     "--end-of-options",
     hash,
+  ];
+}
+
+/**
+ * Build `git diff` arguments for the working-tree numstat side. `staged: true`
+ * uses `--cached` (HEAD vs index); `staged: false` uses index vs worktree.
+ * `--no-renames` keeps the numstat lane straightforward — rename detection
+ * lives in the patch lane, where `parseUnifiedDiff` can surface Git's R<NN>
+ * marker verbatim. Mirrors the hardening applied elsewhere: no ext-diff, no
+ * textconv, no color, option parsing terminated even though no revision
+ * follows.
+ *
+ * @param {{ staged: boolean }} args
+ */
+export function workTreeNumstatArgs({ staged }) {
+  const cached = staged ? ["--cached"] : [];
+  return [
+    "diff",
+    ...cached,
+    "--numstat",
+    "--no-renames",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--end-of-options",
+  ];
+}
+
+/**
+ * Build `git diff` arguments for the working-tree patch side. `--find-renames`
+ * is enabled here so the UI can show Git's literal rename similarity marker.
+ * Mirrors `commitDiffShowArgs` hardening (no signature verification — `git
+ * diff` doesn't have one, but the flags `--no-ext-diff` / `--no-textconv` /
+ * `--no-color` keep the output stable across user gitconfig).
+ *
+ * @param {{ staged: boolean }} args
+ */
+export function workTreePatchArgs({ staged }) {
+  const cached = staged ? ["--cached"] : [];
+  return [
+    "diff",
+    ...cached,
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--patch",
+    "--find-renames",
+    "--end-of-options",
   ];
 }
 

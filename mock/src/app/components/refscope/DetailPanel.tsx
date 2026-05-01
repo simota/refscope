@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Copy, ExternalLink, History, ShieldCheck } from "lucide-react";
 import type { Commit, CommitDetail } from "./data";
-import type { DiffPayload } from "../../api";
+import type { DiffPayload, WorkTreeResponse } from "../../api";
 import { DiffViewer } from "./DiffViewer";
 import { FileHistoryView } from "./FileHistoryView";
 
@@ -15,6 +15,8 @@ export function DetailPanel({
   onDiffFullscreenChange,
   repoId,
   refName,
+  workTreeSelected,
+  workTree,
 }: {
   commit: Commit | null;
   detail: CommitDetail | null;
@@ -25,7 +27,16 @@ export function DetailPanel({
   onDiffFullscreenChange?: (next: boolean) => void;
   repoId: string;
   refName: string;
+  workTreeSelected: boolean;
+  workTree: WorkTreeResponse | null;
 }) {
+  // Working-tree view takes precedence over commit detail when selected.
+  // Rendered before any commit lookup so the panel can show a useful state
+  // even while no commit is selected (e.g. fresh repo load with pending
+  // worktree changes).
+  if (workTreeSelected) {
+    return <WorkTreePanel workTree={workTree} />;
+  }
   const [copyStatus, setCopyStatus] = useState("");
   // History overlay is owned at the panel level so opening it while the diff
   // is loading or while the commit changes does not race the network calls.
@@ -278,6 +289,218 @@ export function DetailPanel({
       ) : null}
     </PanelShell>
   );
+}
+
+/**
+ * Working-tree detail panel. Two tabs (Staged / Unstaged) share the same
+ * `DiffViewer` used by per-commit and file-history views.
+ *
+ * Boundary discipline:
+ * - The diff text is the literal `git diff [--cached]` output. No client-side
+ *   reinterpretation; `parseUnifiedDiff` handles everything.
+ * - The "untracked files are not shown" disclaimer in the footer reflects
+ *   the API's `notes.untrackedExcluded` flag — refscope never silently hides
+ *   the boundary.
+ * - The viewer's `commitHash` prop is used as a reset key. We pass a sentinel
+ *   that includes the active tab so switching tabs resets transient viewer
+ *   state (collapse, query) the same way switching commits does.
+ */
+function WorkTreePanel({ workTree }: { workTree: WorkTreeResponse | null }) {
+  const [activeTab, setActiveTab] = useState<"staged" | "unstaged">("staged");
+
+  if (!workTree) {
+    return (
+      <PanelShell>
+        <Empty>Loading working tree…</Empty>
+      </PanelShell>
+    );
+  }
+
+  const stagedFiles = workTree.staged.summary.fileCount;
+  const unstagedFiles = workTree.unstaged.summary.fileCount;
+  // Default the active tab to whichever side has changes. Recomputed on each
+  // render so the user lands on a useful tab when the underlying state
+  // changes — e.g. they refreshed and only the unstaged side has content now.
+  const effectiveTab: "staged" | "unstaged" =
+    stagedFiles === 0 && unstagedFiles > 0
+      ? "unstaged"
+      : activeTab;
+  const section = effectiveTab === "staged" ? workTree.staged : workTree.unstaged;
+  const filesInTab = section.summary.fileCount;
+
+  return (
+    <PanelShell>
+      <div
+        className="px-4 flex items-center justify-between"
+        style={{
+          height: 40,
+          borderBottom: "1px solid var(--rs-border)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 10,
+            letterSpacing: "0.08em",
+            fontWeight: 600,
+            color: "var(--rs-warning)",
+          }}
+        >
+          WORKING TREE — Not yet committed
+        </div>
+        <span
+          style={{
+            fontSize: 11,
+            color: "var(--rs-text-muted)",
+            fontFamily: "var(--rs-mono)",
+          }}
+        >
+          {formatSnapshot(workTree.snapshotAt)}
+        </span>
+      </div>
+
+      <div
+        className="px-4 flex items-center gap-1"
+        role="tablist"
+        aria-label="Working tree view"
+        style={{
+          height: 36,
+          borderBottom: "1px solid var(--rs-border)",
+          background: "var(--rs-bg-canvas)",
+        }}
+      >
+        <WorkTreeTabButton
+          tabValue="staged"
+          active={effectiveTab === "staged"}
+          fileCount={stagedFiles}
+          label="Staged"
+          onSelect={() => setActiveTab("staged")}
+        />
+        <WorkTreeTabButton
+          tabValue="unstaged"
+          active={effectiveTab === "unstaged"}
+          fileCount={unstagedFiles}
+          label="Unstaged"
+          onSelect={() => setActiveTab("unstaged")}
+        />
+        <div className="flex-1" />
+        <span
+          style={{
+            fontSize: 11,
+            color: "var(--rs-text-muted)",
+            fontFamily: "var(--rs-mono)",
+          }}
+        >
+          +{section.summary.added} −{section.summary.deleted}
+        </span>
+      </div>
+
+      <div
+        className="overflow-y-auto"
+        style={{ flex: 1 }}
+        role="tabpanel"
+        aria-label={`${effectiveTab} changes`}
+      >
+        {filesInTab === 0 ? (
+          <Empty>
+            {effectiveTab === "staged"
+              ? "No staged changes."
+              : "No unstaged changes."}
+          </Empty>
+        ) : section.diff || section.truncated ? (
+          <DiffViewer
+            diff={section.diff}
+            truncated={section.truncated}
+            maxBytes={0}
+            // Sentinel `commitHash`: the viewer uses this prop as a reset
+            // key. Encoding the side keeps fullscreen / filter state from
+            // bleeding across tabs and across snapshots.
+            commitHash={`worktree:${effectiveTab}:${workTree.snapshotAt}`}
+          />
+        ) : (
+          <Empty>
+            {effectiveTab === "staged"
+              ? "No staged changes."
+              : "No unstaged changes."}
+          </Empty>
+        )}
+      </div>
+
+      {workTree.notes.untrackedExcluded ? (
+        <div
+          className="px-4 py-2"
+          style={{
+            borderTop: "1px solid var(--rs-border)",
+            background: "var(--rs-bg-panel)",
+            fontSize: 11,
+            color: "var(--rs-text-muted)",
+            fontFamily: "var(--rs-mono)",
+          }}
+        >
+          Untracked files are not shown in this view.
+        </div>
+      ) : null}
+    </PanelShell>
+  );
+}
+
+function WorkTreeTabButton({
+  tabValue,
+  active,
+  fileCount,
+  label,
+  onSelect,
+}: {
+  tabValue: "staged" | "unstaged";
+  active: boolean;
+  fileCount: number;
+  label: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      aria-controls={`worktree-${tabValue}`}
+      onClick={onSelect}
+      style={{
+        height: 28,
+        padding: "0 12px",
+        border: "1px solid var(--rs-border)",
+        borderRadius: "var(--rs-radius-sm)",
+        fontSize: 11,
+        fontFamily: "var(--rs-mono)",
+        background: active
+          ? "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 16%)"
+          : "transparent",
+        color: active ? "var(--rs-text-primary)" : "var(--rs-text-secondary)",
+        fontWeight: active ? 600 : 400,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+      <span
+        style={{
+          marginLeft: 6,
+          color: active ? "var(--rs-text-primary)" : "var(--rs-text-muted)",
+        }}
+      >
+        ({fileCount})
+      </span>
+    </button>
+  );
+}
+
+function formatSnapshot(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return `snapshot ${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `snapshot ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `snapshot ${hours}h ago`;
+  return `snapshot ${Math.floor(hours / 24)}d ago`;
 }
 
 function ChangeGraph({

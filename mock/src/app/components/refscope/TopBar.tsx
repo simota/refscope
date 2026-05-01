@@ -10,6 +10,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Eye,
+  RefreshCw,
 } from "lucide-react";
 import {
   Tooltip,
@@ -53,6 +54,8 @@ export function TopBar({
   onToggleSummaryView,
   sidebarCollapsed,
   onToggleSidebar,
+  onRefreshWorkTree,
+  workTreeAvailable,
 }: {
   repositories: Repository[];
   selectedRepo: string;
@@ -87,6 +90,8 @@ export function TopBar({
   onToggleSummaryView: () => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  onRefreshWorkTree: () => void;
+  workTreeAvailable: boolean;
 }) {
   // In quiet mode, route the live indicator color to the muted token so chroma drops
   // without sacrificing the WCAG-validated text-on-panel contrast pairing.
@@ -395,6 +400,17 @@ export function TopBar({
           {isCvdSafe ? "CVD on" : "CVD"}
         </button>
         <Separator />
+        <button
+          type="button"
+          className="rs-compact-button"
+          onClick={onRefreshWorkTree}
+          disabled={!workTreeAvailable}
+          aria-label="Refresh working tree"
+          title="Refresh working tree (HEAD vs index + index vs worktree)"
+        >
+          <RefreshCw size={11} aria-hidden style={{ marginRight: 4 }} />
+          Worktree
+        </button>
         <button
           type="button"
           className="rs-compact-button"

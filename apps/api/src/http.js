@@ -81,6 +81,11 @@ export function createRequestHandler(config, gitService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "workTree") {
+        const result = await gitService.getWorkTreeChanges(repo.value);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "events") {
         await sendEventStream(req, res, config, gitService, repo.value);
         return;
@@ -130,6 +135,13 @@ function matchRoute(method, pathname) {
   // itself stays in the query string (where validation owns the contract).
   if (parts.length === 5 && parts[3] === "files" && parts[4] === "history") {
     return { name: "fileHistory", params: { repoId } };
+  }
+  // Working-tree changes view: HEAD vs index + index vs worktree.
+  // Literal sub-path with no parameters — we surface staged + unstaged
+  // diff in a single call so the UI can render both tabs without a
+  // round-trip per side.
+  if (parts.length === 4 && parts[3] === "worktree") {
+    return { name: "workTree", params: { repoId } };
   }
   if (parts.length === 4 && parts[3] === "events") return { name: "events", params: { repoId } };
   return null;
