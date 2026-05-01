@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { TopBar } from "./components/refscope/TopBar";
 import { BranchSidebar } from "./components/refscope/BranchSidebar";
 import { CommitTimeline } from "./components/refscope/CommitTimeline";
 import { DetailPanel } from "./components/refscope/DetailPanel";
 import { CommandPalette } from "./components/refscope/CommandPalette";
+import { useQuietMode } from "./hooks/useQuietMode";
 import type {
   Commit,
   CommitDetail,
@@ -59,10 +60,21 @@ export default function App() {
   const livePausedRef = useRef(livePaused);
   const pendingRealtimeEventsRef = useRef<Array<() => void>>([]);
   const realtimeNewCommitHashesRef = useRef<Set<string>>(new Set());
+  const { quietMode, prefersReducedMotion, isQuiet, toggleQuietMode } = useQuietMode();
+  const isQuietRef = useRef(isQuiet);
+  const quietPendingCountRef = useRef(0);
+  const previousIsQuietRef = useRef(isQuiet);
+  // `effectivePaused` unions the manual pause and the quiet-mode auto pause; the SSE handler
+  // only needs to know "are updates frozen?", but the UI keeps both sources visible separately.
+  const effectivePaused = livePaused || isQuiet;
 
   useEffect(() => {
     livePausedRef.current = livePaused;
   }, [livePaused]);
+
+  useEffect(() => {
+    isQuietRef.current = isQuiet;
+  }, [isQuiet]);
 
   useEffect(() => {
     selectedRefRef.current = selectedRef;
@@ -284,11 +296,16 @@ export default function App() {
   }
 
   function handleRealtimeEvent(notice: string, applyEvent: () => void) {
-    if (livePausedRef.current) {
+    if (livePausedRef.current || isQuietRef.current) {
       pendingRealtimeEventsRef.current.push(applyEvent);
+      if (isQuietRef.current && !livePausedRef.current) {
+        quietPendingCountRef.current += 1;
+      }
       setPendingUpdates((count) => {
         const nextCount = count + 1;
-        setLiveAnnouncement(`Live updates paused. ${nextCount} updates pending.`);
+        if (livePausedRef.current) {
+          setLiveAnnouncement(`Live updates paused. ${nextCount} updates pending.`);
+        }
         return nextCount;
       });
       return;
@@ -304,6 +321,24 @@ export default function App() {
     ).catch((err) => setError(errorMessage(err)));
   }
 
+  const flushPendingRealtimeEvents = useCallback(() => {
+    if (pendingRealtimeEventsRef.current.length === 0) return;
+    for (const applyEvent of pendingRealtimeEventsRef.current) {
+      applyEvent();
+    }
+    pendingRealtimeEventsRef.current = [];
+    setPendingUpdates(0);
+    void refreshTimeline(
+      selectedRepo,
+      selectedRefRef.current,
+      searchRef.current,
+      authorRef.current,
+      pathRef.current,
+    ).catch((err) => setError(errorMessage(err)));
+    // refreshTimeline is stable through refs; selectedRepo is the only reactive input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRepo]);
+
   function toggleLiveUpdates() {
     if (!livePaused) {
       setLivePaused(true);
@@ -312,25 +347,39 @@ export default function App() {
     }
     setLivePaused(false);
     setLiveAnnouncement("Live updates resumed.");
-    if (pendingUpdates > 0) {
-      for (const applyEvent of pendingRealtimeEventsRef.current) {
-        applyEvent();
-      }
-      pendingRealtimeEventsRef.current = [];
-      setPendingUpdates(0);
-      void refreshTimeline(
-        selectedRepo,
-        selectedRefRef.current,
-        searchRef.current,
-        authorRef.current,
-        pathRef.current,
-      ).catch((err) => setError(errorMessage(err)));
+    // Stay paused if quiet mode is still asking us to be silent; the events will flush on quiet exit.
+    if (!isQuietRef.current && pendingUpdates > 0) {
+      flushPendingRealtimeEvents();
     }
   }
+
+  useEffect(() => {
+    const wasQuiet = previousIsQuietRef.current;
+    previousIsQuietRef.current = isQuiet;
+    if (!wasQuiet || isQuiet) return;
+    const missedDuringQuiet = quietPendingCountRef.current;
+    quietPendingCountRef.current = 0;
+    if (livePausedRef.current) {
+      // Manual pause is still on; do not flush, just announce.
+      if (missedDuringQuiet > 0) {
+        setLiveAnnouncement(
+          `Resumed live updates. ${missedDuringQuiet} events were observed while quiet.`,
+        );
+      }
+      return;
+    }
+    flushPendingRealtimeEvents();
+    if (missedDuringQuiet > 0) {
+      setLiveAnnouncement(
+        `Resumed live updates. ${missedDuringQuiet} events were observed while quiet.`,
+      );
+    }
+  }, [isQuiet, flushPendingRealtimeEvents]);
 
   return (
     <div
       className="size-full flex flex-col"
+      data-quiet={isQuiet ? "true" : undefined}
       style={{
         background: "var(--rs-bg-canvas)",
         color: "var(--rs-text-primary)",
@@ -352,6 +401,7 @@ export default function App() {
           setPendingUpdates(0);
           setLiveAnnouncement("");
           pendingRealtimeEventsRef.current = [];
+          quietPendingCountRef.current = 0;
           setRealtimeAlerts([]);
           setCompareBase("");
           setCompareTarget("");
@@ -366,6 +416,11 @@ export default function App() {
         refName={refName}
         status={eventStatus}
         livePaused={livePaused}
+        effectivePaused={effectivePaused}
+        isQuiet={isQuiet}
+        quietMode={quietMode}
+        prefersReducedMotion={prefersReducedMotion}
+        onToggleQuietMode={toggleQuietMode}
         pendingUpdates={pendingUpdates}
         onToggleLiveUpdates={toggleLiveUpdates}
         search={search}
@@ -440,6 +495,9 @@ export default function App() {
         author={author}
         path={path}
         livePaused={livePaused}
+        quietMode={quietMode}
+        isQuiet={isQuiet}
+        onToggleQuietMode={toggleQuietMode}
         onToggleLiveUpdates={toggleLiveUpdates}
         onSearchChange={(value) => {
           setSearch(value);
@@ -695,6 +753,31 @@ function RefScopeTokens() {
       *:focus-visible {
         outline: 2px solid var(--rs-accent);
         outline-offset: 2px;
+      }
+      /* Quiet mode: stop ambient transitions and animations across the tree.
+         Saturation is lowered by remapping the chroma channel of accent / status
+         tokens while preserving the lightness channel — keeps WCAG 2.2 AA
+         contrast against bg-canvas and bg-panel intact. */
+      [data-quiet="true"] *,
+      [data-quiet="true"] *::before,
+      [data-quiet="true"] *::after {
+        transition-duration: 0ms !important;
+        animation-duration: 0ms !important;
+        animation-iteration-count: 1 !important;
+      }
+      [data-quiet="true"] {
+        --rs-accent: oklch(72% 0.04 235);
+        --rs-git-added: oklch(72% 0.05 150);
+        --rs-git-deleted: oklch(70% 0.06 25);
+        --rs-git-modified: oklch(78% 0.05 80);
+        --rs-git-merge: oklch(74% 0.05 285);
+        --rs-warning: oklch(78% 0.06 75);
+      }
+      [data-quiet="true"] .rs-chip:hover,
+      [data-quiet="true"] .rs-btn--accent:hover,
+      [data-quiet="true"] .rs-icon-btn:hover,
+      [data-quiet="true"] .rs-btn--ghost:hover {
+        background: var(--rs-bg-elevated);
       }
     `}</style>
   );

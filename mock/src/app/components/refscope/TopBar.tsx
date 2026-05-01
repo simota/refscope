@@ -1,4 +1,4 @@
-import { ChevronDown, Search, Circle, Command, User, FileSearch } from "lucide-react";
+import { ChevronDown, Search, Circle, Command, User, FileSearch, Moon } from "lucide-react";
 import type { GitRef, Repository } from "./data";
 
 export function TopBar({
@@ -12,6 +12,11 @@ export function TopBar({
   refName,
   status,
   livePaused,
+  effectivePaused,
+  isQuiet,
+  quietMode,
+  prefersReducedMotion,
+  onToggleQuietMode,
   pendingUpdates,
   onToggleLiveUpdates,
   search,
@@ -31,6 +36,11 @@ export function TopBar({
   refName: string;
   status: "connecting" | "connected" | "error";
   livePaused: boolean;
+  effectivePaused: boolean;
+  isQuiet: boolean;
+  quietMode: boolean;
+  prefersReducedMotion: boolean;
+  onToggleQuietMode: () => void;
   pendingUpdates: number;
   onToggleLiveUpdates: () => void;
   search: string;
@@ -40,14 +50,24 @@ export function TopBar({
   path: string;
   onPathChange: (value: string) => void;
 }) {
-  const liveColor =
-    livePaused
+  // In quiet mode, route the live indicator color to the muted token so chroma drops
+  // without sacrificing the WCAG-validated text-on-panel contrast pairing.
+  const liveColor = isQuiet
+    ? "var(--rs-text-muted)"
+    : livePaused
       ? "var(--rs-warning)"
       : status === "connected"
-      ? "var(--rs-git-added)"
-      : status === "error"
-        ? "var(--rs-warning)"
-        : "var(--rs-text-muted)";
+        ? "var(--rs-git-added)"
+        : status === "error"
+          ? "var(--rs-warning)"
+          : "var(--rs-text-muted)";
+  const quietReason = quietMode
+    ? prefersReducedMotion
+      ? "Quiet mode on (user + OS reduced-motion)"
+      : "Quiet mode on"
+    : prefersReducedMotion
+      ? "Quiet mode on (OS reduced-motion)"
+      : "Quiet mode off";
 
   return (
     <header
@@ -204,7 +224,9 @@ export function TopBar({
         <div
           className="flex items-center gap-1.5 px-2"
           aria-label={
-            livePaused ? `Live updates paused, ${pendingUpdates} pending` : `Live status ${status}`
+            effectivePaused
+              ? `Live updates paused, ${pendingUpdates} pending`
+              : `Live status ${status}`
           }
           style={{ fontSize: 11, color: "var(--rs-text-secondary)" }}
         >
@@ -214,16 +236,44 @@ export function TopBar({
               width: 7,
               height: 7,
               background: liveColor,
-              boxShadow: `0 0 0 3px color-mix(in oklab, ${liveColor}, transparent 75%)`,
+              boxShadow: isQuiet
+                ? "none"
+                : `0 0 0 3px color-mix(in oklab, ${liveColor}, transparent 75%)`,
             }}
           />
-          <LivePulse status={status} paused={livePaused} pendingUpdates={pendingUpdates} color={liveColor} />
-          {livePaused
+          <LivePulse
+            status={status}
+            paused={effectivePaused}
+            pendingUpdates={pendingUpdates}
+            color={liveColor}
+            quiet={isQuiet}
+          />
+          {effectivePaused
             ? `PAUSED ${pendingUpdates}`
             : status === "connected"
               ? "LIVE"
               : status.toUpperCase()}
         </div>
+        <button
+          type="button"
+          className="rs-compact-button"
+          onClick={onToggleQuietMode}
+          aria-pressed={isQuiet}
+          aria-label="Quiet mode"
+          title={quietReason}
+          style={
+            isQuiet
+              ? {
+                  color: "var(--rs-text-primary)",
+                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
+                  background: "var(--rs-bg-elevated)",
+                }
+              : undefined
+          }
+        >
+          <Moon size={11} aria-hidden style={{ marginRight: 4 }} />
+          {isQuiet ? "Quiet" : "Quiet"}
+        </button>
         <button
           type="button"
           className="rs-compact-button"
@@ -244,14 +294,19 @@ function LivePulse({
   paused,
   pendingUpdates,
   color,
+  quiet,
 }: {
   status: "connecting" | "connected" | "error";
   paused: boolean;
   pendingUpdates: number;
   color: string;
+  quiet?: boolean;
 }) {
-  const heights =
-    paused
+  // Quiet mode pins the bars to a flat profile to remove ambient motion cues
+  // while keeping the indicator visually present (legibility > erasure).
+  const heights = quiet
+    ? [6, 6, 6]
+    : paused
       ? [5, Math.min(16, 6 + pendingUpdates * 2), 5]
       : status === "connected"
         ? [7, 13, 9]
@@ -272,7 +327,7 @@ function LivePulse({
             width: 3,
             height,
             background: color,
-            opacity: paused ? 0.85 : 0.55 + index * 0.16,
+            opacity: quiet ? 0.7 : paused ? 0.85 : 0.55 + index * 0.16,
           }}
         />
       ))}

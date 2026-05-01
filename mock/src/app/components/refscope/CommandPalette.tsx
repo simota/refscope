@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileSearch, GitBranch, Hash, Pause, Play, Search, Tag } from "lucide-react";
+import { FileSearch, GitBranch, Hash, Moon, Pause, Play, Search, Tag } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Commit, GitRef } from "./data";
 
@@ -20,6 +20,9 @@ export function CommandPalette({
   author,
   path,
   livePaused,
+  quietMode,
+  isQuiet,
+  onToggleQuietMode,
   onToggleLiveUpdates,
   onSearchChange,
   onAuthorChange,
@@ -34,6 +37,9 @@ export function CommandPalette({
   author: string;
   path: string;
   livePaused: boolean;
+  quietMode: boolean;
+  isQuiet: boolean;
+  onToggleQuietMode: () => void;
   onToggleLiveUpdates: () => void;
   onSearchChange: (value: string) => void;
   onAuthorChange: (value: string) => void;
@@ -115,9 +121,20 @@ export function CommandPalette({
       },
     };
 
-    return [...refCommands, liveCommand, ...copyCommand, ...filterCommands];
+    const quietCommand: PaletteCommand = {
+      icon: Moon,
+      label: "Toggle quiet mode",
+      hint: quietBadge(quietMode, isQuiet),
+      run: () => {
+        onToggleQuietMode();
+        onClose();
+      },
+    };
+
+    return [...refCommands, quietCommand, liveCommand, ...copyCommand, ...filterCommands];
   }, [
     author,
+    isQuiet,
     livePaused,
     onAuthorChange,
     onClose,
@@ -125,7 +142,9 @@ export function CommandPalette({
     onSearchChange,
     onSelectRef,
     onToggleLiveUpdates,
+    onToggleQuietMode,
     path,
+    quietMode,
     refs,
     search,
     selectedCommit,
@@ -300,4 +319,10 @@ function formatRefLabel(ref: GitRef) {
   if (ref.type === "tag") return `tag ${ref.shortName}`;
   if (ref.type === "remote") return `remote ${ref.shortName}`;
   return ref.shortName;
+}
+
+function quietBadge(quietMode: boolean, isQuiet: boolean) {
+  if (quietMode && isQuiet) return "on";
+  if (!quietMode && isQuiet) return "on (OS)";
+  return "off";
 }
