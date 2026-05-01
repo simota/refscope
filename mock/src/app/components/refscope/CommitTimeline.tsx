@@ -1,6 +1,11 @@
-import { GitMerge, ShieldCheck, AlertTriangle } from "lucide-react";
+import { GitMerge, ShieldCheck, AlertTriangle, ChevronDown } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Commit, CompareResult, GitRef } from "./data";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "../ui/collapsible";
 
 const LANE_COLORS = ["var(--rs-accent)", "var(--rs-git-merge)", "var(--rs-git-modified)"];
 
@@ -29,6 +34,11 @@ export function CommitTimeline({
   onPinSelectedAsBase,
   onPinCurrentRefAsTarget,
   onClearCompare,
+  compareBarCollapsed,
+  activityGraphCollapsed,
+  onToggleCompareBar,
+  onToggleActivityGraph,
+  summaryViewOpen,
 }: {
   commits: Commit[];
   selected: string;
@@ -54,6 +64,11 @@ export function CommitTimeline({
   onPinSelectedAsBase: () => void;
   onPinCurrentRefAsTarget: () => void;
   onClearCompare: () => void;
+  compareBarCollapsed: boolean;
+  activityGraphCollapsed: boolean;
+  onToggleCompareBar: () => void;
+  onToggleActivityGraph: () => void;
+  summaryViewOpen: boolean;
 }) {
   const emptyState = activeFilters?.length
     ? {
@@ -79,21 +94,28 @@ export function CommitTimeline({
       <div aria-live="polite" className="sr-only">
         {liveAnnouncement}
       </div>
-      <CompareBar
+      <CompareBarCollapsible
         refs={refs}
         selectedRef={selectedRef}
         selectedCommit={selectedCommit}
-        base={compareBase}
-        target={compareTarget}
-        result={compareResult}
-        loading={compareLoading}
-        onBaseChange={onCompareBaseChange}
-        onTargetChange={onCompareTargetChange}
+        compareBase={compareBase}
+        compareTarget={compareTarget}
+        compareResult={compareResult}
+        compareLoading={compareLoading}
+        onCompareBaseChange={onCompareBaseChange}
+        onCompareTargetChange={onCompareTargetChange}
         onPinSelectedAsBase={onPinSelectedAsBase}
         onPinCurrentRefAsTarget={onPinCurrentRefAsTarget}
-        onClear={onClearCompare}
+        onClearCompare={onClearCompare}
+        collapsed={compareBarCollapsed}
+        onToggle={onToggleCompareBar}
       />
-      <CommitActivityGraph commits={commits} />
+      <ActivityGraphCollapsible
+        commits={commits}
+        collapsed={activityGraphCollapsed}
+        onToggle={onToggleActivityGraph}
+        summaryViewOpen={summaryViewOpen}
+      />
 
       <div className="overflow-y-auto" style={{ flex: 1 }}>
         {loading ? (
@@ -139,11 +161,10 @@ function CommitActivityGraph({ commits }: { commits: Commit[] }) {
 
   return (
     <section
-      className="mx-4 mt-3 rounded-md px-3 py-2"
+      className="px-3 py-2"
       aria-label={`Commit activity overview: ${commits.length} commits, ${totalAdded} additions, ${totalDeleted} deletions, ${signedCount} signed commits, ${mergeCount} merge commits`}
       style={{
         background: "var(--rs-bg-panel)",
-        border: "1px solid var(--rs-border)",
       }}
     >
       <div className="flex flex-wrap items-center gap-3">
@@ -186,6 +207,71 @@ function CommitActivityGraph({ commits }: { commits: Commit[] }) {
       </div>
       {authors.length ? <AuthorGraph authors={authors} total={commits.length} /> : null}
     </section>
+  );
+}
+
+function ActivityGraphCollapsible({
+  commits,
+  collapsed,
+  onToggle,
+  summaryViewOpen,
+}: {
+  commits: Commit[];
+  collapsed: boolean;
+  onToggle: () => void;
+  summaryViewOpen: boolean;
+}) {
+  const isOpen = summaryViewOpen || !collapsed;
+
+  return (
+    <Collapsible
+      open={isOpen}
+      onOpenChange={(open) => {
+        // summary view overrides collapse: only toggle when not forced open by summary
+        if (!summaryViewOpen) {
+          if (open !== isOpen) onToggle();
+        }
+      }}
+    >
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="mx-4 mt-3 w-[calc(100%-2rem)] flex items-center justify-between px-3 rounded-t-md"
+          style={{
+            minHeight: 28,
+            background: "var(--rs-bg-panel)",
+            border: "1px solid var(--rs-border)",
+            borderBottomColor: isOpen ? "transparent" : "var(--rs-border)",
+            borderRadius: isOpen ? "var(--rs-radius-md) var(--rs-radius-md) 0 0" : "var(--rs-radius-md)",
+            color: "var(--rs-text-secondary)",
+            fontSize: 11,
+            cursor: "pointer",
+          }}
+          aria-controls="rs-activity-graph-content"
+        >
+          <span>Activity</span>
+          <ChevronDown
+            size={13}
+            aria-hidden
+            style={{
+              transform: isOpen ? "rotate(180deg)" : "rotate(0deg)",
+              transition: "transform 120ms ease-out",
+            }}
+          />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent id="rs-activity-graph-content">
+        <div
+          className="mx-4 rounded-b-md"
+          style={{
+            border: "1px solid var(--rs-border)",
+            borderTop: "none",
+          }}
+        >
+          <CommitActivityGraph commits={commits} />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -311,10 +397,9 @@ function CompareBar({
   const active = Boolean(base || target);
   return (
     <section
-      className="mx-4 mt-3 rounded-md px-3 py-2"
+      className="px-3 py-2"
       style={{
         background: active ? "var(--rs-bg-elevated)" : "var(--rs-bg-panel)",
-        border: "1px solid var(--rs-border)",
       }}
       aria-label="Compare refs and commits"
     >
@@ -357,6 +442,106 @@ function CompareBar({
         <CompareSummary>Pin a selected commit or ref to compare branch movement.</CompareSummary>
       )}
     </section>
+  );
+}
+
+function CompareBarCollapsible({
+  refs,
+  selectedRef,
+  selectedCommit,
+  compareBase,
+  compareTarget,
+  compareResult,
+  compareLoading,
+  onCompareBaseChange,
+  onCompareTargetChange,
+  onPinSelectedAsBase,
+  onPinCurrentRefAsTarget,
+  onClearCompare,
+  collapsed,
+  onToggle,
+}: {
+  refs: GitRef[];
+  selectedRef: string;
+  selectedCommit: Commit | null;
+  compareBase: string;
+  compareTarget: string;
+  compareResult: CompareResult | null;
+  compareLoading: boolean;
+  onCompareBaseChange: (value: string) => void;
+  onCompareTargetChange: (value: string) => void;
+  onPinSelectedAsBase: () => void;
+  onPinCurrentRefAsTarget: () => void;
+  onClearCompare: () => void;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const isCompareActive = Boolean(compareBase || compareTarget);
+  // When compare is active, force open regardless of collapsed setting
+  const isOpen = isCompareActive || !collapsed;
+
+  return (
+    <Collapsible
+      open={isOpen}
+      onOpenChange={(open) => {
+        // Only allow toggling when compare is not active (active forces expansion)
+        if (!isCompareActive) {
+          if (open !== isOpen) onToggle();
+        }
+      }}
+    >
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="mx-4 mt-3 w-[calc(100%-2rem)] flex items-center justify-between px-3 rounded-t-md"
+          style={{
+            minHeight: 28,
+            background: isCompareActive ? "var(--rs-bg-elevated)" : "var(--rs-bg-panel)",
+            border: "1px solid var(--rs-border)",
+            borderBottomColor: isOpen ? "transparent" : "var(--rs-border)",
+            borderRadius: isOpen ? "var(--rs-radius-md) var(--rs-radius-md) 0 0" : "var(--rs-radius-md)",
+            color: "var(--rs-text-secondary)",
+            fontSize: 11,
+            cursor: "pointer",
+          }}
+          aria-controls="rs-compare-bar-content"
+        >
+          <span>Compare</span>
+          <ChevronDown
+            size={13}
+            aria-hidden
+            style={{
+              transform: isOpen ? "rotate(180deg)" : "rotate(0deg)",
+              transition: "transform 120ms ease-out",
+            }}
+          />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent id="rs-compare-bar-content">
+        <div
+          className="mx-4 rounded-b-md overflow-hidden"
+          style={{
+            border: "1px solid var(--rs-border)",
+            borderTop: "none",
+          }}
+        >
+          <CompareBar
+            refs={refs}
+            selectedRef={selectedRef}
+            selectedCommit={selectedCommit}
+            base={compareBase}
+            target={compareTarget}
+            result={compareResult}
+            loading={compareLoading}
+            onBaseChange={onCompareBaseChange}
+            onTargetChange={onCompareTargetChange}
+            onPinSelectedAsBase={onPinSelectedAsBase}
+            onPinCurrentRefAsTarget={onPinCurrentRefAsTarget}
+            onClear={onClearCompare}
+          />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -609,7 +794,9 @@ function CommitRow({
     <li
       role="listitem"
       aria-current={selected ? "true" : undefined}
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClick(); }}
       className="grid cursor-pointer items-stretch group"
       style={{
         gridTemplateColumns: "56px 1fr auto",
@@ -700,7 +887,7 @@ function CommitRow({
       </div>
 
       <div
-        className="self-center opacity-0 group-hover:opacity-100 transition-opacity"
+        className="self-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
         style={{ fontSize: 11, color: "var(--rs-text-muted)", fontFamily: "var(--rs-mono)" }}
       >
         ↵ open

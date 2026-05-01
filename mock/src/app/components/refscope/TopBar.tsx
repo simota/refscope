@@ -194,6 +194,7 @@ export function TopBar({
           />
           <span
             className="flex items-center gap-1 px-1.5 rounded"
+            title="Author and path search via Cmd+K (Command Palette)"
             style={{
               fontSize: 11,
               color: "var(--rs-text-muted)",
@@ -205,7 +206,7 @@ export function TopBar({
           </span>
         </div>
         <div
-          className="flex items-center gap-2 px-3"
+          className="hidden xl:flex items-center gap-2 px-3"
           style={{
             width: 160,
             height: 30,
@@ -224,7 +225,7 @@ export function TopBar({
           />
         </div>
         <div
-          className="flex items-center gap-2 px-3"
+          className="hidden xl:flex items-center gap-2 px-3"
           style={{
             width: 190,
             height: 30,
@@ -273,11 +274,12 @@ export function TopBar({
             quiet={isQuiet}
           />
           {effectivePaused
-            ? `PAUSED ${pendingUpdates}`
+            ? `PAUSED · ${pendingUpdates}`
             : status === "connected"
               ? "LIVE"
               : status.toUpperCase()}
         </div>
+        <Separator />
         <button
           type="button"
           className="rs-compact-button"
@@ -302,6 +304,7 @@ export function TopBar({
           )}
           {sidebarCollapsed ? "Show" : "Hide"}
         </button>
+        <Separator />
         <button
           type="button"
           className="rs-compact-button"
@@ -320,7 +323,7 @@ export function TopBar({
           }
         >
           <CalendarRange size={11} aria-hidden style={{ marginRight: 4 }} />
-          Summary
+          {summaryViewOpen ? "Summary on" : "Summary"}
         </button>
         <button
           type="button"
@@ -340,7 +343,7 @@ export function TopBar({
           }
         >
           <Moon size={11} aria-hidden style={{ marginRight: 4 }} />
-          {isQuiet ? "Quiet" : "Quiet"}
+          {isQuiet ? "Quiet on" : "Quiet"}
         </button>
         <button
           type="button"
@@ -360,8 +363,9 @@ export function TopBar({
           }
         >
           <Eye size={11} aria-hidden style={{ marginRight: 4 }} />
-          CVD
+          {isCvdSafe ? "CVD on" : "CVD"}
         </button>
+        <Separator />
         <button
           type="button"
           className="rs-compact-button"

@@ -196,8 +196,23 @@ function ObservedZone({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3
           id="period-summary-observed"
+          className="flex items-center gap-1.5"
           style={{ fontSize: 12, fontWeight: 650, color: "var(--rs-text-primary)" }}
         >
+          <span
+            style={{
+              fontFamily: "var(--rs-mono)",
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: "0.04em",
+              padding: "1px 4px",
+              border: "1px solid var(--rs-border)",
+              borderRadius: 3,
+              color: "var(--rs-text-muted)",
+            }}
+          >
+            OBS
+          </span>
           Observed (no interpretation)
         </h3>
         {truncated ? (
@@ -303,8 +318,23 @@ function DerivedZone({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3
           id="period-summary-derived"
+          className="flex items-center gap-1.5"
           style={{ fontSize: 12, fontWeight: 650, color: "var(--rs-warning)" }}
         >
+          <span
+            style={{
+              fontFamily: "var(--rs-mono)",
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: "0.04em",
+              padding: "1px 4px",
+              border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 50%)",
+              borderRadius: 3,
+              color: "var(--rs-warning)",
+            }}
+          >
+            DRV
+          </span>
           Derived (rule-based grouping, no AI)
         </h3>
         <div role="tablist" aria-label="Group by" className="flex gap-1">

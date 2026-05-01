@@ -168,9 +168,9 @@ function RefMap({ refs, selectedRef }: { refs: GitRef[]; selectedRef: string }) 
         })}
       </svg>
       <div className="grid gap-1.5">
-        <RefMapBar label="Branches" count={branches.length} total={refs.length} color="var(--rs-accent)" />
-        <RefMapBar label="Remotes" count={remotes.length} total={refs.length} color="var(--rs-git-added)" />
-        <RefMapBar label="Tags" count={tags.length} total={refs.length} color="var(--rs-git-merge)" />
+        <RefMapBar label="Branches" symbol="█" count={branches.length} total={refs.length} color="var(--rs-accent)" />
+        <RefMapBar label="Remotes" symbol="▒" count={remotes.length} total={refs.length} color="var(--rs-git-added)" />
+        <RefMapBar label="Tags" symbol="◆" count={tags.length} total={refs.length} color="var(--rs-git-merge)" />
       </div>
       <div
         className="mt-2 truncate"
@@ -185,11 +185,13 @@ function RefMap({ refs, selectedRef }: { refs: GitRef[]; selectedRef: string }) 
 
 function RefMapBar({
   label,
+  symbol,
   count,
   total,
   color,
 }: {
   label: string;
+  symbol: string;
   count: number;
   total: number;
   color: string;
@@ -197,7 +199,9 @@ function RefMapBar({
   const width = total ? Math.max(6, Math.round((count / total) * 100)) : 0;
   return (
     <div className="grid items-center gap-2" style={{ gridTemplateColumns: "56px 1fr 22px" }}>
-      <span style={{ color: "var(--rs-text-muted)", fontSize: 10 }}>{label}</span>
+      <span style={{ color: "var(--rs-text-muted)", fontSize: 10 }}>
+        <span aria-hidden style={{ color, marginRight: 3 }}>{symbol}</span>{label}
+      </span>
       <span
         className="rounded-sm"
         style={{
