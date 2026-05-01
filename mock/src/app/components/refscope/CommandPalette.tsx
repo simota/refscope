@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarRange, FileSearch, GitBranch, Hash, Moon, Pause, Play, Search, Tag } from "lucide-react";
+import { CalendarRange, FileSearch, GitBranch, Hash, Maximize2, Moon, Pause, Play, Search, Tag } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Commit, GitRef } from "./data";
 
@@ -29,6 +29,9 @@ export function CommandPalette({
   onSearchChange,
   onAuthorChange,
   onPathChange,
+  diffAvailable,
+  diffFullscreen,
+  onToggleDiffFullscreen,
 }: {
   open: boolean;
   onClose: () => void;
@@ -48,6 +51,9 @@ export function CommandPalette({
   onSearchChange: (value: string) => void;
   onAuthorChange: (value: string) => void;
   onPathChange: (value: string) => void;
+  diffAvailable: boolean;
+  diffFullscreen: boolean;
+  onToggleDiffFullscreen: () => void;
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -145,16 +151,36 @@ export function CommandPalette({
       },
     };
 
+    // Only surface the fullscreen command when there's actually a diff to show.
+    // Mirrors the copyCommand pattern: hide entirely rather than disable, so the
+    // palette stays focused on currently-actionable commands.
+    const diffFullscreenCommand: PaletteCommand[] = diffAvailable
+      ? [
+          {
+            icon: Maximize2,
+            label: "Toggle diff fullscreen",
+            hint: diffFullscreen ? "on" : "off",
+            run: () => {
+              onToggleDiffFullscreen();
+              onClose();
+            },
+          },
+        ]
+      : [];
+
     return [
       ...refCommands,
       summaryCommand,
       quietCommand,
       liveCommand,
+      ...diffFullscreenCommand,
       ...copyCommand,
       ...filterCommands,
     ];
   }, [
     author,
+    diffAvailable,
+    diffFullscreen,
     isQuiet,
     livePaused,
     onAuthorChange,
@@ -162,6 +188,7 @@ export function CommandPalette({
     onPathChange,
     onSearchChange,
     onSelectRef,
+    onToggleDiffFullscreen,
     onToggleLiveUpdates,
     onToggleQuietMode,
     onToggleSummaryView,

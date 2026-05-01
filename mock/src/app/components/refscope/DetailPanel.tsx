@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Copy, ExternalLink, ShieldCheck } from "lucide-react";
 import type { Commit, CommitDetail } from "./data";
+import type { DiffPayload } from "../../api";
+import { DiffViewer } from "./DiffViewer";
 
 export function DetailPanel({
   commit,
@@ -8,12 +10,16 @@ export function DetailPanel({
   diff,
   loading,
   error,
+  diffFullscreen,
+  onDiffFullscreenChange,
 }: {
   commit: Commit | null;
   detail: CommitDetail | null;
-  diff: string;
+  diff: DiffPayload;
   loading: boolean;
   error: string;
+  diffFullscreen?: boolean;
+  onDiffFullscreenChange?: (next: boolean) => void;
 }) {
   const [copyStatus, setCopyStatus] = useState("");
 
@@ -224,8 +230,22 @@ export function DetailPanel({
           )}
         </Section>
 
-        <Section title="DIFF" hint={diff ? "git show --patch" : "empty"}>
-          <Diff diff={diff} />
+        <Section
+          title="DIFF"
+          hint={diff.truncated ? "truncated" : diff.diff ? "git show --patch" : "empty"}
+        >
+          {diff.diff || diff.truncated ? (
+            <DiffViewer
+              diff={diff.diff}
+              truncated={diff.truncated}
+              maxBytes={diff.maxBytes}
+              commitHash={commit.hash}
+              fullscreen={diffFullscreen}
+              onFullscreenChange={onDiffFullscreenChange}
+            />
+          ) : (
+            <Empty>{loading ? "Loading diff…" : "No diff returned for this commit."}</Empty>
+          )}
         </Section>
       </div>
     </PanelShell>
@@ -505,73 +525,6 @@ function FileBadge({ status }: { status: string }) {
     >
       {status}
     </span>
-  );
-}
-
-function Diff({ diff }: { diff: string }) {
-  if (!diff) return <Empty>No diff returned for this commit.</Empty>;
-  return (
-    <div
-      className="overflow-x-auto"
-      style={{
-        fontFamily: "var(--rs-mono)",
-        fontSize: 12,
-        background: "var(--rs-bg-canvas)",
-      }}
-    >
-      {diff.split("\n").map((line, i) => {
-        const isAdd = line.startsWith("+") && !line.startsWith("+++");
-        const isDel = line.startsWith("-") && !line.startsWith("---");
-        const isHunk = line.startsWith("@@");
-        return (
-          <div
-            key={i}
-            className="grid"
-            style={{
-              gridTemplateColumns: "36px 36px 16px 1fr",
-              minHeight: 20,
-              alignItems: "center",
-              background: isAdd
-                ? "color-mix(in oklab, var(--rs-bg-canvas), var(--rs-git-added) 14%)"
-                : isDel
-                ? "color-mix(in oklab, var(--rs-bg-canvas), var(--rs-git-deleted) 14%)"
-                : isHunk
-                ? "var(--rs-bg-elevated)"
-                : "transparent",
-              color: isHunk ? "var(--rs-text-muted)" : "var(--rs-text-primary)",
-            }}
-          >
-            <span
-              className="text-right pr-2"
-              style={{ color: "var(--rs-text-muted)", fontSize: 11 }}
-            >
-              {!isHunk && !isAdd ? 10 + i : ""}
-            </span>
-            <span
-              className="text-right pr-2"
-              style={{ color: "var(--rs-text-muted)", fontSize: 11 }}
-            >
-              {!isHunk && !isDel ? 10 + i : ""}
-            </span>
-            <span
-              className="text-center"
-              style={{
-                color: isAdd
-                  ? "var(--rs-git-added)"
-                  : isDel
-                  ? "var(--rs-git-deleted)"
-                  : "var(--rs-text-muted)",
-              }}
-            >
-              {isAdd ? "+" : isDel ? "-" : isHunk ? "" : " "}
-            </span>
-            <span style={{ whiteSpace: "pre" }}>
-              {isAdd || isDel ? line.slice(1) : line}
-            </span>
-          </div>
-        );
-      })}
-    </div>
   );
 }
 

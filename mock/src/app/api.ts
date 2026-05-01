@@ -82,11 +82,21 @@ export async function getCommit(repoId: string, hash: string) {
   );
 }
 
-export async function getDiff(repoId: string, hash: string) {
-  const body = await getJson<{ diff: string }>(
+export type DiffPayload = {
+  diff: string;
+  truncated: boolean;
+  maxBytes: number;
+};
+
+export async function getDiff(repoId: string, hash: string): Promise<DiffPayload> {
+  const body = await getJson<{ diff: string; truncated?: boolean; maxBytes?: number }>(
     `/api/repos/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(hash)}/diff`,
   );
-  return body.diff;
+  return {
+    diff: body.diff ?? "",
+    truncated: Boolean(body.truncated),
+    maxBytes: typeof body.maxBytes === "number" ? body.maxBytes : 0,
+  };
 }
 
 export async function compareRefs(repoId: string, base: string, target: string) {

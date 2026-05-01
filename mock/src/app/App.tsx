@@ -25,8 +25,11 @@ import {
   listCommits,
   listRefs,
   listRepositories,
+  type DiffPayload,
   type ViewerEvent,
 } from "./api";
+
+const EMPTY_DIFF: DiffPayload = { diff: "", truncated: false, maxBytes: 0 };
 
 export default function App() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -36,7 +39,7 @@ export default function App() {
   const [selectedRef, setSelectedRef] = useState("HEAD");
   const [selected, setSelected] = useState("");
   const [detail, setDetail] = useState<CommitDetail | null>(null);
-  const [diff, setDiff] = useState("");
+  const [diff, setDiff] = useState<DiffPayload>(EMPTY_DIFF);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
@@ -50,6 +53,7 @@ export default function App() {
   const [realtimeAlerts, setRealtimeAlerts] = useState<RealtimeAlert[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [summaryViewOpen, setSummaryViewOpen] = useState(false);
+  const [diffFullscreen, setDiffFullscreen] = useState(false);
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
   const [path, setPath] = useState("");
@@ -185,9 +189,13 @@ export default function App() {
   }, [selectedRepo, compareBase, compareTarget]);
 
   useEffect(() => {
+    setDiffFullscreen(false);
+  }, [selected]);
+
+  useEffect(() => {
     if (!selectedRepo || !selected) {
       setDetail(null);
-      setDiff("");
+      setDiff(EMPTY_DIFF);
       return;
     }
     let cancelled = false;
@@ -525,7 +533,15 @@ export default function App() {
           }}
         />
         </div>
-        <DetailPanel commit={current} detail={detail} diff={diff} loading={detailLoading} error={error} />
+        <DetailPanel
+          commit={current}
+          detail={detail}
+          diff={diff}
+          loading={detailLoading}
+          error={error}
+          diffFullscreen={diffFullscreen}
+          onDiffFullscreenChange={setDiffFullscreen}
+        />
       </div>
       <CommandPalette
         open={paletteOpen}
@@ -545,6 +561,9 @@ export default function App() {
         onToggleSummaryView={toggleSummaryView}
         onToggleQuietMode={toggleQuietMode}
         onToggleLiveUpdates={toggleLiveUpdates}
+        diffAvailable={Boolean(current) && (Boolean(diff.diff) || diff.truncated)}
+        diffFullscreen={diffFullscreen}
+        onToggleDiffFullscreen={() => setDiffFullscreen((prev) => !prev)}
         onSearchChange={(value) => {
           setSearch(value);
           setSelected("");
