@@ -12,6 +12,8 @@ export function DetailPanel({
   error,
   diffFullscreen,
   onDiffFullscreenChange,
+  diffViewMode,
+  onDiffViewModeChange,
   repoId,
   workTreeSelected,
   workTree,
@@ -24,6 +26,8 @@ export function DetailPanel({
   error: string;
   diffFullscreen?: boolean;
   onDiffFullscreenChange?: (next: boolean) => void;
+  diffViewMode?: "all" | "single";
+  onDiffViewModeChange?: (next: "all" | "single") => void;
   repoId: string;
   workTreeSelected: boolean;
   workTree: WorkTreeResponse | null;
@@ -276,6 +280,8 @@ export function DetailPanel({
               commitHash={commit.hash}
               fullscreen={diffFullscreen}
               onFullscreenChange={onDiffFullscreenChange}
+              viewMode={diffViewMode}
+              onViewModeChange={onDiffViewModeChange}
             />
           ) : (
             <Empty>{loading ? "Loading diff…" : "No diff returned for this commit."}</Empty>

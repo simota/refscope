@@ -33,6 +33,8 @@ export function DiffViewer({
   commitHash,
   fullscreen: fullscreenProp,
   onFullscreenChange,
+  viewMode: viewModeProp,
+  onViewModeChange,
 }: {
   diff: string;
   truncated: boolean;
@@ -40,11 +42,25 @@ export function DiffViewer({
   commitHash: string;
   fullscreen?: boolean;
   onFullscreenChange?: (next: boolean) => void;
+  viewMode?: "all" | "single";
+  onViewModeChange?: (next: "all" | "single") => void;
 }) {
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const totals = useMemo(() => countTotalChanges(parsed), [parsed]);
 
-  const [viewMode, setViewMode] = useState<"all" | "single">("all");
+  // Same controlled/uncontrolled split as `fullscreen` below — parent can drive
+  // the toggle from a global shortcut while standalone callers (working tree
+  // / file-history overlays) keep their own state.
+  const [internalViewMode, setInternalViewMode] = useState<"all" | "single">("all");
+  const isViewModeControlled = viewModeProp !== undefined;
+  const viewMode = isViewModeControlled ? viewModeProp : internalViewMode;
+  const setViewMode = useCallback(
+    (next: "all" | "single") => {
+      if (!isViewModeControlled) setInternalViewMode(next);
+      onViewModeChange?.(next);
+    },
+    [isViewModeControlled, onViewModeChange],
+  );
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [wordWrap, setWordWrap] = useState(false);
   const [showWhitespace, setShowWhitespace] = useState(false);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ImperativePanelHandle } from "react-resizable-panels";
 import { TopBar } from "./components/refscope/TopBar";
 import { BranchSidebar } from "./components/refscope/BranchSidebar";
@@ -23,6 +23,11 @@ import { useQuietMode } from "./hooks/useQuietMode";
 import { useLayoutPrefs } from "./hooks/useLayoutPrefs";
 import { useTimelinePrefs } from "./hooks/useTimelinePrefs";
 import { useColorVisionTheme } from "./hooks/useColorVisionTheme";
+import {
+  useKeyboardShortcuts,
+  type ShortcutBinding,
+} from "./hooks/useKeyboardShortcuts";
+import { ShortcutHelp } from "./components/refscope/ShortcutHelp";
 import type {
   Commit,
   CommitDetail,
@@ -130,8 +135,10 @@ export default function App() {
   const [liveAnnouncement, setLiveAnnouncement] = useState("");
   const [realtimeAlerts, setRealtimeAlerts] = useState<RealtimeAlert[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [summaryViewOpen, setSummaryViewOpen] = useState(false);
   const [diffFullscreen, setDiffFullscreen] = useState(false);
+  const [diffViewMode, setDiffViewMode] = useState<"all" | "single">("all");
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
   const [path, setPath] = useState("");
@@ -546,16 +553,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepo]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  // Shortcut wiring lives further down (see `shortcutBindings` + `useKeyboardShortcuts`)
+  // so it can read `current`, `commits`, and `diff` availability that are
+  // computed below.
 
   const current = commits.find((c) => c.hash === selected) ?? commits[0] ?? null;
   const repoName = repositories.find((repo) => repo.id === selectedRepo)?.name ?? selectedRepo;
@@ -792,6 +792,114 @@ export default function App() {
     }
   }, [isQuiet, flushPendingRealtimeEvents]);
 
+  // Diff fullscreen only makes sense when there's actually a diff rendered.
+  // Mirrors the gating used in CommandPalette so the shortcut behaves identically
+  // to the palette command and doesn't surprise users with a no-op.
+  const diffFullscreenAvailable =
+    Boolean(current) && (Boolean(diff.diff) || diff.truncated);
+
+  const goToAdjacentCommit = useCallback(
+    (direction: 1 | -1) => {
+      if (!commits.length) return;
+      const currentIndex = selected
+        ? commits.findIndex((commit) => commit.hash === selected)
+        : 0;
+      // No selection yet: treat the next press as "land on the first commit"
+      // rather than jumping based on a -1 index.
+      const nextIndex =
+        currentIndex < 0
+          ? 0
+          : Math.min(commits.length - 1, Math.max(0, currentIndex + direction));
+      if (nextIndex === currentIndex) return;
+      handleSelectCommit(commits[nextIndex].hash);
+    },
+    [commits, selected, handleSelectCommit],
+  );
+
+  const shortcutBindings = useMemo<ShortcutBinding[]>(() => {
+    const list: ShortcutBinding[] = [
+      {
+        combo: "Mod+K",
+        description: "Toggle command palette",
+        category: "General",
+        // `global` so the same combo can dismiss the palette it just opened
+        // (and also work when other modals are visible).
+        global: true,
+        run: () => setPaletteOpen((value) => !value),
+      },
+      {
+        combo: "?",
+        description: "Show keyboard shortcuts",
+        category: "General",
+        run: () => setHelpOpen(true),
+      },
+      {
+        combo: "Mod+B",
+        description: "Toggle branch sidebar",
+        category: "View",
+        run: toggleSidebar,
+      },
+      {
+        combo: "Mod+/",
+        description: "Toggle period summary",
+        category: "View",
+        run: toggleSummaryView,
+      },
+      {
+        combo: "Mod+.",
+        description: "Pause / resume live updates",
+        category: "View",
+        run: toggleLiveUpdates,
+      },
+      {
+        combo: "j",
+        description: "Next commit",
+        category: "Navigation",
+        run: () => goToAdjacentCommit(1),
+      },
+      {
+        combo: "k",
+        description: "Previous commit",
+        category: "Navigation",
+        run: () => goToAdjacentCommit(-1),
+      },
+    ];
+    if (diffFullscreenAvailable) {
+      // Only register when a diff is actually visible — keeps the help dialog
+      // honest about what's available right now.
+      list.push({
+        combo: "Mod+Enter",
+        description: "Toggle diff fullscreen",
+        category: "Diff",
+        run: () => setDiffFullscreen((value) => !value),
+      });
+      list.push({
+        combo: "v",
+        description: "Toggle diff view (all / single file)",
+        category: "Diff",
+        run: () =>
+          setDiffViewMode((mode) => (mode === "all" ? "single" : "all")),
+      });
+    }
+    return list;
+  }, [
+    toggleSidebar,
+    toggleSummaryView,
+    goToAdjacentCommit,
+    diffFullscreenAvailable,
+  ]);
+
+  // Suppress non-global shortcuts whenever a modal-like surface owns the
+  // keyboard. Each surface manages its own Esc handler; we just need to keep
+  // the global bindings out of the way.
+  const shortcutsSuppressed =
+    paletteOpen ||
+    helpOpen ||
+    fileHistoryPromptOpen ||
+    Boolean(fileHistoryPath);
+
+  useKeyboardShortcuts(shortcutBindings, shortcutsSuppressed);
+
   return (
     <div
       className="size-full flex flex-col"
@@ -1004,6 +1112,8 @@ export default function App() {
             error={error}
             diffFullscreen={diffFullscreen}
             onDiffFullscreenChange={setDiffFullscreen}
+            diffViewMode={diffViewMode}
+            onDiffViewModeChange={setDiffViewMode}
             repoId={selectedRepo}
             workTreeSelected={selectedWorkTree}
             workTree={workTree}
@@ -1058,6 +1168,7 @@ export default function App() {
         onShowWorkTree={handleSelectWorkTree}
         onRefreshWorkTree={handleRefreshWorkTree}
         onOpenFileHistory={openFileHistoryPrompt}
+        onShowShortcuts={() => setHelpOpen(true)}
       />
       <FileHistoryPrompt
         open={fileHistoryPromptOpen}
@@ -1074,6 +1185,11 @@ export default function App() {
           onSwitchFile={submitFileHistoryPath}
         />
       ) : null}
+      <ShortcutHelp
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        bindings={shortcutBindings}
+      />
     </div>
   );
 }

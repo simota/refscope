@@ -6,6 +6,7 @@ import {
   GitBranch,
   Hash,
   History,
+  Keyboard,
   Maximize2,
   Moon,
   PanelLeftClose,
@@ -59,6 +60,7 @@ export function CommandPalette({
   onShowWorkTree,
   onRefreshWorkTree,
   onOpenFileHistory,
+  onShowShortcuts,
 }: {
   open: boolean;
   onClose: () => void;
@@ -98,6 +100,9 @@ export function CommandPalette({
   // Opens the file-history path-input prompt. Always available — the prompt
   // itself is the gate, so we don't gate the command on selection state.
   onOpenFileHistory: () => void;
+  // Opens the keyboard-shortcut help dialog. Surfaced here so users who reach
+  // for the palette can still find the shortcut list without knowing the `?` key.
+  onShowShortcuts: () => void;
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -260,6 +265,16 @@ export function CommandPalette({
       },
     };
 
+    const shortcutHelpCommand: PaletteCommand = {
+      icon: Keyboard,
+      label: "Show keyboard shortcuts",
+      hint: "?",
+      run: () => {
+        onShowShortcuts();
+        onClose();
+      },
+    };
+
     // Working-tree commands. Refresh is always offered (the worktree might
     // be clean now and dirty after the user stages something); the
     // "Show changes" entry only appears when the API has confirmed at least
@@ -297,6 +312,7 @@ export function CommandPalette({
       cvdCommand,
       liveCommand,
       fileHistoryCommand,
+      shortcutHelpCommand,
       ...workTreeCommands,
       ...diffFullscreenCommand,
       ...copyCommand,
@@ -320,6 +336,7 @@ export function CommandPalette({
     onToggleDiffFullscreen,
     onToggleLiveUpdates,
     onRefreshWorkTree,
+    onShowShortcuts,
     onShowWorkTree,
     onToggleQuietMode,
     onToggleSidebar,
