@@ -5,6 +5,7 @@ import {
   FileSearch,
   GitBranch,
   Hash,
+  History,
   Maximize2,
   Moon,
   PanelLeftClose,
@@ -57,6 +58,7 @@ export function CommandPalette({
   workTreeAvailable,
   onShowWorkTree,
   onRefreshWorkTree,
+  onOpenFileHistory,
 }: {
   open: boolean;
   onClose: () => void;
@@ -93,6 +95,9 @@ export function CommandPalette({
   workTreeAvailable: boolean;
   onShowWorkTree: () => void;
   onRefreshWorkTree: () => void;
+  // Opens the file-history path-input prompt. Always available — the prompt
+  // itself is the gate, so we don't gate the command on selection state.
+  onOpenFileHistory: () => void;
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -241,6 +246,20 @@ export function CommandPalette({
         ]
       : [];
 
+    // File-history entry. The trailing "…" follows the convention that the
+    // command requires further input (here: the path-input prompt). Always
+    // shown — gating on selection state would hide the very feature that
+    // lets users escape from a wrong selection.
+    const fileHistoryCommand: PaletteCommand = {
+      icon: History,
+      label: "Open file history…",
+      hint: "path",
+      run: () => {
+        onOpenFileHistory();
+        onClose();
+      },
+    };
+
     // Working-tree commands. Refresh is always offered (the worktree might
     // be clean now and dirty after the user stages something); the
     // "Show changes" entry only appears when the API has confirmed at least
@@ -277,6 +296,7 @@ export function CommandPalette({
       quietCommand,
       cvdCommand,
       liveCommand,
+      fileHistoryCommand,
       ...workTreeCommands,
       ...diffFullscreenCommand,
       ...copyCommand,
@@ -291,6 +311,7 @@ export function CommandPalette({
     livePaused,
     onAuthorChange,
     onClose,
+    onOpenFileHistory,
     onPathChange,
     onSearchChange,
     onSearchPatternChange,

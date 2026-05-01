@@ -3,7 +3,6 @@ import { Copy, ExternalLink, History, ShieldCheck } from "lucide-react";
 import type { Commit, CommitDetail } from "./data";
 import type { DiffPayload, WorkTreeResponse } from "../../api";
 import { DiffViewer } from "./DiffViewer";
-import { FileHistoryView } from "./FileHistoryView";
 
 export function DetailPanel({
   commit,
@@ -14,9 +13,9 @@ export function DetailPanel({
   diffFullscreen,
   onDiffFullscreenChange,
   repoId,
-  refName,
   workTreeSelected,
   workTree,
+  onOpenFileHistory,
 }: {
   commit: Commit | null;
   detail: CommitDetail | null;
@@ -26,10 +25,18 @@ export function DetailPanel({
   diffFullscreen?: boolean;
   onDiffFullscreenChange?: (next: boolean) => void;
   repoId: string;
-  refName: string;
   workTreeSelected: boolean;
   workTree: WorkTreeResponse | null;
+  // Opens the path-input prompt or — when a path is supplied directly —
+  // jumps straight to FileHistoryView (state owner: App.tsx).
+  onOpenFileHistory: (path: string) => void;
 }) {
+  // Hooks must run unconditionally before any early return, otherwise React's
+  // rules-of-hooks check trips and reorders break state. The previous version
+  // declared `useState` after the worktree early return — we move the hook
+  // ahead so both code paths visit the same hook order.
+  const [copyStatus, setCopyStatus] = useState("");
+
   // Working-tree view takes precedence over commit detail when selected.
   // Rendered before any commit lookup so the panel can show a useful state
   // even while no commit is selected (e.g. fresh repo load with pending
@@ -37,10 +44,6 @@ export function DetailPanel({
   if (workTreeSelected) {
     return <WorkTreePanel workTree={workTree} />;
   }
-  const [copyStatus, setCopyStatus] = useState("");
-  // History overlay is owned at the panel level so opening it while the diff
-  // is loading or while the commit changes does not race the network calls.
-  const [historyPath, setHistoryPath] = useState<string | null>(null);
 
   if (!commit) {
     return (
@@ -251,7 +254,7 @@ export function DetailPanel({
                   title="Open file history"
                   // Disabled when we lack a repoId — the API needs both repo + path.
                   disabled={!repoId}
-                  onClick={() => setHistoryPath(f.path)}
+                  onClick={() => onOpenFileHistory(f.path)}
                   style={{ width: 22, height: 22 }}
                 >
                   <History size={12} />
@@ -279,14 +282,6 @@ export function DetailPanel({
           )}
         </Section>
       </div>
-      {historyPath ? (
-        <FileHistoryView
-          repoId={repoId}
-          filePath={historyPath}
-          ref={refName}
-          onClose={() => setHistoryPath(null)}
-        />
-      ) : null}
     </PanelShell>
   );
 }

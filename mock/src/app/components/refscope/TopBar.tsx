@@ -5,6 +5,7 @@ import {
   Command,
   User,
   FileSearch,
+  History,
   Moon,
   CalendarRange,
   PanelLeftClose,
@@ -56,6 +57,7 @@ export function TopBar({
   onToggleSidebar,
   onRefreshWorkTree,
   workTreeAvailable,
+  onOpenFileHistory,
 }: {
   repositories: Repository[];
   selectedRepo: string;
@@ -92,6 +94,10 @@ export function TopBar({
   onToggleSidebar: () => void;
   onRefreshWorkTree: () => void;
   workTreeAvailable: boolean;
+  // Top-level entry point for the file-history feature: opens the path-input
+  // prompt owned by App.tsx. The button sits next to the path filter input
+  // so the cluster reads as "find by path → see history of that path".
+  onOpenFileHistory: () => void;
 }) {
   // In quiet mode, route the live indicator color to the muted token so chroma drops
   // without sacrificing the WCAG-validated text-on-panel contrast pairing.
@@ -277,6 +283,19 @@ export function TopBar({
             style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
           />
         </div>
+        {/* Top-level entry to file history. Always visible so the feature is
+            reachable regardless of viewport (the path filter above hides at
+            sub-xl widths but the history view should not). */}
+        <button
+          type="button"
+          className="rs-compact-button"
+          onClick={onOpenFileHistory}
+          aria-label="Open file history"
+          title="Open file history (path prompt)"
+        >
+          <History size={11} aria-hidden style={{ marginRight: 4 }} />
+          History
+        </button>
       </div>
 
       <div className="flex items-center gap-2" style={{ fontFamily: "var(--rs-mono)" }}>

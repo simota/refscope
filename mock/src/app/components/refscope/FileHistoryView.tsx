@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, History, X } from "lucide-react";
 import { fetchFileHistory, type FileHistoryEntry, type FileHistoryResponse } from "../../api";
 import {
@@ -10,47 +10,68 @@ import {
   type ParsedDiff,
 } from "../../lib/parseUnifiedDiff";
 
+type ParsedEntry = {
+  entry: FileHistoryEntry;
+  parsed: ParsedDiff;
+};
+
+type DateGroup = {
+  /** Stable key used to render the section header, e.g. `2026-05-02`. */
+  key: string;
+  /** Human-readable label, e.g. `Today`, `Yesterday`, `Apr 30, 2026`. */
+  label: string;
+  items: ParsedEntry[];
+};
+
 /**
  * Hunk-timeline view: a per-file commit history that stacks each commit's
- * literal diff hunks newest-first.
+ * literal diff hunks newest-first, with a left-side timeline rail that lists
+ * every commit grouped by author date.
  *
  * Boundary discipline:
  * - The API delivers the raw `git log --patch --follow` output as `entry.patch`.
- * - We feed that text straight into the same `parseUnifiedDiff` used by the
- *   per-commit viewer — no rename re-judgment, no synthetic AST. Git's own
- *   `R<NN>` similarity marker rides through unchanged and is surfaced verbatim
- *   below the file header.
+ * - We feed that text straight into `parseUnifiedDiff` once at this level — no
+ *   rename re-judgment, no synthetic AST. Git's own `R<NN>` similarity marker
+ *   rides through unchanged and is surfaced verbatim below the file header.
+ * - Date grouping in the sidebar is observable too — it uses Git's `authorDate`
+ *   formatted in the user's locale; we never invent ordering.
  * - When the API caps at `limit + 1` and reports `truncated: true`, we surface
  *   that fact instead of pretending we have the full history.
  */
 export function FileHistoryView({
   repoId,
   filePath,
-  ref,
+  refName,
   onClose,
 }: {
   repoId: string;
   filePath: string;
-  ref: string;
+  refName: string;
   onClose: () => void;
 }) {
   const [data, setData] = useState<FileHistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [activeHash, setActiveHash] = useState<string | null>(null);
 
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const mainScrollRef = useRef<HTMLDivElement | null>(null);
+  // Map from commit hash → article element. Used by both the IntersectionObserver
+  // (to compute the topmost-visible commit for the sidebar's active state) and
+  // the click-to-jump handler (to call scrollIntoView on a specific commit).
+  const articleRefs = useRef<Map<string, HTMLElement>>(new Map());
 
   // Fetch lifecycle: cancel in-flight request when inputs change or the view
-  // unmounts. The dependency on `repoId`, `filePath`, `ref` mirrors the
-  // PeriodSummaryView pattern — the API endpoint is the only network surface.
+  // unmounts. `refName` is the git ref (renamed from `ref` to avoid React's
+  // reserved prop name — see App.tsx render site).
   useEffect(() => {
     if (!repoId || !filePath) return;
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    fetchFileHistory(repoId, { path: filePath, ref }, controller.signal)
+    fetchFileHistory(repoId, { path: filePath, ref: refName }, controller.signal)
       .then((next) => {
         if (controller.signal.aborted) return;
         setData(next);
@@ -64,7 +85,7 @@ export function FileHistoryView({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [repoId, filePath, ref]);
+  }, [repoId, filePath, refName]);
 
   // Body scroll lock + initial focus + restore-focus-on-close. Mirrors the
   // DiffViewer fullscreen overlay so keyboard users land predictably.
@@ -90,12 +111,90 @@ export function FileHistoryView({
     };
   }, []);
 
+  // Parse every patch once. Sharing one ParsedDiff between the sidebar (which
+  // needs added/deleted counts) and the main column (which renders the hunks)
+  // avoids parsing the same patch twice per render.
+  const parsedEntries = useMemo<ParsedEntry[]>(() => {
+    if (!data) return [];
+    return data.entries.map((entry) => ({
+      entry,
+      parsed: parseUnifiedDiff(entry.patch),
+    }));
+  }, [data]);
+
+  // Date grouping for the sidebar. Buckets preserve insertion order, which is
+  // newest-first because the API returns entries in `git log` order. Empty
+  // / unparseable `authorDate` values fall into a literal `"unknown"` bucket
+  // rather than being silently merged into today.
+  const dateGroups = useMemo<DateGroup[]>(
+    () => groupByDate(parsedEntries),
+    [parsedEntries],
+  );
+
+  // Default the active commit to the newest one as soon as data lands so the
+  // sidebar shows a highlighted row before the user scrolls.
+  useEffect(() => {
+    if (!parsedEntries.length) {
+      setActiveHash(null);
+      return;
+    }
+    setActiveHash((prev) => prev ?? parsedEntries[0].entry.hash);
+  }, [parsedEntries]);
+
+  // Track which commit is currently at the top of the main scroll area. We
+  // weight the top of the viewport (rootMargin offsets) so a commit becomes
+  // "active" when its header reaches the upper third — matching the natural
+  // reading anchor.
+  useEffect(() => {
+    if (!parsedEntries.length) return;
+    const root = mainScrollRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((entry) => entry.isIntersecting);
+        if (visible.length === 0) return;
+        const topmost = visible.reduce((a, b) =>
+          a.boundingClientRect.top < b.boundingClientRect.top ? a : b,
+        );
+        const hash = (topmost.target as HTMLElement).dataset.commitHash;
+        if (hash) setActiveHash(hash);
+      },
+      {
+        root,
+        rootMargin: "0px 0px -65% 0px",
+        threshold: 0,
+      },
+    );
+    for (const el of articleRefs.current.values()) {
+      observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, [parsedEntries]);
+
+  const registerArticle = useCallback((hash: string, el: HTMLElement | null) => {
+    if (el) {
+      articleRefs.current.set(hash, el);
+    } else {
+      articleRefs.current.delete(hash);
+    }
+  }, []);
+
+  const handleJump = useCallback((hash: string) => {
+    const el = articleRefs.current.get(hash);
+    if (!el) return;
+    setActiveHash(hash);
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
       event.stopPropagation();
       onClose();
     }
   }
+
+  const showContent = !loading && !error && data;
+  const hasEntries = showContent && data.entries.length > 0;
 
   return (
     <div
@@ -147,6 +246,17 @@ export function FileHistoryView({
         >
           {filePath}
         </span>
+        {hasEntries ? (
+          <span
+            style={{
+              fontFamily: "var(--rs-mono)",
+              fontSize: 11,
+              color: "var(--rs-text-muted)",
+            }}
+          >
+            {data.entries.length} commit{data.entries.length === 1 ? "" : "s"}
+          </span>
+        ) : null}
         <span
           style={{
             fontFamily: "var(--rs-mono)",
@@ -154,7 +264,7 @@ export function FileHistoryView({
             color: "var(--rs-text-muted)",
           }}
         >
-          {ref}
+          {refName}
         </span>
         {data?.truncated ? (
           <span
@@ -185,40 +295,487 @@ export function FileHistoryView({
           <X size={13} />
         </button>
       </header>
-      <div className="overflow-y-auto" style={{ flex: 1, minHeight: 0 }}>
-        {loading ? <Empty>Loading file history…</Empty> : null}
-        {error ? <Empty>{error}</Empty> : null}
-        {!loading && !error && data && data.entries.length === 0 ? (
-          <Empty>No commits touch this file in the current ref.</Empty>
+      {hasEntries ? (
+        <ChangeFrequencyGraph
+          entries={parsedEntries}
+          activeHash={activeHash}
+          onJump={handleJump}
+        />
+      ) : null}
+      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        {hasEntries ? (
+          <aside
+            aria-label="Commit timeline"
+            className="overflow-y-auto"
+            style={{
+              width: 280,
+              borderRight: "1px solid var(--rs-border)",
+              background: "var(--rs-bg-panel)",
+              flexShrink: 0,
+            }}
+          >
+            <CommitList
+              groups={dateGroups}
+              activeHash={activeHash}
+              onJump={handleJump}
+            />
+          </aside>
         ) : null}
-        {!loading && !error && data
-          ? data.entries.map((entry) => (
-              <CommitCard key={entry.hash} entry={entry} />
-            ))
-          : null}
+        <div
+          ref={mainScrollRef}
+          className="overflow-y-auto"
+          style={{ flex: 1, minHeight: 0 }}
+        >
+          {loading ? <Empty>Loading file history…</Empty> : null}
+          {error ? <Empty>{error}</Empty> : null}
+          {showContent && data.entries.length === 0 ? (
+            <Empty>No commits touch this file in the current ref.</Empty>
+          ) : null}
+          {showContent
+            ? parsedEntries.map(({ entry, parsed }) => (
+                <CommitCard
+                  key={entry.hash}
+                  entry={entry}
+                  parsed={parsed}
+                  active={entry.hash === activeHash}
+                  registerRef={registerArticle}
+                />
+              ))
+            : null}
+        </div>
       </div>
     </div>
   );
 }
 
-function CommitCard({ entry }: { entry: FileHistoryEntry }) {
-  // Parse the raw patch with the same hand-rolled parser used by DiffViewer so
-  // hunk rendering stays consistent. The parser is permissive — malformed
-  // input becomes empty hunks, never an exception.
-  const parsed = useMemo(() => parseUnifiedDiff(entry.patch), [entry.patch]);
+/**
+ * A horizontal time-series strip placed between the header and the body. Shows
+ * one stacked bar per commit (added on top of a 1-px baseline, deleted below)
+ * in chronological order — oldest on the left, newest on the right — so the
+ * shape of the file's edit history is visible at a glance.
+ *
+ * Boundary discipline:
+ * - Heights are normalized against the maximum churn (added + deleted) seen in
+ *   the loaded history. The numerical labels (`peak +N -M`) and tooltips
+ *   restate the literal git counts so the visual normalization never hides the
+ *   underlying observed values.
+ * - Day labels come straight from `authorDate`. Empty / unparseable dates fall
+ *   off the axis instead of being mapped to "today".
+ */
+function ChangeFrequencyGraph({
+  entries,
+  activeHash,
+  onJump,
+}: {
+  entries: ParsedEntry[];
+  activeHash: string | null;
+  onJump: (hash: string) => void;
+}) {
+  const stats = useMemo(() => {
+    // git log order is newest-first; reverse for the chronological strip.
+    const ordered = [...entries].reverse();
+    let maxChurn = 0;
+    let maxAdded = 0;
+    let maxDeleted = 0;
+    const items = ordered.map((item) => {
+      const file = item.parsed.files[0];
+      const counts = file ? countFileChanges(file) : { added: 0, deleted: 0 };
+      const churn = counts.added + counts.deleted;
+      if (churn > maxChurn) maxChurn = churn;
+      if (counts.added > maxAdded) maxAdded = counts.added;
+      if (counts.deleted > maxDeleted) maxDeleted = counts.deleted;
+      return {
+        hash: item.entry.hash,
+        shortHash: item.entry.shortHash,
+        authorDate: item.entry.authorDate,
+        subject: item.entry.subject,
+        author: item.entry.author,
+        added: counts.added,
+        deleted: counts.deleted,
+        churn,
+      };
+    });
+    return { items, maxChurn, maxAdded, maxDeleted };
+  }, [entries]);
+
+  // Day-boundary labels: emit one label at the index where the local-day key
+  // first changes. Skips anything we cannot parse so synthetic dates never
+  // appear on the axis.
+  const dayLabels = useMemo(() => {
+    const labels: Array<{ index: number; label: string }> = [];
+    let prevKey: string | null = null;
+    stats.items.forEach((item, index) => {
+      if (!item.authorDate) return;
+      const date = new Date(item.authorDate);
+      if (Number.isNaN(date.getTime())) return;
+      const key = date.toISOString().slice(0, 10);
+      if (key === prevKey) return;
+      prevKey = key;
+      labels.push({
+        index,
+        label: date.toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        }),
+      });
+    });
+    return labels;
+  }, [stats]);
+
+  const { items, maxChurn, maxAdded, maxDeleted } = stats;
+  const n = items.length;
+  if (n === 0 || maxChurn === 0) return null;
+
+  // ~26px on each side of a 1-px midline = 53px chart, leaving headroom for
+  // the heading/legend and the day-label row inside the 96-px container.
+  const halfHeight = 26;
+
+  return (
+    <div
+      style={{
+        background: "var(--rs-bg-elevated)",
+        borderBottom: "1px solid var(--rs-border)",
+        padding: "8px 16px 6px",
+        flexShrink: 0,
+      }}
+    >
+      <div
+        className="flex items-center justify-between"
+        style={{ marginBottom: 4 }}
+      >
+        <span
+          style={{
+            fontSize: 10,
+            letterSpacing: "0.08em",
+            fontWeight: 600,
+            color: "var(--rs-text-muted)",
+            textTransform: "uppercase",
+          }}
+        >
+          Changes over time
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            fontFamily: "var(--rs-mono)",
+            color: "var(--rs-text-muted)",
+          }}
+        >
+          peak{" "}
+          <span style={{ color: "var(--rs-git-added)" }}>+{maxAdded}</span>{" "}
+          <span style={{ color: "var(--rs-git-deleted)" }}>-{maxDeleted}</span>
+        </span>
+      </div>
+      <div
+        role="group"
+        aria-label="Change frequency over time"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 2,
+          height: 56,
+          position: "relative",
+        }}
+      >
+        {items.map((item) => {
+          const isActive = item.hash === activeHash;
+          const addedH = maxChurn === 0 ? 0 : (item.added / maxChurn) * halfHeight;
+          const deletedH =
+            maxChurn === 0 ? 0 : (item.deleted / maxChurn) * halfHeight;
+          const dateLabel = formatDate(item.authorDate);
+          return (
+            <button
+              key={item.hash}
+              type="button"
+              onClick={() => onJump(item.hash)}
+              aria-current={isActive ? "true" : undefined}
+              aria-label={`${item.shortHash} — ${item.subject} (+${item.added} -${item.deleted})`}
+              title={`${item.shortHash}  ${item.subject}\n${item.author} · ${dateLabel}\n+${item.added} -${item.deleted}`}
+              style={{
+                flex: 1,
+                minWidth: 2,
+                maxWidth: 18,
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
+                alignItems: "center",
+                gap: 1,
+                background: isActive
+                  ? "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 14%)"
+                  : "transparent",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                borderRadius: "var(--rs-radius-sm)",
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: "70%",
+                  height: addedH,
+                  minHeight: item.added > 0 ? 1 : 0,
+                  background: isActive
+                    ? "var(--rs-git-added)"
+                    : "color-mix(in oklab, var(--rs-git-added), transparent 25%)",
+                  borderRadius: "1px 1px 0 0",
+                  alignSelf: "flex-end",
+                  transformOrigin: "bottom",
+                }}
+              />
+              <span
+                aria-hidden
+                style={{
+                  width: "85%",
+                  height: 1,
+                  background: isActive
+                    ? "var(--rs-accent)"
+                    : "var(--rs-border)",
+                }}
+              />
+              <span
+                aria-hidden
+                style={{
+                  width: "70%",
+                  height: deletedH,
+                  minHeight: item.deleted > 0 ? 1 : 0,
+                  background: isActive
+                    ? "var(--rs-git-deleted)"
+                    : "color-mix(in oklab, var(--rs-git-deleted), transparent 25%)",
+                  borderRadius: "0 0 1px 1px",
+                  alignSelf: "flex-start",
+                }}
+              />
+            </button>
+          );
+        })}
+      </div>
+      <div
+        style={{
+          height: 14,
+          position: "relative",
+          marginTop: 2,
+        }}
+      >
+        {dayLabels.map(({ index, label }) => {
+          // Center the label over the chosen bar. (index + 0.5) / n matches the
+          // flex-distributed bar centers when minWidth ≤ each slot ≤ maxWidth.
+          const left = ((index + 0.5) / n) * 100;
+          return (
+            <span
+              key={`${index}-${label}`}
+              style={{
+                position: "absolute",
+                left: `${left}%`,
+                fontSize: 9,
+                color: "var(--rs-text-muted)",
+                fontFamily: "var(--rs-mono)",
+                transform: "translateX(-50%)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {label}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CommitList({
+  groups,
+  activeHash,
+  onJump,
+}: {
+  groups: DateGroup[];
+  activeHash: string | null;
+  onJump: (hash: string) => void;
+}) {
+  return (
+    <ol style={{ listStyle: "none", margin: 0, padding: 0 }}>
+      {groups.map((group) => (
+        <li key={group.key}>
+          <div
+            className="px-3"
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 1,
+              height: 24,
+              display: "flex",
+              alignItems: "center",
+              fontSize: 10,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              fontWeight: 600,
+              color: "var(--rs-text-muted)",
+              background: "var(--rs-bg-panel)",
+              borderBottom: "1px solid var(--rs-border)",
+            }}
+          >
+            {group.label}
+          </div>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {group.items.map(({ entry, parsed }) => {
+              const file = parsed.files[0];
+              const counts = file ? countFileChanges(file) : { added: 0, deleted: 0 };
+              const isActive = entry.hash === activeHash;
+              return (
+                <li key={entry.hash}>
+                  <button
+                    type="button"
+                    onClick={() => onJump(entry.hash)}
+                    aria-current={isActive ? "true" : undefined}
+                    title={`${entry.subject} — ${entry.author}`}
+                    className="w-full text-left px-3 py-2"
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "12px 1fr",
+                      gap: 8,
+                      alignItems: "start",
+                      background: isActive
+                        ? "color-mix(in oklab, var(--rs-bg-panel), var(--rs-accent) 14%)"
+                        : "transparent",
+                      borderLeft: isActive
+                        ? "2px solid var(--rs-accent)"
+                        : "2px solid transparent",
+                      cursor: "pointer",
+                      borderBottom:
+                        "1px solid color-mix(in oklab, var(--rs-border), transparent 60%)",
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        position: "relative",
+                        display: "block",
+                        width: 12,
+                        height: "100%",
+                        minHeight: 36,
+                      }}
+                    >
+                      {/* Vertical rail line. */}
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: 5,
+                          top: 0,
+                          bottom: 0,
+                          width: 2,
+                          background:
+                            "color-mix(in oklab, var(--rs-border), transparent 30%)",
+                        }}
+                      />
+                      {/* Commit dot. */}
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: 2,
+                          top: 6,
+                          width: 8,
+                          height: 8,
+                          borderRadius: "50%",
+                          background: isActive
+                            ? "var(--rs-accent)"
+                            : "var(--rs-bg-elevated)",
+                          border: `1px solid ${
+                            isActive ? "var(--rs-accent)" : "var(--rs-border)"
+                          }`,
+                        }}
+                      />
+                    </span>
+                    <span style={{ minWidth: 0 }}>
+                      <span
+                        className="truncate"
+                        style={{
+                          display: "block",
+                          fontSize: 12,
+                          fontWeight: isActive ? 600 : 500,
+                          color: "var(--rs-text-primary)",
+                        }}
+                      >
+                        {entry.subject || "(no subject)"}
+                      </span>
+                      <span
+                        className="flex items-center gap-2"
+                        style={{
+                          fontSize: 10,
+                          color: "var(--rs-text-muted)",
+                          marginTop: 2,
+                          fontFamily: "var(--rs-mono)",
+                        }}
+                      >
+                        <span>{entry.shortHash}</span>
+                        <span>·</span>
+                        <span
+                          className="truncate"
+                          style={{ flex: 1, minWidth: 0 }}
+                        >
+                          {entry.author}
+                        </span>
+                        <span>{formatRelativeTime(entry.authorDate)}</span>
+                      </span>
+                      <span
+                        className="flex items-center gap-2"
+                        style={{
+                          fontSize: 10,
+                          marginTop: 2,
+                          fontFamily: "var(--rs-mono)",
+                        }}
+                      >
+                        <span style={{ color: "var(--rs-git-added)" }}>
+                          +{counts.added}
+                        </span>
+                        <span style={{ color: "var(--rs-git-deleted)" }}>
+                          -{counts.deleted}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function CommitCard({
+  entry,
+  parsed,
+  active,
+  registerRef,
+}: {
+  entry: FileHistoryEntry;
+  parsed: ParsedDiff;
+  active: boolean;
+  registerRef: (hash: string, el: HTMLElement | null) => void;
+}) {
   const file = parsed.files[0] ?? null;
 
   return (
     <article
+      data-commit-hash={entry.hash}
+      ref={(el) => registerRef(entry.hash, el)}
       style={{
         borderBottom: "1px solid var(--rs-border)",
+        scrollMarginTop: 0,
       }}
     >
       <header
         className="px-4 py-3"
         style={{
-          background: "var(--rs-bg-panel)",
+          background: active
+            ? "color-mix(in oklab, var(--rs-bg-panel), var(--rs-accent) 8%)"
+            : "var(--rs-bg-panel)",
           borderBottom: "1px solid var(--rs-border)",
+          borderLeft: active
+            ? "3px solid var(--rs-accent)"
+            : "3px solid transparent",
         }}
       >
         <div className="flex items-center gap-2 flex-wrap">
@@ -533,4 +1090,71 @@ function formatDate(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function formatRelativeTime(value?: string) {
+  if (!value) return "";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "";
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo`;
+  return `${Math.floor(months / 12)}y`;
+}
+
+function groupByDate(entries: ParsedEntry[]): DateGroup[] {
+  if (entries.length === 0) return [];
+  const today = startOfDayUTC(new Date());
+  const yesterday = startOfDayUTC(new Date(today.getTime() - 86_400_000));
+
+  const groupsByKey = new Map<string, DateGroup>();
+  for (const item of entries) {
+    const date = item.entry.authorDate ? new Date(item.entry.authorDate) : null;
+    let key: string;
+    let label: string;
+    if (date && !Number.isNaN(date.getTime())) {
+      const start = startOfDayUTC(date);
+      key = isoDate(start);
+      if (start.getTime() === today.getTime()) {
+        label = "Today";
+      } else if (start.getTime() === yesterday.getTime()) {
+        label = "Yesterday";
+      } else {
+        label = date.toLocaleDateString(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        });
+      }
+    } else {
+      key = "unknown";
+      label = "Unknown date";
+    }
+
+    const existing = groupsByKey.get(key);
+    if (existing) {
+      existing.items.push(item);
+    } else {
+      groupsByKey.set(key, { key, label, items: [item] });
+    }
+  }
+  // Insertion order = git log order = newest first, preserved by Map.
+  return Array.from(groupsByKey.values());
+}
+
+function startOfDayUTC(date: Date): Date {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+}
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }

@@ -22,11 +22,16 @@ function ResizablePanelGroup({
   );
 }
 
-function ResizablePanel({
-  ...props
-}: React.ComponentProps<typeof ResizablePrimitive.Panel>) {
-  return <ResizablePrimitive.Panel data-slot="resizable-panel" {...props} />;
-}
+// Forward the ref to the underlying primitive so consumers can hold an
+// `ImperativePanelHandle` (e.g. App.tsx's `sidebarPanelRef` for collapse /
+// expand). Without forwardRef the ref silently no-ops because function
+// components don't receive refs.
+const ResizablePanel = React.forwardRef<
+  React.ComponentRef<typeof ResizablePrimitive.Panel>,
+  React.ComponentProps<typeof ResizablePrimitive.Panel>
+>(function ResizablePanel(props, ref) {
+  return <ResizablePrimitive.Panel ref={ref} data-slot="resizable-panel" {...props} />;
+});
 
 function ResizableHandle({
   withHandle,

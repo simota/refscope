@@ -5,6 +5,11 @@ import { BranchSidebar } from "./components/refscope/BranchSidebar";
 import { CommitTimeline } from "./components/refscope/CommitTimeline";
 import { DetailPanel } from "./components/refscope/DetailPanel";
 import { CommandPalette } from "./components/refscope/CommandPalette";
+import { FileHistoryView } from "./components/refscope/FileHistoryView";
+import {
+  FileHistoryPrompt,
+  validatePath,
+} from "./components/refscope/FileHistoryPrompt";
 import {
   PeriodSummaryView,
   isSafeTopSegmentForPathFilter,
@@ -45,6 +50,64 @@ import {
 import type { RefDriftSummary } from "./components/refscope/BranchSidebar";
 
 const EMPTY_DIFF: DiffPayload = { diff: "", truncated: false, maxBytes: 0 };
+
+const RECENT_FILE_HISTORY_PATHS_STORAGE_KEY = "refscope.fileHistory.recentPaths.v1";
+const RECENT_FILE_HISTORY_PATHS_MAX = 10;
+const RECENT_FILE_HISTORY_PATHS_SCHEMA_VERSION = 1;
+
+type RecentFileHistoryPathsPayload = {
+  v: typeof RECENT_FILE_HISTORY_PATHS_SCHEMA_VERSION;
+  paths: string[];
+};
+
+/**
+ * Read the persisted recent-paths list. We schema-validate every read because
+ * localStorage is a public surface (browser devtools, sync between tabs);
+ * a malformed value here would crash the app on mount.
+ */
+function loadRecentFileHistoryPaths(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(RECENT_FILE_HISTORY_PATHS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return [];
+    const candidate = parsed as Partial<RecentFileHistoryPathsPayload>;
+    if (candidate.v !== RECENT_FILE_HISTORY_PATHS_SCHEMA_VERSION) return [];
+    if (!Array.isArray(candidate.paths)) return [];
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of candidate.paths) {
+      if (typeof entry !== "string") continue;
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      if (seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      cleaned.push(trimmed);
+      if (cleaned.length >= RECENT_FILE_HISTORY_PATHS_MAX) break;
+    }
+    return cleaned;
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentFileHistoryPaths(paths: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    const payload: RecentFileHistoryPathsPayload = {
+      v: RECENT_FILE_HISTORY_PATHS_SCHEMA_VERSION,
+      paths: paths.slice(0, RECENT_FILE_HISTORY_PATHS_MAX),
+    };
+    window.localStorage.setItem(
+      RECENT_FILE_HISTORY_PATHS_STORAGE_KEY,
+      JSON.stringify(payload),
+    );
+  } catch {
+    // Quota exceeded / disabled storage / private mode → silently skip.
+    // The feature still works for the current session; persistence is a nice-to-have.
+  }
+}
 
 export default function App() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -98,6 +161,15 @@ export default function App() {
   // BranchSidebar / DetailPanel pairing.
   const [workTree, setWorkTree] = useState<WorkTreeResponse | null>(null);
   const [selectedWorkTree, setSelectedWorkTree] = useState(false);
+  // File-history feature: top-level entry point with a path-input prompt.
+  // `fileHistoryPath` drives the FileHistoryView overlay; the prompt is its
+  // gateway. Both states live here so CommandPalette / TopBar / DetailPanel
+  // can drive the same overlay without parallel state copies.
+  const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null);
+  const [fileHistoryPromptOpen, setFileHistoryPromptOpen] = useState(false);
+  const [recentFileHistoryPaths, setRecentFileHistoryPaths] = useState<string[]>(
+    () => loadRecentFileHistoryPaths(),
+  );
   const workTreeAbortRef = useRef<AbortController | null>(null);
   const workTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRefRef = useRef(selectedRef);
@@ -489,6 +561,26 @@ export default function App() {
   const repoName = repositories.find((repo) => repo.id === selectedRepo)?.name ?? selectedRepo;
   const refName = displayRefName(selectedRef, refs);
   const toggleSummaryView = useCallback(() => setSummaryViewOpen((prev) => !prev), []);
+  // Suggestions for the file-history prompt: most-recent first, then the
+  // currently-selected commit's changed files. Dedup happens here so the
+  // prompt component stays presentational.
+  const fileHistorySuggestions = (() => {
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const entry of recentFileHistoryPaths) {
+      if (seen.has(entry)) continue;
+      seen.add(entry);
+      merged.push(entry);
+    }
+    if (current?.files) {
+      for (const file of current.files) {
+        if (!file?.path || seen.has(file.path)) continue;
+        seen.add(file.path);
+        merged.push(file.path);
+      }
+    }
+    return merged;
+  })();
 
   // Mutual exclusion: selecting a commit must clear the worktree selection
   // (the DetailPanel can only show one of the two), and vice versa. Keeping
@@ -506,6 +598,43 @@ export default function App() {
     if (!selectedRepo) return;
     refreshWorkTree(selectedRepo);
   }, [selectedRepo, refreshWorkTree]);
+
+  // File-history handlers. Two routes converge on the FileHistoryView overlay:
+  // (1) the prompt, opened by command palette / top-bar / etc., and
+  // (2) DetailPanel's per-file history button which already knows the path.
+  // Both go through `submitFileHistoryPath` so recent-paths persistence and
+  // overlay opening stay in one place.
+  const submitFileHistoryPath = useCallback((rawPath: string) => {
+    const result = validatePath(rawPath);
+    if (!result.ok) {
+      // The prompt validates locally before calling us, and DetailPanel only
+      // forwards Git-confirmed paths from the changed-files list, so a
+      // failure here means an upstream caller drifted from the contract.
+      // Surface it through the existing error banner rather than silently
+      // swallowing it.
+      setError(result.error);
+      return;
+    }
+    setFileHistoryPromptOpen(false);
+    setFileHistoryPath(result.value);
+    setRecentFileHistoryPaths((previous) => {
+      const next = [
+        result.value,
+        ...previous.filter((entry) => entry !== result.value),
+      ].slice(0, RECENT_FILE_HISTORY_PATHS_MAX);
+      persistRecentFileHistoryPaths(next);
+      return next;
+    });
+  }, []);
+  const openFileHistoryPrompt = useCallback(() => {
+    setFileHistoryPromptOpen(true);
+  }, []);
+  const closeFileHistoryPrompt = useCallback(() => {
+    setFileHistoryPromptOpen(false);
+  }, []);
+  const closeFileHistory = useCallback(() => {
+    setFileHistoryPath(null);
+  }, []);
   // Whether the worktree pseudo-row should be visible at all. Derived from
   // the literal Git facts: if both summaries report zero file changes, there
   // is nothing to show.
@@ -757,6 +886,7 @@ export default function App() {
         onToggleSidebar={toggleSidebar}
         onRefreshWorkTree={handleRefreshWorkTree}
         workTreeAvailable={Boolean(selectedRepo)}
+        onOpenFileHistory={openFileHistoryPrompt}
       />
       <ResizablePanelGroup
         direction="horizontal"
@@ -875,9 +1005,9 @@ export default function App() {
             diffFullscreen={diffFullscreen}
             onDiffFullscreenChange={setDiffFullscreen}
             repoId={selectedRepo}
-            refName={selectedRef}
             workTreeSelected={selectedWorkTree}
             workTree={workTree}
+            onOpenFileHistory={submitFileHistoryPath}
           />
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -927,7 +1057,22 @@ export default function App() {
         workTreeAvailable={workTreeHasChanges}
         onShowWorkTree={handleSelectWorkTree}
         onRefreshWorkTree={handleRefreshWorkTree}
+        onOpenFileHistory={openFileHistoryPrompt}
       />
+      <FileHistoryPrompt
+        open={fileHistoryPromptOpen}
+        onSubmit={submitFileHistoryPath}
+        onClose={closeFileHistoryPrompt}
+        suggestions={fileHistorySuggestions}
+      />
+      {fileHistoryPath ? (
+        <FileHistoryView
+          repoId={selectedRepo}
+          filePath={fileHistoryPath}
+          refName={selectedRef}
+          onClose={closeFileHistory}
+        />
+      ) : null}
     </div>
   );
 }
