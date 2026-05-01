@@ -4,6 +4,10 @@ import { BranchSidebar } from "./components/refscope/BranchSidebar";
 import { CommitTimeline } from "./components/refscope/CommitTimeline";
 import { DetailPanel } from "./components/refscope/DetailPanel";
 import { CommandPalette } from "./components/refscope/CommandPalette";
+import {
+  PeriodSummaryView,
+  isSafeTopSegmentForPathFilter,
+} from "./components/refscope/PeriodSummaryView";
 import { useQuietMode } from "./hooks/useQuietMode";
 import type {
   Commit,
@@ -45,6 +49,7 @@ export default function App() {
   const [liveAnnouncement, setLiveAnnouncement] = useState("");
   const [realtimeAlerts, setRealtimeAlerts] = useState<RealtimeAlert[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [summaryViewOpen, setSummaryViewOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
   const [path, setPath] = useState("");
@@ -262,6 +267,31 @@ export default function App() {
   const current = commits.find((c) => c.hash === selected) ?? commits[0] ?? null;
   const repoName = repositories.find((repo) => repo.id === selectedRepo)?.name ?? selectedRepo;
   const refName = displayRefName(selectedRef, refs);
+  const toggleSummaryView = useCallback(() => setSummaryViewOpen((prev) => !prev), []);
+
+  // Drilldown intentionally routes group keys back through the existing search /
+  // path / author filters rather than tracking a separate hash highlight set.
+  // Filters already shape the timeline state and survive realtime refreshes.
+  const handleSummaryDrilldown = useCallback(
+    (_commitHashes: string[], context: { kind: "prefix" | "path" | "author"; key: string }) => {
+      if (context.kind === "prefix" && context.key !== "uncategorized") {
+        setSearch(`${context.key}:`);
+        setAuthor("");
+        setPath("");
+      } else if (context.kind === "path" && isSafeTopSegmentForPathFilter(context.key)) {
+        setPath(context.key);
+        setSearch("");
+        setAuthor("");
+      } else if (context.kind === "author") {
+        setAuthor(context.key);
+        setSearch("");
+        setPath("");
+      }
+      setSelected("");
+      setSummaryViewOpen(false);
+    },
+    [],
+  );
 
   async function refreshTimeline(
     repoId: string,
@@ -438,6 +468,8 @@ export default function App() {
           setPath(value);
           setSelected("");
         }}
+        summaryViewOpen={summaryViewOpen}
+        onToggleSummaryView={toggleSummaryView}
       />
       <div className="flex flex-1 overflow-hidden">
         <BranchSidebar
@@ -449,7 +481,18 @@ export default function App() {
           headHash={commits[0]?.shortHash ?? commits[0]?.hash.slice(0, 7)}
           alerts={realtimeAlerts}
         />
-        <CommitTimeline
+        <div className="flex flex-col overflow-hidden" style={{ flex: 1, minWidth: 0 }}>
+          {summaryViewOpen && selectedRepo ? (
+            <div className="overflow-y-auto" style={{ flexShrink: 0, maxHeight: "55%" }}>
+              <PeriodSummaryView
+                repoId={selectedRepo}
+                refName={selectedRef}
+                onDrilldown={handleSummaryDrilldown}
+                isQuiet={isQuiet}
+              />
+            </div>
+          ) : null}
+          <CommitTimeline
           commits={commits}
           selected={selected}
           onSelect={setSelected}
@@ -481,6 +524,7 @@ export default function App() {
             setCompareResult(null);
           }}
         />
+        </div>
         <DetailPanel commit={current} detail={detail} diff={diff} loading={detailLoading} error={error} />
       </div>
       <CommandPalette
@@ -497,6 +541,8 @@ export default function App() {
         livePaused={livePaused}
         quietMode={quietMode}
         isQuiet={isQuiet}
+        summaryViewOpen={summaryViewOpen}
+        onToggleSummaryView={toggleSummaryView}
         onToggleQuietMode={toggleQuietMode}
         onToggleLiveUpdates={toggleLiveUpdates}
         onSearchChange={(value) => {

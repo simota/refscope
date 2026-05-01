@@ -94,10 +94,61 @@ export async function compareRefs(repoId: string, base: string, target: string) 
   return getJson<CompareResult>(`/api/repos/${encodeURIComponent(repoId)}/compare?${params}`);
 }
 
-async function getJson<T>(path: string): Promise<T> {
+export type CommitsSummaryGroup = {
+  kind: "prefix" | "path" | "author";
+  key: string;
+  commitCount: number;
+  added: number;
+  deleted: number;
+  authors: string[];
+  sampleSubjects: string[];
+  commitHashes: string[];
+};
+
+export type CommitsSummary = {
+  period: { since: string; until: string; tz: "UTC" };
+  ref: { input: string; resolved: string };
+  observed: {
+    totalCommits: number;
+    totalAdded: number;
+    totalDeleted: number;
+    authorsCount: number;
+  };
+  groups: CommitsSummaryGroup[];
+  uncategorized:
+    | { kind: "prefix"; commitHashes: string[]; commitCount: number }
+    | null;
+  truncated: boolean;
+};
+
+export async function fetchCommitsSummary(
+  repoId: string,
+  params: {
+    since: string;
+    until: string;
+    groupBy?: "prefix" | "path" | "author";
+    ref?: string;
+  },
+  signal?: AbortSignal,
+) {
+  const search = new URLSearchParams();
+  if (params.since) search.set("since", params.since);
+  if (params.until) search.set("until", params.until);
+  if (params.groupBy) search.set("groupBy", params.groupBy);
+  if (params.ref) search.set("ref", params.ref);
+  return getJson<CommitsSummary>(
+    `/api/repos/${encodeURIComponent(repoId)}/commits/summary?${search}`,
+    signal,
+  );
+}
+
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { headers: { accept: "application/json" } });
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: { accept: "application/json" },
+      signal,
+    });
   } catch (error) {
     throw new Error(
       `Cannot reach API at ${API_BASE_URL}. Run ${API_RECOVERY_COMMAND} from the repository root, or start the API with RTGV_REPOS=viewer=/absolute/path pnpm dev:api if you want to inspect another repository.`,

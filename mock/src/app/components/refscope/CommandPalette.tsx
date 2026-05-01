@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileSearch, GitBranch, Hash, Moon, Pause, Play, Search, Tag } from "lucide-react";
+import { CalendarRange, FileSearch, GitBranch, Hash, Moon, Pause, Play, Search, Tag } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Commit, GitRef } from "./data";
 
@@ -22,6 +22,8 @@ export function CommandPalette({
   livePaused,
   quietMode,
   isQuiet,
+  summaryViewOpen,
+  onToggleSummaryView,
   onToggleQuietMode,
   onToggleLiveUpdates,
   onSearchChange,
@@ -39,6 +41,8 @@ export function CommandPalette({
   livePaused: boolean;
   quietMode: boolean;
   isQuiet: boolean;
+  summaryViewOpen: boolean;
+  onToggleSummaryView: () => void;
   onToggleQuietMode: () => void;
   onToggleLiveUpdates: () => void;
   onSearchChange: (value: string) => void;
@@ -131,7 +135,24 @@ export function CommandPalette({
       },
     };
 
-    return [...refCommands, quietCommand, liveCommand, ...copyCommand, ...filterCommands];
+    const summaryCommand: PaletteCommand = {
+      icon: CalendarRange,
+      label: "Toggle period summary",
+      hint: summaryViewOpen ? "on" : "off",
+      run: () => {
+        onToggleSummaryView();
+        onClose();
+      },
+    };
+
+    return [
+      ...refCommands,
+      summaryCommand,
+      quietCommand,
+      liveCommand,
+      ...copyCommand,
+      ...filterCommands,
+    ];
   }, [
     author,
     isQuiet,
@@ -143,11 +164,13 @@ export function CommandPalette({
     onSelectRef,
     onToggleLiveUpdates,
     onToggleQuietMode,
+    onToggleSummaryView,
     path,
     quietMode,
     refs,
     search,
     selectedCommit,
+    summaryViewOpen,
   ]);
 
   useEffect(() => {

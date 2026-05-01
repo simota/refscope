@@ -1,4 +1,4 @@
-import { ChevronDown, Search, Circle, Command, User, FileSearch, Moon } from "lucide-react";
+import { ChevronDown, Search, Circle, Command, User, FileSearch, Moon, CalendarRange } from "lucide-react";
 import type { GitRef, Repository } from "./data";
 
 export function TopBar({
@@ -25,6 +25,8 @@ export function TopBar({
   onAuthorChange,
   path,
   onPathChange,
+  summaryViewOpen,
+  onToggleSummaryView,
 }: {
   repositories: Repository[];
   selectedRepo: string;
@@ -49,6 +51,8 @@ export function TopBar({
   onAuthorChange: (value: string) => void;
   path: string;
   onPathChange: (value: string) => void;
+  summaryViewOpen: boolean;
+  onToggleSummaryView: () => void;
 }) {
   // In quiet mode, route the live indicator color to the muted token so chroma drops
   // without sacrificing the WCAG-validated text-on-panel contrast pairing.
@@ -254,6 +258,26 @@ export function TopBar({
               ? "LIVE"
               : status.toUpperCase()}
         </div>
+        <button
+          type="button"
+          className="rs-compact-button"
+          onClick={onToggleSummaryView}
+          aria-pressed={summaryViewOpen}
+          aria-label="Toggle period summary"
+          title="Period summary view"
+          style={
+            summaryViewOpen
+              ? {
+                  color: "var(--rs-text-primary)",
+                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
+                  background: "var(--rs-bg-elevated)",
+                }
+              : undefined
+          }
+        >
+          <CalendarRange size={11} aria-hidden style={{ marginRight: 4 }} />
+          Summary
+        </button>
         <button
           type="button"
           className="rs-compact-button"
