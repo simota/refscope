@@ -120,7 +120,7 @@ export function TopBar({
 
   return (
     <header
-      className="flex items-center gap-3 px-4 border-b"
+      className="flex items-center gap-3 px-4 border-b min-w-0 overflow-hidden"
       style={{
         height: 48,
         background: "var(--rs-bg-panel)",
@@ -199,8 +199,8 @@ export function TopBar({
         <ChevronDown size={12} />
       </label>
 
-      <div className="flex-1 flex items-center justify-center gap-2 px-4">
-        <div className="flex items-center gap-1.5 w-full max-w-2xl">
+      <div className="min-w-0 flex-1 flex items-center justify-center gap-2 px-4">
+        <div className="min-w-0 flex items-center gap-1.5 w-full max-w-2xl">
           <SearchModeSelector mode={searchMode} onChange={onSearchModeChange} />
           <div
             className="flex items-center gap-2 px-3 flex-1"
@@ -298,7 +298,10 @@ export function TopBar({
         </button>
       </div>
 
-      <div className="flex items-center gap-2" style={{ fontFamily: "var(--rs-mono)" }}>
+      <div
+        className="shrink-0 flex items-center gap-2"
+        style={{ fontFamily: "var(--rs-mono)" }}
+      >
         <div
           className="flex items-center gap-1.5 px-2"
           aria-label={
@@ -375,8 +378,10 @@ export function TopBar({
               : undefined
           }
         >
-          <CalendarRange size={11} aria-hidden style={{ marginRight: 4 }} />
-          {summaryViewOpen ? "Summary on" : "Summary"}
+          <CalendarRange size={11} aria-hidden />
+          <span className="hidden 2xl:inline" style={{ marginLeft: 4 }}>
+            {summaryViewOpen ? "Summary on" : "Summary"}
+          </span>
         </button>
         <button
           type="button"
@@ -395,8 +400,10 @@ export function TopBar({
               : undefined
           }
         >
-          <Moon size={11} aria-hidden style={{ marginRight: 4 }} />
-          {isQuiet ? "Quiet on" : "Quiet"}
+          <Moon size={11} aria-hidden />
+          <span className="hidden 2xl:inline" style={{ marginLeft: 4 }}>
+            {isQuiet ? "Quiet on" : "Quiet"}
+          </span>
         </button>
         <button
           type="button"
@@ -415,8 +422,10 @@ export function TopBar({
               : undefined
           }
         >
-          <Eye size={11} aria-hidden style={{ marginRight: 4 }} />
-          {isCvdSafe ? "CVD on" : "CVD"}
+          <Eye size={11} aria-hidden />
+          <span className="hidden 2xl:inline" style={{ marginLeft: 4 }}>
+            {isCvdSafe ? "CVD on" : "CVD"}
+          </span>
         </button>
         <Separator />
         <button
@@ -427,8 +436,10 @@ export function TopBar({
           aria-label="Refresh working tree"
           title="Refresh working tree (HEAD vs index + index vs worktree)"
         >
-          <RefreshCw size={11} aria-hidden style={{ marginRight: 4 }} />
-          Worktree
+          <RefreshCw size={11} aria-hidden />
+          <span className="hidden 2xl:inline" style={{ marginLeft: 4 }}>
+            Worktree
+          </span>
         </button>
         <button
           type="button"
