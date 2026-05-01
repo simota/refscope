@@ -17,7 +17,7 @@ export function createGitService(config) {
       repo,
       [
         "for-each-ref",
-        "--format=%(refname)%00%(objectname)%00%(committerdate:iso-strict)",
+        "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(committerdate:iso-strict)",
         "refs/heads",
         "refs/tags",
         "refs/remotes",
@@ -30,11 +30,11 @@ export function createGitService(config) {
       .split("\n")
       .filter(Boolean)
       .map((line) => {
-        const [name, hash, updatedAt] = line.split(COMMIT_FIELD_SEPARATOR);
+        const [name, objectHash, peeledHash, updatedAt] = line.split(COMMIT_FIELD_SEPARATOR);
         return {
           name,
           shortName: shortRefName(name),
-          hash,
+          hash: peeledHash || objectHash,
           type: refType(name),
           updatedAt: updatedAt || null,
         };
@@ -48,9 +48,12 @@ export function createGitService(config) {
         "log",
         "--max-count=50",
         "--date=iso-strict",
-        `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%P%x00%an%x00%aI%x00%s%x00%D%x00%G?`,
+        `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%P%x00%an%x00%aI%x00%s%x00%D`,
+        "--no-show-signature",
         "--numstat",
-        `${fromHash}..${toHash}`,
+        "--no-ext-diff",
+        "--no-textconv",
+        ...commitRangeLogArgs(fromHash, toHash),
         "--",
       ],
       { timeoutMs: config.gitTimeoutMs },
@@ -61,7 +64,7 @@ export function createGitService(config) {
 
   async function isAncestor(repo, oldHash, newHash) {
     try {
-      await runGit(repo, ["merge-base", "--is-ancestor", oldHash, newHash], {
+      await runGit(repo, ancestorMergeBaseArgs(oldHash, newHash), {
         timeoutMs: config.gitTimeoutMs,
       });
       return true;
@@ -184,29 +187,22 @@ export function createGitService(config) {
       if (!path.ok) {
         return { status: 400, body: { error: path.error } };
       }
+      const commitishRef = await resolveCommitishRevision(repo, ref, config.gitTimeoutMs);
+      if (!commitishRef.ok) {
+        return commitishRef.result;
+      }
 
       const searchArgs = search.value
-        ? ["--regexp-ignore-case", "--fixed-strings", `--grep=${search.value}`]
+        ? ["--regexp-ignore-case", "--extended-regexp", `--grep=${escapeGitRegexLiteral(search.value)}`]
         : [];
       const authorArgs = author.value
-        ? ["--regexp-ignore-case", `--author=${escapeGitRegexLiteral(author.value)}`]
+        ? ["--regexp-ignore-case", "--extended-regexp", `--author=${escapeGitRegexLiteral(author.value)}`]
         : [];
       const pathArgs = path.value ? [formatLiteralPathspec(path.value)] : [];
 
       const { stdout } = await runGit(
         repo,
-        [
-          "log",
-          `--max-count=${limit.value}`,
-          "--date=iso-strict",
-          ...searchArgs,
-          ...authorArgs,
-          `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%P%x00%an%x00%aI%x00%s%x00%D%x00%G?`,
-          "--numstat",
-          ref,
-          "--",
-          ...pathArgs,
-        ],
+        commitListLogArgs(limit.value, searchArgs, authorArgs, commitishRef.hash, pathArgs),
         { timeoutMs: config.gitTimeoutMs },
       );
 
@@ -217,27 +213,25 @@ export function createGitService(config) {
       if (!isValidObjectId(hash)) {
         return { status: 400, body: { error: "Invalid commit hash" } };
       }
+      const commitObject = await validateCommitObject(repo, hash, config.gitTimeoutMs);
+      if (!commitObject.ok) {
+        return commitObject.result;
+      }
 
       const [metadata, numstat, nameStatus] = await Promise.all([
         runGit(
           repo,
-          [
-            "show",
-            "-s",
-            "--date=iso-strict",
-            "--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00%D%x00%G?",
-            hash,
-          ],
+          commitMetadataShowArgs(hash),
           { timeoutMs: config.gitTimeoutMs },
         ),
         runGit(
           repo,
-          ["show", "--format=", "--numstat", "--find-renames", "--no-color", hash, "--"],
+          commitNumstatShowArgs(hash),
           { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
         ),
         runGit(
           repo,
-          ["show", "--format=", "--name-status", "--find-renames", "--no-color", hash, "--"],
+          commitNameStatusShowArgs(hash),
           { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
         ),
       ]);
@@ -265,19 +259,14 @@ export function createGitService(config) {
       if (!isValidObjectId(hash)) {
         return { status: 400, body: { error: "Invalid commit hash" } };
       }
+      const commitObject = await validateCommitObject(repo, hash, config.gitTimeoutMs);
+      if (!commitObject.ok) {
+        return commitObject.result;
+      }
 
       const { stdout } = await runGit(
         repo,
-        [
-          "show",
-          "--format=",
-          "--no-ext-diff",
-          "--patch",
-          "--find-renames",
-          "--stat",
-          "--no-color",
-          hash,
-        ],
+        commitDiffShowArgs(hash),
         { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
       );
 
@@ -298,18 +287,29 @@ export function createGitService(config) {
       }
 
       const { base, target } = queryValues.value;
+      const [baseRevision, targetRevision] = await Promise.all([
+        resolveCommitishRevision(repo, base, config.gitTimeoutMs),
+        resolveCommitishRevision(repo, target, config.gitTimeoutMs),
+      ]);
+      if (!baseRevision.ok) {
+        return baseRevision.result;
+      }
+      if (!targetRevision.ok) {
+        return targetRevision.result;
+      }
+
       const [ahead, behind, numstat, mergeBase] = await Promise.all([
-        runGit(repo, ["rev-list", "--count", `${base}..${target}`], {
+        runGit(repo, compareRevListArgs(targetRevision.hash, baseRevision.hash), {
           timeoutMs: config.gitTimeoutMs,
         }),
-        runGit(repo, ["rev-list", "--count", `${target}..${base}`], {
+        runGit(repo, compareRevListArgs(baseRevision.hash, targetRevision.hash), {
           timeoutMs: config.gitTimeoutMs,
         }),
-        runGit(repo, ["diff", "--numstat", "--no-ext-diff", "--no-color", `${base}..${target}`, "--"], {
+        runGit(repo, compareNumstatArgs(baseRevision.hash, targetRevision.hash), {
           timeoutMs: config.gitTimeoutMs,
           maxBytes: config.diffMaxBytes,
         }),
-        readMergeBase(repo, base, target, config.gitTimeoutMs),
+        readMergeBase(repo, baseRevision.hash, targetRevision.hash, config.gitTimeoutMs),
       ]);
       const stats = parseNumstatSummary(numstat.stdout.split("\n"));
 
@@ -325,9 +325,9 @@ export function createGitService(config) {
           added: stats.added,
           deleted: stats.deleted,
           commands: {
-            log: `git log --oneline ${base}..${target}`,
-            stat: `git diff --stat ${base}..${target}`,
-            diff: `git diff ${base}..${target}`,
+            log: `git log --oneline ${target} --not ${base}`,
+            stat: `git diff --stat ${base} ${target}`,
+            diff: `git diff ${base} ${target}`,
           },
         },
       };
@@ -335,9 +335,48 @@ export function createGitService(config) {
   };
 }
 
+export async function resolveCommitishRevision(repo, revision, timeoutMs) {
+  try {
+    const { stdout } = await runGit(repo, commitishRevParseArgs(revision), {
+      timeoutMs,
+      maxBytes: 128,
+    });
+    return { ok: true, hash: stdout.trim() };
+  } catch (error) {
+    if (error instanceof GitCommandError) {
+      return {
+        ok: false,
+        result: { status: 404, body: { error: "Ref not found or not a commit" } },
+      };
+    }
+    throw error;
+  }
+}
+
+async function validateCommitObject(repo, hash, timeoutMs) {
+  try {
+    const { stdout } = await runGit(repo, commitObjectTypeArgs(hash), {
+      timeoutMs,
+      maxBytes: 128,
+    });
+    if (stdout.trim() !== "commit") {
+      return {
+        ok: false,
+        result: { status: 400, body: { error: "Hash does not identify a commit" } },
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof GitCommandError) {
+      return { ok: false, result: { status: 404, body: { error: "Commit not found" } } };
+    }
+    throw error;
+  }
+}
+
 async function readMergeBase(repo, base, target, timeoutMs) {
   try {
-    const { stdout } = await runGit(repo, ["merge-base", base, target], { timeoutMs });
+    const { stdout } = await runGit(repo, compareMergeBaseArgs(base, target), { timeoutMs });
     return stdout.trim() || null;
   } catch (error) {
     if (error instanceof GitCommandError && error.exitCode === 1) {
@@ -377,6 +416,123 @@ function readCompareQuery(query) {
 
 function isValidCompareRevision(value) {
   return isValidObjectId(value) || isValidGitRef(value);
+}
+
+export function compareRevListArgs(fromRevision, notRevision) {
+  return ["rev-list", "--count", "--not", notRevision, "--not", "--end-of-options", fromRevision];
+}
+
+export function commitRangeLogArgs(fromRevision, toRevision) {
+  return ["--not", fromRevision, "--not", "--end-of-options", toRevision];
+}
+
+export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathArgs) {
+  return [
+    "log",
+    `--max-count=${limit}`,
+    "--date=iso-strict",
+    ...searchArgs,
+    ...authorArgs,
+    `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%P%x00%an%x00%aI%x00%s%x00%D`,
+    "--no-show-signature",
+    "--numstat",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--end-of-options",
+    revision,
+    "--",
+    ...pathArgs,
+  ];
+}
+
+export function commitishRevParseArgs(revision) {
+  return ["rev-parse", "--verify", "--quiet", "--end-of-options", `${revision}^{commit}`];
+}
+
+export function compareNumstatArgs(base, target) {
+  return [
+    "diff",
+    "--numstat",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--end-of-options",
+    base,
+    target,
+    "--",
+  ];
+}
+
+export function compareMergeBaseArgs(base, target) {
+  return ["merge-base", "--end-of-options", base, target];
+}
+
+export function ancestorMergeBaseArgs(oldHash, newHash) {
+  return ["merge-base", "--is-ancestor", "--end-of-options", oldHash, newHash];
+}
+
+export function commitObjectTypeArgs(hash) {
+  return ["cat-file", "-t", "--end-of-options", hash];
+}
+
+export function commitMetadataShowArgs(hash) {
+  return [
+    "show",
+    "-s",
+    "--date=iso-strict",
+    "--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00%D",
+    "--no-show-signature",
+    "--end-of-options",
+    hash,
+  ];
+}
+
+export function commitNumstatShowArgs(hash) {
+  return [
+    "show",
+    "--format=",
+    "--no-show-signature",
+    "--numstat",
+    "--find-renames",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--end-of-options",
+    hash,
+    "--",
+  ];
+}
+
+export function commitNameStatusShowArgs(hash) {
+  return [
+    "show",
+    "--format=",
+    "--no-show-signature",
+    "--name-status",
+    "--find-renames",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--end-of-options",
+    hash,
+    "--",
+  ];
+}
+
+export function commitDiffShowArgs(hash) {
+  return [
+    "show",
+    "--format=",
+    "--no-show-signature",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--patch",
+    "--find-renames",
+    "--stat",
+    "--no-color",
+    "--end-of-options",
+    hash,
+  ];
 }
 
 export function compareRefSnapshots(previousSnapshot, currentSnapshot) {
@@ -508,12 +664,35 @@ export function parseChangedFiles(numstatOutput, nameStatusOutput) {
 function parseNumstatLine(line) {
   const parts = line.split("\t");
   if (parts.length < 3) return null;
-  const path = parts.at(-1);
+  const path = normalizeNumstatPath(parts.at(-1));
   return {
     path,
     added: parseStatCount(parts[0]),
     deleted: parseStatCount(parts[1]),
   };
+}
+
+function normalizeNumstatPath(filePath) {
+  if (!filePath?.includes(" => ")) {
+    return filePath;
+  }
+
+  const arrowIndex = filePath.lastIndexOf(" => ");
+  const beforeArrow = filePath.slice(0, arrowIndex);
+  const afterArrow = filePath.slice(arrowIndex + " => ".length);
+  const braceIndex = beforeArrow.lastIndexOf("{");
+  if (braceIndex === -1) {
+    return afterArrow;
+  }
+
+  const closingBraceIndex = afterArrow.indexOf("}");
+  if (closingBraceIndex === -1) {
+    return afterArrow;
+  }
+
+  return `${beforeArrow.slice(0, braceIndex)}${afterArrow.slice(0, closingBraceIndex)}${afterArrow.slice(
+    closingBraceIndex + 1,
+  )}`;
 }
 
 export function parseNumstatSummary(lines) {

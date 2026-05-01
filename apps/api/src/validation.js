@@ -3,6 +3,30 @@ const OBJECT_ID_PATTERN = /^[A-Fa-f0-9]{40}$/;
 const REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,199}$/;
 const POSITIVE_INTEGER_PATTERN = /^[0-9]+$/;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+const DISALLOWED_PSEUDO_REFS = new Set([
+  "AUTO_MERGE",
+  "BISECT_HEAD",
+  "BISECT_EXPECTED_REV",
+  "CHERRY_PICK_HEAD",
+  "FETCH_HEAD",
+  "MERGE_AUTOSTASH",
+  "MERGE_HEAD",
+  "ORIG_HEAD",
+  "REBASE_HEAD",
+  "REVERT_HEAD",
+  "stash",
+  "refs/stash",
+]);
+const DISALLOWED_INTERNAL_REF_PREFIXES = [
+  "refs/bisect/",
+  "refs/notes/",
+  "refs/original/",
+  "refs/prefetch/",
+  "refs/replace/",
+  "refs/rewritten/",
+  "refs/worktree/",
+];
+const ALLOWED_PUBLIC_REF_PREFIXES = ["refs/heads/", "refs/remotes/", "refs/tags/"];
 
 export function isValidRepoId(value) {
   return typeof value === "string" && REPO_ID_PATTERN.test(value);
@@ -17,6 +41,9 @@ export function isValidGitRef(value) {
     typeof value !== "string" ||
     !REF_PATTERN.test(value) ||
     value === "@" ||
+    DISALLOWED_PSEUDO_REFS.has(value) ||
+    (value.startsWith("refs/") && !ALLOWED_PUBLIC_REF_PREFIXES.some((prefix) => value.startsWith(prefix))) ||
+    DISALLOWED_INTERNAL_REF_PREFIXES.some((prefix) => value.startsWith(prefix)) ||
     value.includes("..") ||
     value.includes("@{") ||
     value.endsWith("/") ||

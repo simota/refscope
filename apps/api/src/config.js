@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isValidRepoId } from "./validation.js";
+import { MAX_GIT_OUTPUT_BYTES } from "./gitRunner.js";
 
 export const DEFAULT_PORT = 4175;
 const POSITIVE_DECIMAL_INTEGER_PATTERN = /^[0-9]+$/;
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 export function loadConfig(env = process.env) {
   const repositories = parseRepositoryAllowlist(env.RTGV_REPOS ?? "");
@@ -13,8 +15,14 @@ export function loadConfig(env = process.env) {
   return {
     host: env.HOST ?? "127.0.0.1",
     port: parsePort(env.PORT, DEFAULT_PORT),
-    gitTimeoutMs: parsePositiveInteger(env.RTGV_GIT_TIMEOUT_MS, 5000),
-    diffMaxBytes: parsePositiveInteger(env.RTGV_DIFF_MAX_BYTES, 512_000),
+    gitTimeoutMs: parsePositiveInteger(env.RTGV_GIT_TIMEOUT_MS, 5000, {
+      max: MAX_TIMEOUT_MS,
+      name: "RTGV_GIT_TIMEOUT_MS",
+    }),
+    diffMaxBytes: parsePositiveInteger(env.RTGV_DIFF_MAX_BYTES, 512_000, {
+      max: MAX_GIT_OUTPUT_BYTES,
+      name: "RTGV_DIFF_MAX_BYTES",
+    }),
     refPollMs: parsePositiveInteger(env.RTGV_REF_POLL_MS, 2000),
     repositories,
     allowedOrigins,
@@ -121,7 +129,7 @@ function parsePort(value, fallback) {
   return parsed;
 }
 
-function parsePositiveInteger(value, fallback) {
+function parsePositiveInteger(value, fallback, { max, name } = {}) {
   if (value == null || value === "") {
     return fallback;
   }
@@ -132,6 +140,9 @@ function parsePositiveInteger(value, fallback) {
   const parsed = Number(normalized);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`Expected a positive decimal integer, got: ${value}`);
+  }
+  if (max != null && parsed > max) {
+    throw new Error(`${name} must be between 1 and ${max}`);
   }
   return parsed;
 }

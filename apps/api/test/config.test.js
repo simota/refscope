@@ -24,6 +24,44 @@ test("validates public identifiers conservatively", () => {
   assert.equal(isValidGitRef("refs/heads/main"), true);
   assert.equal(isValidGitRef("HEAD"), true);
   assert.equal(isValidGitRef("refs/remotes/origin/HEAD"), true);
+  assert.equal(isValidGitRef("AUTO_MERGE"), false);
+  assert.equal(isValidGitRef("BISECT_HEAD"), false);
+  assert.equal(isValidGitRef("CHERRY_PICK_HEAD"), false);
+  assert.equal(isValidGitRef("FETCH_HEAD"), false);
+  assert.equal(isValidGitRef("ORIG_HEAD"), false);
+  assert.equal(isValidGitRef("MERGE_AUTOSTASH"), false);
+  assert.equal(isValidGitRef("REBASE_HEAD"), false);
+  assert.equal(isValidGitRef("BISECT_EXPECTED_REV"), false);
+  assert.equal(isValidGitRef("REVERT_HEAD"), false);
+  assert.equal(isValidGitRef("stash"), false);
+  assert.equal(isValidGitRef("refs/stash"), false);
+  assert.equal(isValidGitRef("refs/bisect/bad"), false);
+  assert.equal(isValidGitRef("refs/notes/commits"), false);
+  assert.equal(isValidGitRef("refs/original/refs/heads/main"), false);
+  assert.equal(isValidGitRef("refs/prefetch/remotes/origin/main"), false);
+  assert.equal(isValidGitRef("refs/changes/01/1/1"), false);
+  assert.equal(isValidGitRef("refs/keep-around/" + "a".repeat(40)), false);
+  assert.equal(isValidGitRef("refs/pull/1/head"), false);
+  assert.equal(isValidGitRef("refs/replace/" + "a".repeat(40)), false);
+  assert.equal(isValidGitRef("refs/rewritten/main"), false);
+  assert.equal(isValidGitRef("refs/worktree/linked/HEAD"), false);
+  assert.equal(isValidGitRef("refs/heads/AUTO_MERGE"), true);
+  assert.equal(isValidGitRef("refs/heads/BISECT_HEAD"), true);
+  assert.equal(isValidGitRef("refs/heads/CHERRY_PICK_HEAD"), true);
+  assert.equal(isValidGitRef("refs/heads/FETCH_HEAD"), true);
+  assert.equal(isValidGitRef("refs/heads/MERGE_AUTOSTASH"), true);
+  assert.equal(isValidGitRef("refs/heads/REBASE_HEAD"), true);
+  assert.equal(isValidGitRef("refs/heads/REVERT_HEAD"), true);
+  assert.equal(isValidGitRef("refs/heads/stash"), true);
+  assert.equal(isValidGitRef("refs/heads/notes/commits"), true);
+  assert.equal(isValidGitRef("refs/heads/original"), true);
+  assert.equal(isValidGitRef("refs/heads/prefetch/origin/main"), true);
+  assert.equal(isValidGitRef("refs/heads/changes/01/1/1"), true);
+  assert.equal(isValidGitRef("refs/heads/keep-around/main"), true);
+  assert.equal(isValidGitRef("refs/heads/pull/1/head"), true);
+  assert.equal(isValidGitRef("refs/heads/replace/main"), true);
+  assert.equal(isValidGitRef("refs/heads/rewritten/main"), true);
+  assert.equal(isValidGitRef("refs/heads/worktree/linked"), true);
   assert.equal(isValidGitRef("--upload-pack=sh"), false);
   assert.equal(isValidGitRef("main..secret"), false);
   assert.equal(isValidGitRef("main//secret"), false);
@@ -153,6 +191,14 @@ test("requires decimal positive integer runtime configuration", () => {
   assert.throws(
     () => loadConfig({ RTGV_DIFF_MAX_BYTES: "0", RTGV_REPOS: "" }),
     /positive decimal integer/,
+  );
+  assert.throws(
+    () => loadConfig({ RTGV_DIFF_MAX_BYTES: "16777217", RTGV_REPOS: "" }),
+    /RTGV_DIFF_MAX_BYTES must be between 1 and 16777216/,
+  );
+  assert.throws(
+    () => loadConfig({ RTGV_GIT_TIMEOUT_MS: "2147483648", RTGV_REPOS: "" }),
+    /RTGV_GIT_TIMEOUT_MS must be between 1 and 2147483647/,
   );
   assert.throws(
     () => loadConfig({ RTGV_REF_POLL_MS: "-1", RTGV_REPOS: "" }),
