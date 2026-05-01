@@ -418,9 +418,8 @@ function formatSignatureStatus(status: Commit["signatureStatus"]) {
 function PanelShell({ children }: { children: React.ReactNode }) {
   return (
     <aside
-      className="flex flex-col overflow-hidden"
+      className="flex flex-col overflow-hidden h-full w-full"
       style={{
-        width: 460,
         background: "var(--rs-bg-panel)",
         borderLeft: "1px solid var(--rs-border)",
       }}

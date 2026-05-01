@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ImperativePanelHandle } from "react-resizable-panels";
 import { TopBar } from "./components/refscope/TopBar";
 import { BranchSidebar } from "./components/refscope/BranchSidebar";
 import { CommitTimeline } from "./components/refscope/CommitTimeline";
@@ -8,7 +9,13 @@ import {
   PeriodSummaryView,
   isSafeTopSegmentForPathFilter,
 } from "./components/refscope/PeriodSummaryView";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "./components/ui/resizable";
 import { useQuietMode } from "./hooks/useQuietMode";
+import { useLayoutPrefs } from "./hooks/useLayoutPrefs";
 import type {
   Commit,
   CommitDetail,
@@ -70,6 +77,26 @@ export default function App() {
   const pendingRealtimeEventsRef = useRef<Array<() => void>>([]);
   const realtimeNewCommitHashesRef = useRef<Set<string>>(new Set());
   const { quietMode, prefersReducedMotion, isQuiet, toggleQuietMode } = useQuietMode();
+  const {
+    sidebarCollapsed,
+    panelSizes,
+    setSidebarCollapsed,
+    toggleSidebar,
+    setPanelSizes,
+  } = useLayoutPrefs();
+  const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
+  // Track collapse intent vs. actual panel state so the imperative API is only
+  // called when they diverge — react-resizable-panels' collapse() is idempotent
+  // but extra calls during drag would fight user input.
+  useEffect(() => {
+    const handle = sidebarPanelRef.current;
+    if (!handle) return;
+    if (sidebarCollapsed && !handle.isCollapsed()) {
+      handle.collapse();
+    } else if (!sidebarCollapsed && handle.isCollapsed()) {
+      handle.expand();
+    }
+  }, [sidebarCollapsed]);
   const isQuietRef = useRef(isQuiet);
   const quietPendingCountRef = useRef(0);
   const previousIsQuietRef = useRef(isQuiet);
@@ -478,71 +505,117 @@ export default function App() {
         }}
         summaryViewOpen={summaryViewOpen}
         onToggleSummaryView={toggleSummaryView}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={toggleSidebar}
       />
-      <div className="flex flex-1 overflow-hidden">
-        <BranchSidebar
-          refs={refs}
-          selectedRef={selectedRef}
-          onSelectRef={(ref) => {
-            setSelectedRef(ref);
-          }}
-          headHash={commits[0]?.shortHash ?? commits[0]?.hash.slice(0, 7)}
-          alerts={realtimeAlerts}
-        />
-        <div className="flex flex-col overflow-hidden" style={{ flex: 1, minWidth: 0 }}>
-          {summaryViewOpen && selectedRepo ? (
-            <div className="overflow-y-auto" style={{ flexShrink: 0, maxHeight: "55%" }}>
-              <PeriodSummaryView
-                repoId={selectedRepo}
-                refName={selectedRef}
-                onDrilldown={handleSummaryDrilldown}
-                isQuiet={isQuiet}
-              />
-            </div>
-          ) : null}
-          <CommitTimeline
-          commits={commits}
-          selected={selected}
-          onSelect={setSelected}
-          loading={loading}
-          error={error}
-          eventNotice={eventNotice}
-          eventStatus={eventStatus}
-          livePaused={livePaused}
-          pendingUpdates={pendingUpdates}
-          liveAnnouncement={liveAnnouncement}
-          activeFilters={activeFilters(search, author, path)}
-          refs={refs}
-          selectedRef={selectedRef}
-          selectedCommit={current}
-          selectionNotice={selectionNotice}
-          compareBase={compareBase}
-          compareTarget={compareTarget}
-          compareResult={compareResult}
-          compareLoading={compareLoading}
-          onCompareBaseChange={setCompareBase}
-          onCompareTargetChange={setCompareTarget}
-          onPinSelectedAsBase={() => {
-            if (current) setCompareBase(current.hash);
-          }}
-          onPinCurrentRefAsTarget={() => setCompareTarget(selectedRef)}
-          onClearCompare={() => {
-            setCompareBase("");
-            setCompareTarget("");
-            setCompareResult(null);
-          }}
-        />
-        </div>
-        <DetailPanel
-          commit={current}
-          detail={detail}
-          diff={diff}
-          loading={detailLoading}
-          error={error}
-          diffFullscreen={diffFullscreen}
-          onDiffFullscreenChange={setDiffFullscreen}
-        />
-      </div>
+      <ResizablePanelGroup
+        direction="horizontal"
+        className="flex flex-1 overflow-hidden"
+        onLayout={(layout) => {
+          // layout reflects the live order of panels; when the sidebar is collapsed
+          // it is still present (collapsedSize=0) so the array length stays at 3.
+          if (layout.length !== 3) return;
+          const [sidebar, center, detail] = layout;
+          // Skip writes triggered by the collapse animation itself — when the
+          // sidebar is at collapsedSize 0, the other two panels absorb its share
+          // and we don't want to overwrite the user's last drag-resized ratios.
+          if (sidebar < 1) return;
+          setPanelSizes({ sidebar, center, detail });
+        }}
+      >
+        <ResizablePanel
+          id="rs-sidebar"
+          order={1}
+          ref={sidebarPanelRef}
+          collapsible
+          collapsedSize={0}
+          defaultSize={panelSizes.sidebar}
+          minSize={12}
+          maxSize={30}
+          onCollapse={() => setSidebarCollapsed(true)}
+          onExpand={() => setSidebarCollapsed(false)}
+        >
+          <BranchSidebar
+            refs={refs}
+            selectedRef={selectedRef}
+            onSelectRef={(ref) => {
+              setSelectedRef(ref);
+            }}
+            headHash={commits[0]?.shortHash ?? commits[0]?.hash.slice(0, 7)}
+            alerts={realtimeAlerts}
+          />
+        </ResizablePanel>
+        <ResizableHandle withHandle aria-label="Resize branch sidebar" />
+        <ResizablePanel
+          id="rs-center"
+          order={2}
+          defaultSize={panelSizes.center}
+          minSize={25}
+        >
+          <div className="flex flex-col overflow-hidden h-full">
+            {summaryViewOpen && selectedRepo ? (
+              <div className="overflow-y-auto" style={{ flexShrink: 0, maxHeight: "55%" }}>
+                <PeriodSummaryView
+                  repoId={selectedRepo}
+                  refName={selectedRef}
+                  onDrilldown={handleSummaryDrilldown}
+                  isQuiet={isQuiet}
+                />
+              </div>
+            ) : null}
+            <CommitTimeline
+              commits={commits}
+              selected={selected}
+              onSelect={setSelected}
+              loading={loading}
+              error={error}
+              eventNotice={eventNotice}
+              eventStatus={eventStatus}
+              livePaused={livePaused}
+              pendingUpdates={pendingUpdates}
+              liveAnnouncement={liveAnnouncement}
+              activeFilters={activeFilters(search, author, path)}
+              refs={refs}
+              selectedRef={selectedRef}
+              selectedCommit={current}
+              selectionNotice={selectionNotice}
+              compareBase={compareBase}
+              compareTarget={compareTarget}
+              compareResult={compareResult}
+              compareLoading={compareLoading}
+              onCompareBaseChange={setCompareBase}
+              onCompareTargetChange={setCompareTarget}
+              onPinSelectedAsBase={() => {
+                if (current) setCompareBase(current.hash);
+              }}
+              onPinCurrentRefAsTarget={() => setCompareTarget(selectedRef)}
+              onClearCompare={() => {
+                setCompareBase("");
+                setCompareTarget("");
+                setCompareResult(null);
+              }}
+            />
+          </div>
+        </ResizablePanel>
+        <ResizableHandle withHandle aria-label="Resize detail panel" />
+        <ResizablePanel
+          id="rs-detail"
+          order={3}
+          defaultSize={panelSizes.detail}
+          minSize={25}
+          maxSize={70}
+        >
+          <DetailPanel
+            commit={current}
+            detail={detail}
+            diff={diff}
+            loading={detailLoading}
+            error={error}
+            diffFullscreen={diffFullscreen}
+            onDiffFullscreenChange={setDiffFullscreen}
+          />
+        </ResizablePanel>
+      </ResizablePanelGroup>
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -564,6 +637,8 @@ export default function App() {
         diffAvailable={Boolean(current) && (Boolean(diff.diff) || diff.truncated)}
         diffFullscreen={diffFullscreen}
         onToggleDiffFullscreen={() => setDiffFullscreen((prev) => !prev)}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={toggleSidebar}
         onSearchChange={(value) => {
           setSearch(value);
           setSelected("");

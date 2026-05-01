@@ -1,4 +1,15 @@
-import { ChevronDown, Search, Circle, Command, User, FileSearch, Moon, CalendarRange } from "lucide-react";
+import {
+  ChevronDown,
+  Search,
+  Circle,
+  Command,
+  User,
+  FileSearch,
+  Moon,
+  CalendarRange,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from "lucide-react";
 import type { GitRef, Repository } from "./data";
 
 export function TopBar({
@@ -27,6 +38,8 @@ export function TopBar({
   onPathChange,
   summaryViewOpen,
   onToggleSummaryView,
+  sidebarCollapsed,
+  onToggleSidebar,
 }: {
   repositories: Repository[];
   selectedRepo: string;
@@ -53,6 +66,8 @@ export function TopBar({
   onPathChange: (value: string) => void;
   summaryViewOpen: boolean;
   onToggleSummaryView: () => void;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
 }) {
   // In quiet mode, route the live indicator color to the muted token so chroma drops
   // without sacrificing the WCAG-validated text-on-panel contrast pairing.
@@ -258,6 +273,30 @@ export function TopBar({
               ? "LIVE"
               : status.toUpperCase()}
         </div>
+        <button
+          type="button"
+          className="rs-compact-button"
+          onClick={onToggleSidebar}
+          aria-pressed={sidebarCollapsed}
+          aria-label={sidebarCollapsed ? "Show branch sidebar" : "Hide branch sidebar"}
+          title={sidebarCollapsed ? "Show branch sidebar" : "Hide branch sidebar"}
+          style={
+            sidebarCollapsed
+              ? {
+                  color: "var(--rs-text-primary)",
+                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
+                  background: "var(--rs-bg-elevated)",
+                }
+              : undefined
+          }
+        >
+          {sidebarCollapsed ? (
+            <PanelLeftOpen size={11} aria-hidden style={{ marginRight: 4 }} />
+          ) : (
+            <PanelLeftClose size={11} aria-hidden style={{ marginRight: 4 }} />
+          )}
+          {sidebarCollapsed ? "Show" : "Hide"}
+        </button>
         <button
           type="button"
           className="rs-compact-button"

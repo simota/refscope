@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarRange, FileSearch, GitBranch, Hash, Maximize2, Moon, Pause, Play, Search, Tag } from "lucide-react";
+import { CalendarRange, FileSearch, GitBranch, Hash, Maximize2, Moon, PanelLeftClose, Pause, Play, Search, Tag } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Commit, GitRef } from "./data";
 
@@ -32,6 +32,8 @@ export function CommandPalette({
   diffAvailable,
   diffFullscreen,
   onToggleDiffFullscreen,
+  sidebarCollapsed,
+  onToggleSidebar,
 }: {
   open: boolean;
   onClose: () => void;
@@ -54,6 +56,8 @@ export function CommandPalette({
   diffAvailable: boolean;
   diffFullscreen: boolean;
   onToggleDiffFullscreen: () => void;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -151,6 +155,16 @@ export function CommandPalette({
       },
     };
 
+    const sidebarCommand: PaletteCommand = {
+      icon: PanelLeftClose,
+      label: "Toggle branch sidebar",
+      hint: sidebarCollapsed ? "hidden" : "shown",
+      run: () => {
+        onToggleSidebar();
+        onClose();
+      },
+    };
+
     // Only surface the fullscreen command when there's actually a diff to show.
     // Mirrors the copyCommand pattern: hide entirely rather than disable, so the
     // palette stays focused on currently-actionable commands.
@@ -170,6 +184,7 @@ export function CommandPalette({
 
     return [
       ...refCommands,
+      sidebarCommand,
       summaryCommand,
       quietCommand,
       liveCommand,
@@ -191,12 +206,14 @@ export function CommandPalette({
     onToggleDiffFullscreen,
     onToggleLiveUpdates,
     onToggleQuietMode,
+    onToggleSidebar,
     onToggleSummaryView,
     path,
     quietMode,
     refs,
     search,
     selectedCommit,
+    sidebarCollapsed,
     summaryViewOpen,
   ]);
 

@@ -20,9 +20,8 @@ export function BranchSidebar({
 
   return (
     <aside
-      className="flex flex-col overflow-y-auto"
+      className="flex flex-col overflow-y-auto h-full w-full"
       style={{
-        width: 248,
         background: "var(--rs-bg-panel)",
         borderRight: "1px solid var(--rs-border)",
       }}
