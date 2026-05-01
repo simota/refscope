@@ -3,10 +3,27 @@ import {
   isValidGitRef,
   isValidObjectId,
   parseAuthorQuery,
+  parseDateQuery,
+  parseGroupByQuery,
   parseLimitQuery,
   parsePathQuery,
   parseSearchQuery,
 } from "./validation.js";
+
+// Hard cap on commits returned by /commits/summary. We read +1
+// (`SUMMARY_READ_LIMIT`) to detect over-cap repositories and surface
+// `truncated: true` in the payload without exposing the extra commit.
+export const SUMMARY_COMMIT_HARD_CAP = 200;
+export const SUMMARY_READ_LIMIT = SUMMARY_COMMIT_HARD_CAP + 1;
+export const SUMMARY_SAMPLE_SUBJECTS_MAX = 10;
+export const SUMMARY_DEFAULT_GROUP_BY = "prefix";
+
+// Conventional-commit prefix grouping uses a literal regex match on the
+// commit subject. `feat`, `fix`, `chore`, … with optional scope, then a colon
+// + space. Subjects that do not match are kept as observed data and isolated
+// into the `uncategorized` bucket — we never *infer* a category from text
+// content.
+const CONVENTIONAL_COMMIT_PREFIX_PATTERN = /^([a-z][a-z0-9-]*)(?:\([^)]*\))?:\s/;
 
 const COMMIT_FIELD_SEPARATOR = "\u0000";
 const COMMIT_RECORD_SEPARATOR = "\u001e";
@@ -276,6 +293,56 @@ export function createGitService(config) {
           hash,
           diff: stdout,
           maxBytes: config.diffMaxBytes,
+        },
+      };
+    },
+
+    async summarizeCommits(repo, query) {
+      const queryValues = readSummaryQuery(query);
+      if (!queryValues.ok) {
+        return { status: 400, body: { error: queryValues.error } };
+      }
+
+      const { ref, since, until, groupBy } = queryValues.value;
+      if (!isValidGitRef(ref)) {
+        return { status: 400, body: { error: "Invalid ref parameter" } };
+      }
+      const commitishRef = await resolveCommitishRevision(repo, ref, config.gitTimeoutMs);
+      if (!commitishRef.ok) {
+        return commitishRef.result;
+      }
+
+      const { stdout } = await runGit(
+        repo,
+        commitSummaryLogArgs({
+          since,
+          until,
+          revision: commitishRef.hash,
+          maxCount: SUMMARY_READ_LIMIT,
+        }),
+        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+      );
+
+      const parsedRecords = parseSummaryRecords(stdout);
+      const truncated = parsedRecords.length > SUMMARY_COMMIT_HARD_CAP;
+      const records = truncated
+        ? parsedRecords.slice(0, SUMMARY_COMMIT_HARD_CAP)
+        : parsedRecords;
+
+      const observed = aggregateObservedTotals(records);
+      const groups = groupSummaryRecords(records, groupBy);
+      const uncategorized =
+        groupBy === "prefix" ? buildUncategorizedBucket(records) : null;
+
+      return {
+        status: 200,
+        body: {
+          period: { since: since ?? null, until: until ?? null, tz: "UTC" },
+          ref: { input: ref, resolved: commitishRef.hash },
+          observed,
+          groups,
+          uncategorized,
+          truncated,
         },
       };
     },
@@ -757,4 +824,239 @@ export function escapeGitRegexLiteral(value) {
 
 export function formatLiteralPathspec(value) {
   return `:(literal,top)${value}`;
+}
+
+function readSummaryQuery(query) {
+  const values = {};
+  for (const name of ["ref", "since", "until", "groupBy"]) {
+    const allValues = query.getAll(name);
+    if (allValues.length > 1) {
+      return { ok: false, error: `Duplicate ${name} parameter` };
+    }
+    values[name] = allValues[0] ?? "";
+  }
+
+  const since = parseDateQuery(values.since, "since");
+  if (!since.ok) {
+    return { ok: false, error: since.error };
+  }
+  const until = parseDateQuery(values.until, "until");
+  if (!until.ok) {
+    return { ok: false, error: until.error };
+  }
+  const groupBy = parseGroupByQuery(values.groupBy);
+  if (!groupBy.ok) {
+    return { ok: false, error: groupBy.error };
+  }
+
+  return {
+    ok: true,
+    value: {
+      ref: values.ref || "HEAD",
+      since: since.value,
+      until: until.value,
+      groupBy: groupBy.value ?? SUMMARY_DEFAULT_GROUP_BY,
+    },
+  };
+}
+
+/**
+ * Build the `git log` arguments for the period summary endpoint. Mirrors the
+ * hardening of `commitListLogArgs` (no signature verification, no rename
+ * detection, no ext-diff/textconv, option parsing terminated before the
+ * resolved revision). Adds `--since` / `--until` only when validated input
+ * was provided, and reads at most `maxCount` records (one extra over the
+ * public hard cap so we can detect truncation).
+ *
+ * @param {{ since: string|null, until: string|null, revision: string, maxCount: number }} args
+ */
+export function commitSummaryLogArgs({ since, until, revision, maxCount }) {
+  const dateBounds = [];
+  if (since) {
+    dateBounds.push(`--since=${since}`);
+  }
+  if (until) {
+    dateBounds.push(`--until=${until}`);
+  }
+  return [
+    "log",
+    `--max-count=${maxCount}`,
+    "--date=iso-strict",
+    "--no-show-signature",
+    "--no-renames",
+    "--numstat",
+    "--no-ext-diff",
+    "--no-textconv",
+    `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%an%x00%aI%x00%s`,
+    ...dateBounds,
+    "--end-of-options",
+    revision,
+    "--",
+  ];
+}
+
+/**
+ * Parse the NUL-separated record stream produced by `commitSummaryLogArgs`.
+ * Returns one record per commit with raw observed data only — no derivation.
+ *
+ * @param {string} stdout
+ * @returns {Array<{ hash: string, author: string, authorDate: string, subject: string, added: number, deleted: number, paths: string[] }>}
+ */
+export function parseSummaryRecords(stdout) {
+  return stdout
+    .split(COMMIT_RECORD_SEPARATOR)
+    .map((record) => record.replace(/^\n+/, ""))
+    .filter((record) => record.length > 0)
+    .map((record) => {
+      const lines = record.split("\n");
+      const metadata = lines[0] ?? "";
+      const [hash, author, authorDate, subject] = metadata.split(COMMIT_FIELD_SEPARATOR);
+      let added = 0;
+      let deleted = 0;
+      const paths = [];
+      for (const rawLine of lines.slice(1)) {
+        const line = rawLine.trimEnd();
+        if (!line) continue;
+        const stat = parseSummaryNumstatLine(line);
+        if (!stat) continue;
+        added += stat.added;
+        deleted += stat.deleted;
+        if (stat.path) {
+          paths.push(stat.path);
+        }
+      }
+      return {
+        hash: hash ?? "",
+        author: author ?? "",
+        authorDate: authorDate ?? "",
+        subject: subject ?? "",
+        added,
+        deleted,
+        paths,
+      };
+    })
+    .filter((record) => record.hash.length === 40);
+}
+
+function parseSummaryNumstatLine(line) {
+  const parts = line.split("\t");
+  if (parts.length < 3) return null;
+  const rawAdded = parts[0];
+  const rawDeleted = parts[1];
+  const path = normalizeNumstatPath(parts.at(-1));
+  const added = rawAdded === "-" ? 0 : parseStatCount(rawAdded);
+  const deleted = rawDeleted === "-" ? 0 : parseStatCount(rawDeleted);
+  return { added, deleted, path: path ?? "" };
+}
+
+function aggregateObservedTotals(records) {
+  const authors = new Set();
+  let totalAdded = 0;
+  let totalDeleted = 0;
+  for (const record of records) {
+    totalAdded += record.added;
+    totalDeleted += record.deleted;
+    if (record.author) authors.add(record.author);
+  }
+  return {
+    totalCommits: records.length,
+    totalAdded,
+    totalDeleted,
+    authorsCount: authors.size,
+  };
+}
+
+/**
+ * Group summary records by the requested kind. `prefix` uses the literal
+ * conventional-commit regex; non-matching subjects are *not* placed in any
+ * group (caller surfaces them via `buildUncategorizedBucket`). `path` uses
+ * the first path segment of each changed file; commits touching multiple
+ * top-segments are counted in each segment's group (commit hashes can repeat
+ * across path groups, by design — drilldown still resolves to real commits).
+ * `author` uses the literal `commit.author` string.
+ *
+ * @param {ReturnType<typeof parseSummaryRecords>} records
+ * @param {"prefix"|"path"|"author"} groupBy
+ */
+export function groupSummaryRecords(records, groupBy) {
+  /** @type {Map<string, { added: number, deleted: number, authors: Set<string>, sampleSubjects: string[], commitHashes: string[] }>} */
+  const buckets = new Map();
+
+  const addToBucket = (key, record) => {
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = {
+        added: 0,
+        deleted: 0,
+        authors: new Set(),
+        sampleSubjects: [],
+        commitHashes: [],
+      };
+      buckets.set(key, bucket);
+    }
+    bucket.added += record.added;
+    bucket.deleted += record.deleted;
+    if (record.author) bucket.authors.add(record.author);
+    if (bucket.sampleSubjects.length < SUMMARY_SAMPLE_SUBJECTS_MAX) {
+      bucket.sampleSubjects.push(record.subject);
+    }
+    if (bucket.commitHashes.length < SUMMARY_COMMIT_HARD_CAP) {
+      bucket.commitHashes.push(record.hash);
+    }
+  };
+
+  for (const record of records) {
+    if (groupBy === "prefix") {
+      const prefixMatch = CONVENTIONAL_COMMIT_PREFIX_PATTERN.exec(record.subject);
+      if (!prefixMatch) continue; // uncategorized — handled separately
+      addToBucket(prefixMatch[1], record);
+      continue;
+    }
+    if (groupBy === "author") {
+      const author = record.author || "(unknown)";
+      addToBucket(author, record);
+      continue;
+    }
+    // path: each top-segment of every changed file. Deduplicate within a
+    // single commit so the same commit isn't double-counted into the *same*
+    // top-segment group, but *is* counted into multiple distinct segments.
+    const seenSegments = new Set();
+    for (const filePath of record.paths) {
+      const topSegment = topPathSegment(filePath);
+      if (!topSegment || seenSegments.has(topSegment)) continue;
+      seenSegments.add(topSegment);
+      addToBucket(topSegment, record);
+    }
+  }
+
+  return Array.from(buckets, ([key, bucket]) => ({
+    kind: groupBy,
+    key,
+    commitCount: bucket.commitHashes.length,
+    added: bucket.added,
+    deleted: bucket.deleted,
+    authors: Array.from(bucket.authors),
+    sampleSubjects: bucket.sampleSubjects,
+    commitHashes: bucket.commitHashes,
+  }));
+}
+
+function buildUncategorizedBucket(records) {
+  const commitHashes = [];
+  for (const record of records) {
+    if (CONVENTIONAL_COMMIT_PREFIX_PATTERN.test(record.subject)) continue;
+    if (commitHashes.length >= SUMMARY_COMMIT_HARD_CAP) break;
+    commitHashes.push(record.hash);
+  }
+  return {
+    kind: "prefix",
+    commitHashes,
+    commitCount: commitHashes.length,
+  };
+}
+
+function topPathSegment(filePath) {
+  if (typeof filePath !== "string" || filePath.length === 0) return "";
+  const slashIndex = filePath.indexOf("/");
+  return slashIndex === -1 ? filePath : filePath.slice(0, slashIndex);
 }

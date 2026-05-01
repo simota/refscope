@@ -51,6 +51,11 @@ export function createRequestHandler(config, gitService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "commitsSummary") {
+        const result = await gitService.summarizeCommits(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "commit") {
         const result = await gitService.getCommit(repo.value, route.params.hash);
         sendJson(res, result.status, result.body);
@@ -93,6 +98,11 @@ function matchRoute(method, pathname) {
   if (parts.length === 4 && parts[3] === "refs") return { name: "refs", params: { repoId } };
   if (parts.length === 4 && parts[3] === "commits") return { name: "commits", params: { repoId } };
   if (parts.length === 4 && parts[3] === "compare") return { name: "compare", params: { repoId } };
+  // `/commits/summary` is matched before the generic `/commits/:hash` route so
+  // the literal path segment cannot be misread as a commit hash.
+  if (parts.length === 5 && parts[3] === "commits" && parts[4] === "summary") {
+    return { name: "commitsSummary", params: { repoId } };
+  }
   if (parts.length === 5 && parts[3] === "commits") {
     return { name: "commit", params: { repoId, hash: parts[4] } };
   }
