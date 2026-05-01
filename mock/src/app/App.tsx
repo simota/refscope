@@ -461,6 +461,18 @@ export default function App() {
         fontFamily: "var(--rs-sans)",
       }}
     >
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:px-3 focus:py-2 focus:rounded"
+        style={{
+          background: "var(--rs-bg-elevated)",
+          color: "var(--rs-text-primary)",
+          border: "1px solid var(--rs-border)",
+          zIndex: "var(--rs-z-modal)",
+        }}
+      >
+        Skip to commit list
+      </a>
       <RefScopeTokens />
       <TopBar
         repositories={repositories}
@@ -564,7 +576,7 @@ export default function App() {
           defaultSize={panelSizes.center}
           minSize={25}
         >
-          <div className="flex flex-col overflow-hidden h-full">
+          <div id="main-content" tabIndex={-1} className="flex flex-col overflow-hidden h-full">
             {summaryViewOpen && selectedRepo ? (
               <div className="overflow-y-auto" style={{ flexShrink: 0, maxHeight: "55%" }}>
                 <PeriodSummaryView
@@ -800,6 +812,11 @@ function RefScopeTokens() {
         --rs-radius-lg: 12px;
         --rs-mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", ui-monospace, monospace;
         --rs-sans: Inter, "Noto Sans JP", system-ui, -apple-system, sans-serif;
+        --rs-z-base:     0;
+        --rs-z-elevated: 1;
+        --rs-z-overlay:  40;
+        --rs-z-modal:    50;
+        --rs-z-toast:    60;
       }
       .rs-chip {
         display: inline-flex;
@@ -819,6 +836,8 @@ function RefScopeTokens() {
         background: color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 10%);
       }
       .rs-compact-button {
+        display: inline-flex;
+        align-items: center;
         height: 26px;
         padding: 0 9px;
         border-radius: var(--rs-radius-sm);
