@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarRange, FileSearch, GitBranch, Hash, Maximize2, Moon, PanelLeftClose, Pause, Play, Search, Tag } from "lucide-react";
+import { CalendarRange, Eye, FileSearch, GitBranch, Hash, Maximize2, Moon, PanelLeftClose, Pause, Play, Search, Tag } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Commit, GitRef } from "./data";
 
@@ -22,6 +22,8 @@ export function CommandPalette({
   livePaused,
   quietMode,
   isQuiet,
+  isCvdSafe,
+  onToggleColorVision,
   summaryViewOpen,
   onToggleSummaryView,
   onToggleQuietMode,
@@ -46,6 +48,8 @@ export function CommandPalette({
   livePaused: boolean;
   quietMode: boolean;
   isQuiet: boolean;
+  isCvdSafe: boolean;
+  onToggleColorVision: () => void;
   summaryViewOpen: boolean;
   onToggleSummaryView: () => void;
   onToggleQuietMode: () => void;
@@ -145,6 +149,16 @@ export function CommandPalette({
       },
     };
 
+    const cvdCommand: PaletteCommand = {
+      icon: Eye,
+      label: "Toggle CVD-safe theme",
+      hint: isCvdSafe ? "on (Wong palette)" : "off",
+      run: () => {
+        onToggleColorVision();
+        onClose();
+      },
+    };
+
     const summaryCommand: PaletteCommand = {
       icon: CalendarRange,
       label: "Toggle period summary",
@@ -187,6 +201,7 @@ export function CommandPalette({
       sidebarCommand,
       summaryCommand,
       quietCommand,
+      cvdCommand,
       liveCommand,
       ...diffFullscreenCommand,
       ...copyCommand,
@@ -196,6 +211,7 @@ export function CommandPalette({
     author,
     diffAvailable,
     diffFullscreen,
+    isCvdSafe,
     isQuiet,
     livePaused,
     onAuthorChange,
@@ -203,6 +219,7 @@ export function CommandPalette({
     onPathChange,
     onSearchChange,
     onSelectRef,
+    onToggleColorVision,
     onToggleDiffFullscreen,
     onToggleLiveUpdates,
     onToggleQuietMode,

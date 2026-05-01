@@ -9,6 +9,7 @@ import {
   CalendarRange,
   PanelLeftClose,
   PanelLeftOpen,
+  Eye,
 } from "lucide-react";
 import type { GitRef, Repository } from "./data";
 
@@ -28,6 +29,8 @@ export function TopBar({
   quietMode,
   prefersReducedMotion,
   onToggleQuietMode,
+  isCvdSafe,
+  onToggleColorVision,
   pendingUpdates,
   onToggleLiveUpdates,
   search,
@@ -56,6 +59,8 @@ export function TopBar({
   quietMode: boolean;
   prefersReducedMotion: boolean;
   onToggleQuietMode: () => void;
+  isCvdSafe: boolean;
+  onToggleColorVision: () => void;
   pendingUpdates: number;
   onToggleLiveUpdates: () => void;
   search: string;
@@ -336,6 +341,26 @@ export function TopBar({
         >
           <Moon size={11} aria-hidden style={{ marginRight: 4 }} />
           {isQuiet ? "Quiet" : "Quiet"}
+        </button>
+        <button
+          type="button"
+          className="rs-compact-button"
+          onClick={onToggleColorVision}
+          aria-pressed={isCvdSafe}
+          aria-label={isCvdSafe ? "CVD-safe theme on — click to switch to default" : "CVD-safe theme off — click to enable color-blind safe palette"}
+          title={isCvdSafe ? "CVD-safe theme (Wong palette) — on" : "CVD-safe theme — off"}
+          style={
+            isCvdSafe
+              ? {
+                  color: "var(--rs-text-primary)",
+                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
+                  background: "var(--rs-bg-elevated)",
+                }
+              : undefined
+          }
+        >
+          <Eye size={11} aria-hidden style={{ marginRight: 4 }} />
+          CVD
         </button>
         <button
           type="button"

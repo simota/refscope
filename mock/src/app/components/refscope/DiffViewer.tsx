@@ -834,10 +834,14 @@ function DiffLineRow({
   const sigil = sigilFor(line);
   const oldNo = line.kind === "context" || line.kind === "del" ? line.oldLineNo : "";
   const newNo = line.kind === "context" || line.kind === "add" ? line.newLineNo : "";
+  // Non-color signal class — always set regardless of theme so CVD-safe CSS
+  // can attach left-bar width / pattern signals via [data-color-vision="cvd-safe"] .rs-diff-*.
+  // This is the "fact layer": add/del/context is structural information, not decoration.
+  const rowClass = `grid px-2 rs-diff-${line.kind === "add" ? "add" : line.kind === "del" ? "del" : "context"}`;
   return (
     <div
       role="row"
-      className="grid px-2"
+      className={rowClass}
       style={{
         gridTemplateColumns: wordWrap ? "44px 44px 1fr" : "44px 44px auto",
         minWidth: "100%",

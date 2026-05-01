@@ -16,6 +16,7 @@ import {
 } from "./components/ui/resizable";
 import { useQuietMode } from "./hooks/useQuietMode";
 import { useLayoutPrefs } from "./hooks/useLayoutPrefs";
+import { useColorVisionTheme } from "./hooks/useColorVisionTheme";
 import type {
   Commit,
   CommitDetail,
@@ -77,6 +78,7 @@ export default function App() {
   const pendingRealtimeEventsRef = useRef<Array<() => void>>([]);
   const realtimeNewCommitHashesRef = useRef<Set<string>>(new Set());
   const { quietMode, prefersReducedMotion, isQuiet, toggleQuietMode } = useQuietMode();
+  const { colorVisionTheme, isCvdSafe, toggleTheme: toggleColorVisionTheme } = useColorVisionTheme();
   const {
     sidebarCollapsed,
     panelSizes,
@@ -445,6 +447,7 @@ export default function App() {
     <div
       className="size-full flex flex-col"
       data-quiet={isQuiet ? "true" : undefined}
+      data-color-vision={colorVisionTheme}
       style={{
         background: "var(--rs-bg-canvas)",
         color: "var(--rs-text-primary)",
@@ -486,6 +489,8 @@ export default function App() {
         quietMode={quietMode}
         prefersReducedMotion={prefersReducedMotion}
         onToggleQuietMode={toggleQuietMode}
+        isCvdSafe={isCvdSafe}
+        onToggleColorVision={toggleColorVisionTheme}
         pendingUpdates={pendingUpdates}
         onToggleLiveUpdates={toggleLiveUpdates}
         search={search}
@@ -630,6 +635,8 @@ export default function App() {
         livePaused={livePaused}
         quietMode={quietMode}
         isQuiet={isQuiet}
+        isCvdSafe={isCvdSafe}
+        onToggleColorVision={toggleColorVisionTheme}
         summaryViewOpen={summaryViewOpen}
         onToggleSummaryView={toggleSummaryView}
         onToggleQuietMode={toggleQuietMode}
@@ -982,6 +989,129 @@ function RefScopeTokens() {
       }
       .rs-prism .token.italic {
         font-style: italic;
+      }
+
+      /* ─── CVD-safe theme ────────────────────────────────────────────────
+         Activated by data-color-vision="cvd-safe" on the root element.
+         Completely independent from data-quiet — both can be active at once
+         without CSS cascade conflicts (different attribute selectors, different
+         custom property names for CVD tokens).
+
+         Palette: Wong (2011) + Paul Tol neutral blue family.
+           add  → orange  oklch(74% 0.17 55)   ≈ #E69F00  (Wong orange)
+           del  → blue    oklch(50% 0.17 240)   ≈ #0072B2  (Wong blue)
+         Both hues are >90° apart on the hue wheel — safe for deuteranopia,
+         protanopia, and tritanopia.  Neither is green or red.
+
+         Prism tokens in CVD-safe mode — chosen so no token shares a hue
+         within 30° of the add (55°) or del (240°) anchors:
+           keyword  → vermilion  oklch(62% 0.18 25)   ≈ #D55E00  (Wong vermilion)
+           string   → sky-blue   oklch(70% 0.12 200)  ≈ #56B4E9  (Wong sky-blue)
+           comment  → gray       oklch(55% 0.02 255)  (achromatic, italic)
+           number   → amber      oklch(80% 0.16 85)   ≈ #F0E442  (Wong yellow)
+           function → bluish-grn oklch(68% 0.14 175)  ≈ #009E73  (Wong blueish-green, hue 175° — far from add 55°/del 240°)
+           variable → white      oklch(86% 0.02 255)  (near-white, distinct from all above)
+           operator → muted      oklch(72% 0.03 255)  (near-neutral)
+           punctuation → muted   oklch(65% 0.02 255)
+
+         Non-color signals (always active in CVD-safe mode):
+           · Left bar: 4px solid (add) vs 4px dashed (del) via box-shadow trick on the row.
+           · The +/- glyph column is always present (fact layer, never removed).
+           · ChangeKindBadge A/D/M letters are always shown (file level).
+         ─────────────────────────────────────────────────────────────────── */
+      [data-color-vision="cvd-safe"] {
+        --rs-git-added:   oklch(74% 0.17 55);
+        --rs-git-deleted: oklch(50% 0.17 240);
+        --rs-git-modified: oklch(68% 0.14 175);
+        --rs-git-merge:   oklch(70% 0.12 200);
+      }
+
+      /* CVD-safe Prism overrides — scoped to both attributes independently */
+      [data-color-vision="cvd-safe"] .rs-prism .token.keyword,
+      [data-color-vision="cvd-safe"] .rs-prism .token.atrule,
+      [data-color-vision="cvd-safe"] .rs-prism .token.important,
+      [data-color-vision="cvd-safe"] .rs-prism .token.rule {
+        color: oklch(62% 0.18 25);
+      }
+      [data-color-vision="cvd-safe"] .rs-prism .token.string,
+      [data-color-vision="cvd-safe"] .rs-prism .token.char,
+      [data-color-vision="cvd-safe"] .rs-prism .token.attr-value,
+      [data-color-vision="cvd-safe"] .rs-prism .token.regex,
+      [data-color-vision="cvd-safe"] .rs-prism .token.template-string {
+        color: oklch(70% 0.12 200);
+      }
+      [data-color-vision="cvd-safe"] .rs-prism .token.number,
+      [data-color-vision="cvd-safe"] .rs-prism .token.boolean,
+      [data-color-vision="cvd-safe"] .rs-prism .token.constant,
+      [data-color-vision="cvd-safe"] .rs-prism .token.symbol {
+        color: oklch(80% 0.16 85);
+      }
+      [data-color-vision="cvd-safe"] .rs-prism .token.function,
+      [data-color-vision="cvd-safe"] .rs-prism .token.class-name {
+        color: oklch(68% 0.14 175);
+      }
+      [data-color-vision="cvd-safe"] .rs-prism .token.attr-name,
+      [data-color-vision="cvd-safe"] .rs-prism .token.builtin,
+      [data-color-vision="cvd-safe"] .rs-prism .token.property,
+      [data-color-vision="cvd-safe"] .rs-prism .token.entity,
+      [data-color-vision="cvd-safe"] .rs-prism .token.url,
+      [data-color-vision="cvd-safe"] .rs-prism .token.variable {
+        color: oklch(86% 0.02 255);
+      }
+      [data-color-vision="cvd-safe"] .rs-prism .token.operator {
+        color: oklch(72% 0.03 255);
+      }
+      [data-color-vision="cvd-safe"] .rs-prism .token.punctuation {
+        color: oklch(65% 0.02 255);
+      }
+      [data-color-vision="cvd-safe"] .rs-prism .token.comment,
+      [data-color-vision="cvd-safe"] .rs-prism .token.prolog,
+      [data-color-vision="cvd-safe"] .rs-prism .token.cdata,
+      [data-color-vision="cvd-safe"] .rs-prism .token.doctype {
+        color: oklch(55% 0.02 255);
+        font-style: italic;
+      }
+      [data-color-vision="cvd-safe"] .rs-prism .token.tag,
+      [data-color-vision="cvd-safe"] .rs-prism .token.selector,
+      [data-color-vision="cvd-safe"] .rs-prism .token.deleted {
+        color: oklch(62% 0.18 25);
+      }
+      [data-color-vision="cvd-safe"] .rs-prism .token.inserted {
+        color: oklch(74% 0.17 55);
+      }
+
+      /* Non-color diff line signals: left bar width+style in CVD-safe mode.
+         The bar is rendered as a box-shadow on the row element via the
+         .rs-diff-add / .rs-diff-del / .rs-diff-context classes that
+         DiffViewer sets.  This is additive to the existing +/- glyph. */
+      [data-color-vision="cvd-safe"] .rs-diff-add {
+        box-shadow: inset 4px 0 0 var(--rs-git-added);
+      }
+      [data-color-vision="cvd-safe"] .rs-diff-del {
+        box-shadow: inset 4px 0 0 var(--rs-git-deleted);
+        background-image: repeating-linear-gradient(
+          135deg,
+          transparent,
+          transparent 3px,
+          color-mix(in oklab, var(--rs-git-deleted), transparent 85%) 3px,
+          color-mix(in oklab, var(--rs-git-deleted), transparent 85%) 4px
+        );
+      }
+
+      /* Quiet + CVD-safe stacking: when both attributes are present, quiet
+         takes the chroma-reduction path (lightness preserved) while CVD-safe
+         overrides the hue anchors.  No selector conflict because data-quiet
+         and data-color-vision are distinct attributes — both rules apply via
+         independent cascade entries. The resulting palette is:
+           add  → orange low-chroma (quiet reduces chroma to 0.05 range)
+           del  → blue low-chroma
+         Both remain distinguishable in grayscale because their lightness
+         values differ: add L≈74%, del L≈50% → ΔL≈24 points. */
+      [data-quiet="true"][data-color-vision="cvd-safe"] {
+        --rs-git-added:   oklch(74% 0.05 55);
+        --rs-git-deleted: oklch(50% 0.06 240);
+        --rs-git-modified: oklch(68% 0.05 175);
+        --rs-git-merge:   oklch(70% 0.04 200);
       }
     `}</style>
   );
