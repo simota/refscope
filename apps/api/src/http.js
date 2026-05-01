@@ -81,6 +81,11 @@ export function createRequestHandler(config, gitService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "filesRelated") {
+        const result = await gitService.getRelatedFiles(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "workTree") {
         const result = await gitService.getWorkTreeChanges(repo.value);
         sendJson(res, result.status, result.body);
@@ -135,6 +140,12 @@ function matchRoute(method, pathname) {
   // itself stays in the query string (where validation owns the contract).
   if (parts.length === 5 && parts[3] === "files" && parts[4] === "history") {
     return { name: "fileHistory", params: { repoId } };
+  }
+  // Related files (co-change) view: same `/files/<verb>` shape as
+  // `/files/history`. The target path stays in the query string so validation
+  // (`parsePathQuery`) is the single contract authority for path inputs.
+  if (parts.length === 5 && parts[3] === "files" && parts[4] === "related") {
+    return { name: "filesRelated", params: { repoId } };
   }
   // Working-tree changes view: HEAD vs index + index vs worktree.
   // Literal sub-path with no parameters — we surface staged + unstaged

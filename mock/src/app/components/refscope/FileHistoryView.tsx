@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, History, X } from "lucide-react";
-import { fetchFileHistory, type FileHistoryEntry, type FileHistoryResponse } from "../../api";
+import { ChevronDown, ChevronRight, History, Network, X } from "lucide-react";
+import {
+  fetchFileHistory,
+  fetchRelatedFiles,
+  type FileHistoryEntry,
+  type FileHistoryResponse,
+  type RelatedFileEntry,
+  type RelatedFilesResponse,
+} from "../../api";
 import {
   countFileChanges,
   parseUnifiedDiff,
@@ -43,11 +50,18 @@ export function FileHistoryView({
   filePath,
   refName,
   onClose,
+  onSwitchFile,
 }: {
   repoId: string;
   filePath: string;
   refName: string;
   onClose: () => void;
+  /**
+   * Switch the overlay's target path to a sibling discovered via the related
+   * files (co-change) panel. The parent (App.tsx) re-uses the same handler the
+   * file-history prompt feeds, so recent-paths persistence stays unified.
+   */
+  onSwitchFile?: (path: string) => void;
 }) {
   const [data, setData] = useState<FileHistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -318,6 +332,12 @@ export function FileHistoryView({
               groups={dateGroups}
               activeHash={activeHash}
               onJump={handleJump}
+            />
+            <RelatedFilesPanel
+              repoId={repoId}
+              filePath={filePath}
+              refName={refName}
+              onSelectPath={onSwitchFile}
             />
           </aside>
         ) : null}
@@ -743,6 +763,263 @@ function CommitList({
     </ol>
   );
 }
+
+/**
+ * Sidebar section that shows files frequently edited together with the active
+ * target. Observation contract:
+ * - We render literally what the API returns. The list is already top-K and
+ *   sorted (count desc, lastCoChangeAt desc) on the server side; this view
+ *   does not re-rank.
+ * - Each entry is a clickable button that swaps the overlay's `filePath` for
+ *   that sibling — same overlay, same ref, just a new target. The fetch hook
+ *   already keys on `filePath`, so the new history + change graph re-load on
+ *   click without extra plumbing.
+ * - Loading / error / empty states are explicit; we never silently hide failures.
+ *
+ * Boundary discipline:
+ * - The "co-change count" is the literal commit count from Git, not an inferred
+ *   coupling score. The "last edited together" timestamp is `lastCoChangeAt`
+ *   verbatim — we format it with the same `formatRelativeTime` helper used by
+ *   the commit list so the visual cadence matches.
+ */
+function RelatedFilesPanel({
+  repoId,
+  filePath,
+  refName,
+  onSelectPath,
+}: {
+  repoId: string;
+  filePath: string;
+  refName: string;
+  onSelectPath?: (path: string) => void;
+}) {
+  const [data, setData] = useState<RelatedFilesResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [collapsed, setCollapsed] = useState(false);
+  const [expandedAll, setExpandedAll] = useState(false);
+
+  // Fetch lifecycle mirrors the parent: cancel any in-flight request when the
+  // inputs change (e.g. user clicks a related entry, switching the target).
+  useEffect(() => {
+    if (!repoId || !filePath) return;
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+    fetchRelatedFiles(repoId, { path: filePath, ref: refName }, controller.signal)
+      .then((next) => {
+        if (controller.signal.aborted) return;
+        setData(next);
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setData(null);
+        setError(err instanceof Error ? err.message : "Failed to load related files");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [repoId, filePath, refName]);
+
+  // Reset the "show all" toggle every time the target path switches — the
+  // user's intent on file A doesn't carry over to file B.
+  useEffect(() => {
+    setExpandedAll(false);
+  }, [filePath]);
+
+  const visibleEntries: RelatedFileEntry[] = (() => {
+    if (!data) return [];
+    if (expandedAll) return data.related;
+    return data.related.slice(0, RELATED_PANEL_INITIAL_LIMIT);
+  })();
+  const hiddenCount = data ? Math.max(0, data.related.length - visibleEntries.length) : 0;
+
+  return (
+    <section
+      aria-label="Related files"
+      style={{
+        borderTop: "1px solid var(--rs-border)",
+        background: "var(--rs-bg-panel)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setCollapsed((value) => !value)}
+        aria-expanded={!collapsed}
+        className="w-full px-3 flex items-center gap-2"
+        style={{
+          height: 28,
+          background: "transparent",
+          border: "none",
+          color: "var(--rs-text-muted)",
+          fontSize: 10,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          fontWeight: 600,
+          cursor: "pointer",
+        }}
+      >
+        {collapsed ? (
+          <ChevronRight size={12} aria-hidden />
+        ) : (
+          <ChevronDown size={12} aria-hidden />
+        )}
+        <Network size={12} aria-hidden style={{ color: "var(--rs-accent)" }} />
+        <span style={{ flex: 1, textAlign: "left" }}>Related files</span>
+        {data ? (
+          <span
+            style={{
+              fontFamily: "var(--rs-mono)",
+              fontSize: 10,
+              color: "var(--rs-text-muted)",
+              textTransform: "none",
+              letterSpacing: 0,
+            }}
+          >
+            {data.related.length}
+            {data.truncated ? "+" : ""}
+          </span>
+        ) : null}
+      </button>
+      {collapsed ? null : (
+        <div className="px-2 pb-3" style={{ paddingTop: 2 }}>
+          {loading ? (
+            <div
+              className="px-2 py-2"
+              style={{ fontSize: 11, color: "var(--rs-text-muted)" }}
+            >
+              Loading related files…
+            </div>
+          ) : null}
+          {!loading && error ? (
+            <div
+              className="px-2 py-2"
+              role="alert"
+              style={{ fontSize: 11, color: "var(--rs-git-deleted)" }}
+            >
+              {error}
+            </div>
+          ) : null}
+          {!loading && !error && data && data.related.length === 0 ? (
+            <div
+              className="px-2 py-2"
+              style={{ fontSize: 11, color: "var(--rs-text-muted)" }}
+            >
+              No related files yet.
+            </div>
+          ) : null}
+          {!loading && !error && data && data.related.length > 0 ? (
+            <>
+              <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                {visibleEntries.map((entry) => (
+                  <li key={entry.path}>
+                    <button
+                      type="button"
+                      onClick={() => onSelectPath?.(entry.path)}
+                      disabled={!onSelectPath}
+                      title={`${entry.path} — co-changed with ${filePath} in ${entry.coChangeCount} commit${entry.coChangeCount === 1 ? "" : "s"}`}
+                      className="w-full text-left px-2 py-1"
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto",
+                        columnGap: 8,
+                        rowGap: 1,
+                        alignItems: "baseline",
+                        background: "transparent",
+                        border: "none",
+                        borderRadius: "var(--rs-radius-sm)",
+                        cursor: onSelectPath ? "pointer" : "default",
+                      }}
+                      onMouseEnter={(event) => {
+                        if (!onSelectPath) return;
+                        event.currentTarget.style.background =
+                          "color-mix(in oklab, var(--rs-bg-panel), var(--rs-accent) 10%)";
+                      }}
+                      onMouseLeave={(event) => {
+                        event.currentTarget.style.background = "transparent";
+                      }}
+                    >
+                      <span
+                        className="truncate"
+                        style={{
+                          fontFamily: "var(--rs-mono)",
+                          fontSize: 12,
+                          color: "var(--rs-text-primary)",
+                          minWidth: 0,
+                        }}
+                      >
+                        {entry.path}
+                      </span>
+                      <span
+                        aria-label={`Co-changed in ${entry.coChangeCount} commit${entry.coChangeCount === 1 ? "" : "s"}`}
+                        style={{
+                          fontFamily: "var(--rs-mono)",
+                          fontSize: 10,
+                          fontWeight: 600,
+                          padding: "1px 6px",
+                          borderRadius: 999,
+                          color: "var(--rs-text-primary)",
+                          background:
+                            "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 20%)",
+                        }}
+                      >
+                        ×{entry.coChangeCount}
+                      </span>
+                      <span
+                        style={{
+                          gridColumn: "1 / -1",
+                          fontFamily: "var(--rs-mono)",
+                          fontSize: 10,
+                          color: "var(--rs-text-muted)",
+                        }}
+                      >
+                        last together {formatRelativeTime(entry.lastCoChangeAt) || "—"}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {hiddenCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setExpandedAll(true)}
+                  className="px-2 py-1"
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--rs-text-muted)",
+                    fontSize: 10,
+                    fontFamily: "var(--rs-mono)",
+                    cursor: "pointer",
+                  }}
+                >
+                  +{hiddenCount} more
+                </button>
+              ) : null}
+              {data.truncated ? (
+                <p
+                  className="px-2"
+                  style={{
+                    fontSize: 10,
+                    color: "var(--rs-text-muted)",
+                    marginTop: 4,
+                    fontFamily: "var(--rs-mono)",
+                  }}
+                >
+                  Scanned the {data.scannedCommits} most-recent commits touching this file.
+                </p>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const RELATED_PANEL_INITIAL_LIMIT = 10;
 
 function CommitCard({
   entry,

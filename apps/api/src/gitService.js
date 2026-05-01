@@ -27,6 +27,16 @@ export const SUMMARY_DEFAULT_GROUP_BY = "prefix";
 export const FILE_HISTORY_DEFAULT_LIMIT = 20;
 export const FILE_HISTORY_MAX_LIMIT = 50;
 
+// Related-files (co-change) hard caps. Default is 30 commits to scan, capped at
+// 50. We always read `limit + 1` so we can detect over-cap responses and emit
+// `truncated: true` without leaking the extra commit. The number of related
+// entries surfaced in the response is bounded separately by
+// `RELATED_FILES_TOP_K` — counts and dates beyond the slice are *not* exposed,
+// only the literal observed top-K rows.
+export const RELATED_FILES_DEFAULT_LIMIT = 30;
+export const RELATED_FILES_MAX_LIMIT = 50;
+export const RELATED_FILES_TOP_K = 20;
+
 // Ref-drift hard caps. Drift fans out to `2 * N + N` git calls (ahead + behind
 // + merge-base) per request, all parallelised through `Promise.all`. We cap
 // the number of refs surfaced so a repository with 1000+ branches doesn't
@@ -431,6 +441,74 @@ export function createGitService(config) {
           entries,
           truncated,
           limit,
+        },
+      };
+    },
+
+    async getRelatedFiles(repo, query) {
+      const queryValues = readRelatedFilesQuery(query);
+      if (!queryValues.ok) {
+        return { status: 400, body: { error: queryValues.error } };
+      }
+      const { ref, limit, path: pathValue } = queryValues.value;
+      if (!isValidGitRef(ref)) {
+        return { status: 400, body: { error: "Invalid ref parameter" } };
+      }
+
+      const commitishRef = await resolveCommitishRevision(repo, ref, config.gitTimeoutMs);
+      if (!commitishRef.ok) {
+        return commitishRef.result;
+      }
+
+      // Step 1: collect the commit hashes that touched the target path. We
+      // read `limit + 1` so an over-cap response can flag `truncated: true`
+      // without exposing the extra commit. `--follow` keeps the chain alive
+      // across renames just as `getFileHistory` does — the same observation
+      // surface, narrowed to commit identity (no patches needed here).
+      const readLimit = limit + 1;
+      const { stdout: hashesStdout } = await runGit(
+        repo,
+        relatedFilesHashLogArgs({
+          revision: commitishRef.hash,
+          pathspec: formatLiteralPathspec(pathValue),
+          maxCount: readLimit,
+        }),
+        { timeoutMs: config.gitTimeoutMs },
+      );
+
+      const allHashes = hashesStdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => /^[A-Fa-f0-9]{40}$/.test(line));
+      const truncated = allHashes.length > limit;
+      const hashes = truncated ? allHashes.slice(0, limit) : allHashes;
+
+      // Step 2: pull the changed file list for the bounded set of commits in
+      // a single `git log --no-walk` call. `--no-walk` makes git print only
+      // the commits we name, ignoring their parents — exactly the N-of-N
+      // batched read we want, no fanout. With no commits to inspect we skip
+      // the round-trip entirely.
+      let related = [];
+      let scannedCommits = 0;
+      if (hashes.length > 0) {
+        const { stdout: nameStdout } = await runGit(
+          repo,
+          relatedFilesNameLogArgs({ hashes }),
+          { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+        );
+        const parsed = parseRelatedFilesRecords(nameStdout, pathValue);
+        scannedCommits = parsed.scannedCommits;
+        related = parsed.related;
+      }
+
+      return {
+        status: 200,
+        body: {
+          path: pathValue,
+          ref: { input: ref, resolved: commitishRef.hash },
+          scannedCommits,
+          truncated,
+          related,
         },
       };
     },
@@ -1408,6 +1486,197 @@ export function parseFileHistoryRecords(stdout) {
       };
     })
     .filter((record) => /^[A-Fa-f0-9]{40}$/.test(record.hash));
+}
+
+function readRelatedFilesQuery(query) {
+  const values = {};
+  for (const name of ["path", "ref", "limit"]) {
+    const allValues = query.getAll(name);
+    if (allValues.length > 1) {
+      return { ok: false, error: `Duplicate ${name} parameter` };
+    }
+    values[name] = allValues[0] ?? "";
+  }
+
+  // `path` is required for related-files — co-change "of nothing" is not a
+  // useful view. We surface the missing-input case explicitly rather than
+  // silently defaulting to an empty pathspec.
+  const trimmedPath = values.path.trim();
+  if (!trimmedPath) {
+    return { ok: false, error: "Missing path parameter" };
+  }
+  const path = parsePathQuery(values.path);
+  if (!path.ok) {
+    return { ok: false, error: path.error };
+  }
+
+  const limit = parseLimitQuery(
+    values.limit,
+    RELATED_FILES_DEFAULT_LIMIT,
+    RELATED_FILES_MAX_LIMIT,
+  );
+  if (!limit.ok) {
+    return { ok: false, error: limit.error };
+  }
+
+  return {
+    ok: true,
+    value: {
+      ref: values.ref || "HEAD",
+      limit: limit.value,
+      path: path.value,
+    },
+  };
+}
+
+/**
+ * Build the `git log` arguments for the hash-only first pass of related-files
+ * (co-change). Mirrors the hardening of `fileHistoryLogArgs` (no signature
+ * verification, no ext-diff/textconv, option parsing terminated before the
+ * resolved revision, pathspec passed after `--`) but emits *only* the commit
+ * hash — no patch, no metadata. We use `--follow` to keep the chain alive
+ * across renames so the second-pass name-only read sees every commit that
+ * touched the file under any of its historical names.
+ *
+ * @param {{ revision: string, pathspec: string, maxCount: number }} args
+ */
+export function relatedFilesHashLogArgs({ revision, pathspec, maxCount }) {
+  return [
+    "log",
+    `--max-count=${maxCount}`,
+    "--follow",
+    "--find-renames",
+    "--no-show-signature",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--format=%H",
+    "--end-of-options",
+    revision,
+    "--",
+    pathspec,
+  ];
+}
+
+/**
+ * Build the `git log --no-walk` arguments for the second pass. `--no-walk`
+ * makes git print only the named commits (no parent traversal), which is
+ * exactly the batched N-of-N read we want — one syscall regardless of how
+ * many hashes we pass. `--name-only` emits one path per line for each
+ * commit, joined to the metadata block by the RECORD_SEPARATOR convention
+ * already used elsewhere in this module.
+ *
+ * `--no-renames` keeps the name list straightforward — we don't need rename
+ * detection for co-change aggregation, only the literal paths Git records
+ * per commit. (`normalizeNumstatPath` further normalizes any `path/{old =>
+ * new}` notation that surfaces from the parent diff.)
+ *
+ * @param {{ hashes: string[] }} args
+ */
+export function relatedFilesNameLogArgs({ hashes }) {
+  return [
+    "log",
+    "--no-walk",
+    "--name-only",
+    "--no-show-signature",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--no-renames",
+    `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%aI`,
+    "--end-of-options",
+    ...hashes,
+  ];
+}
+
+/**
+ * Parse the RECORD_SEPARATOR-separated stream produced by
+ * `relatedFilesNameLogArgs` and aggregate co-change counts per sibling path.
+ *
+ * Observation contract:
+ * - The target path itself is excluded from the result.
+ * - Each path appears at most once per commit (no inflation from name-only
+ *   listing the same path twice — git doesn't, but we de-dup defensively).
+ * - `coChangeCount` is the literal number of *commits* that touched both the
+ *   target and the sibling. `lastCoChangeAt` is the latest authorDate seen
+ *   in those commits — Git's own ISO-8601 string, never re-derived.
+ * - Sort: count desc, then lastCoChangeAt desc; finally we slice to top-K so
+ *   the wire payload stays bounded.
+ *
+ * @param {string} stdout
+ * @param {string} targetPath  Original (validated) input path used to filter
+ *                             the target out of the co-change list.
+ * @returns {{ scannedCommits: number, related: Array<{ path: string, coChangeCount: number, lastCoChangeAt: string }> }}
+ */
+export function parseRelatedFilesRecords(stdout, targetPath) {
+  const records = stdout
+    .split(COMMIT_RECORD_SEPARATOR)
+    .map((record) => record.replace(/^\n+/, ""))
+    .filter((record) => record.length > 0);
+
+  /** @type {Map<string, { coChangeCount: number, lastCoChangeAt: string }>} */
+  const aggregate = new Map();
+  let scannedCommits = 0;
+
+  for (const record of records) {
+    const newlineIndex = record.indexOf("\n");
+    const metadata = newlineIndex === -1 ? record : record.slice(0, newlineIndex);
+    const rest = newlineIndex === -1 ? "" : record.slice(newlineIndex + 1);
+    const [hash, authorDate] = metadata.split(COMMIT_FIELD_SEPARATOR);
+    if (!/^[A-Fa-f0-9]{40}$/.test(hash ?? "")) continue;
+    scannedCommits += 1;
+
+    /** @type {Set<string>} */
+    const seenInCommit = new Set();
+    for (const rawLine of rest.split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      // `--name-only` should never emit numstat tabs, but normalizeNumstatPath
+      // also handles the `path/{old => new}` notation that may appear when a
+      // rename surfaces — we run it for parity with the rest of the parser.
+      const normalized = normalizeNumstatPath(line);
+      if (!normalized) continue;
+      if (normalized === targetPath) continue;
+      if (seenInCommit.has(normalized)) continue;
+      seenInCommit.add(normalized);
+
+      const previous = aggregate.get(normalized);
+      const dateValue = typeof authorDate === "string" ? authorDate : "";
+      if (!previous) {
+        aggregate.set(normalized, {
+          coChangeCount: 1,
+          lastCoChangeAt: dateValue,
+        });
+        continue;
+      }
+      previous.coChangeCount += 1;
+      // String comparison is sufficient for ISO-8601 ordering (literal
+      // observation: Git emits `--date=iso-strict`-equivalent strings via %aI).
+      if (dateValue && dateValue > previous.lastCoChangeAt) {
+        previous.lastCoChangeAt = dateValue;
+      }
+    }
+  }
+
+  const related = Array.from(aggregate, ([path, value]) => ({
+    path,
+    coChangeCount: value.coChangeCount,
+    lastCoChangeAt: value.lastCoChangeAt,
+  }))
+    .sort((a, b) => {
+      if (b.coChangeCount !== a.coChangeCount) {
+        return b.coChangeCount - a.coChangeCount;
+      }
+      // Tie-break by lastCoChangeAt desc — most recently co-changed first.
+      if (b.lastCoChangeAt > a.lastCoChangeAt) return 1;
+      if (b.lastCoChangeAt < a.lastCoChangeAt) return -1;
+      // Final stable tie-break by path so the order is deterministic across
+      // runs even when count and date both match.
+      return a.path.localeCompare(b.path);
+    })
+    .slice(0, RELATED_FILES_TOP_K);
+
+  return { scannedCommits, related };
 }
 
 function parseSummaryNumstatLine(line) {

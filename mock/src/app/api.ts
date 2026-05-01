@@ -187,6 +187,49 @@ export async function fetchFileHistory(
 }
 
 /**
+ * One sibling-file row of the related-files (co-change) result. `coChangeCount`
+ * is the literal number of commits where this path was edited together with
+ * the target; `lastCoChangeAt` is the latest authorDate observed in that
+ * subset (Git's own ISO-8601 string, never re-derived).
+ */
+export type RelatedFileEntry = {
+  path: string;
+  coChangeCount: number;
+  lastCoChangeAt: string;
+};
+
+/**
+ * Wire shape for `GET /api/repos/:repoId/files/related`. `scannedCommits`
+ * tells the user how many target-touching commits were inspected to compute
+ * the aggregate; `truncated` mirrors `getFileHistory` — true when the repo
+ * has more matching commits than `limit` allowed us to scan.
+ */
+export type RelatedFilesResponse = {
+  path: string;
+  ref: { input: string; resolved: string };
+  scannedCommits: number;
+  truncated: boolean;
+  related: RelatedFileEntry[];
+};
+
+export async function fetchRelatedFiles(
+  repoId: string,
+  params: { path: string; ref?: string; limit?: number },
+  signal?: AbortSignal,
+): Promise<RelatedFilesResponse> {
+  const search = new URLSearchParams();
+  search.set("path", params.path);
+  if (params.ref) search.set("ref", params.ref);
+  if (typeof params.limit === "number" && Number.isFinite(params.limit)) {
+    search.set("limit", String(params.limit));
+  }
+  return getJson<RelatedFilesResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/files/related?${search}`,
+    signal,
+  );
+}
+
+/**
  * Working-tree changes payload. The API returns the literal `git diff` /
  * `git diff --cached` output; the UI feeds each side's `diff` straight into
  * `parseUnifiedDiff` (same parser used for committed diffs and file history).

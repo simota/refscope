@@ -129,3 +129,46 @@ BranchSidebar の各 ref に対して指定 base ref からの ahead/behind を 
 - `mock/src/app/api.ts` (+`fetchRefDrift`, `RefDriftEntry`, `RefDriftResponse`)
 - `mock/src/app/components/refscope/BranchSidebar.tsx` (+`DriftHalo`, `computeDriftScale`, drift props on `BranchRow`)
 - `mock/src/app/App.tsx` (+`driftMap` state, `refreshDrift` / `scheduleDriftRefresh`, SSE hook integration)
+
+## 2026-05-02 — Related files (co-change) panel
+
+### Decision: 2-step git log, no N+1
+
+Per-commit `git show` would have meant `N` syscalls for `N` target-touching commits. Instead:
+1. `git log --follow --format=%H ... -- <pathspec>` — 1 call, returns hash list (limit+1 for truncation detection)
+2. `git log --no-walk --name-only --format=<sep>%H%x00%aI ... <hash1> ... <hashN>` — 1 call, returns name-only blocks for the named commits
+
+`--no-walk` is the magic primitive: git prints the literally-named commits without following parents, so the second call cost is independent of repo depth and proportional only to `limit` (≤50). Total: 2 git calls fixed, regardless of co-change count.
+
+### Path normalization
+
+Reused `normalizeNumstatPath` (it already handles `path/{old => new}` notation that surfaces from rename diffs). `--name-only` itself emits one path per line, but the normalizer is invariant on plain paths — keeping it for safety + parity with summary aggregation.
+
+### Sorting + tie-breaking
+
+- Primary: `coChangeCount` desc
+- Secondary: `lastCoChangeAt` desc (string comparison on Git's ISO-8601 — sufficient for ordering)
+- Tertiary: `path.localeCompare()` for deterministic order across runs
+
+Top-K = 20 hardcoded at `RELATED_FILES_TOP_K`. The wire `truncated` flag refers to the **commit scan** truncation, not the top-K slice — those are separate observations.
+
+### Props naming caution
+
+Last fix-up I let `ref` collide with React's reserved prop name. This time the UI prop is `refName` (already in place) and the new prop is `onSwitchFile` — verified via `grep -n "onSwitchFile\|RelatedFilesPanel\|fetchRelatedFiles\|RelatedFileEntry\|RelatedFilesResponse" mock/src/app/ -r` returns only the new declarations.
+
+### Files touched
+
+- `apps/api/src/gitService.js` (+`getRelatedFiles`, `relatedFilesHashLogArgs`, `relatedFilesNameLogArgs`, `parseRelatedFilesRecords`, `readRelatedFilesQuery`, +3 constants)
+- `apps/api/src/http.js` (+route `/files/related`)
+- `apps/api/test/relatedFiles.test.js` (new, 14 tests)
+- `mock/src/app/api.ts` (+`fetchRelatedFiles`, `RelatedFileEntry`, `RelatedFilesResponse`)
+- `mock/src/app/components/refscope/FileHistoryView.tsx` (+`RelatedFilesPanel`, +`onSwitchFile` prop)
+- `mock/src/app/App.tsx` (+`onSwitchFile={submitFileHistoryPath}` at FileHistoryView render site)
+
+### Verification
+
+- `pnpm --filter @realtime-git-viewer/api test`: 148/148 PASS (+14)
+- `pnpm build:api` (node --check): PASS
+- `pnpm build:mock` (vite build): PASS
+- `make verify`: 8/8 PASS
+- Live curl of `/api/repos/viewer/files/related?path=apps/api/src/gitRunner.js` returns expected co-change rows; target itself absent; 400 / 404 envelopes match spec

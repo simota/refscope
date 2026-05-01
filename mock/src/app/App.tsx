@@ -1071,6 +1071,7 @@ export default function App() {
           filePath={fileHistoryPath}
           refName={selectedRef}
           onClose={closeFileHistory}
+          onSwitchFile={submitFileHistoryPath}
         />
       ) : null}
     </div>
