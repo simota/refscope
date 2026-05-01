@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseDateQuery, parseGroupByQuery } from "../src/validation.js";
+import {
+  ALLOWED_SEARCH_MODES,
+  PATTERN_MAX_LENGTH,
+  parseDateQuery,
+  parseGroupByQuery,
+  parsePatternQuery,
+  parseSearchModeQuery,
+} from "../src/validation.js";
 
 test("parseDateQuery treats null and empty as unspecified", () => {
   assert.deepEqual(parseDateQuery(null, "since"), { ok: true, value: null });
@@ -129,4 +136,107 @@ test("parseGroupByQuery rejects oversized input even when it would shadow an all
     ok: false,
     error: "Invalid groupBy parameter",
   });
+});
+
+// --- parseSearchModeQuery ---
+
+test("parseSearchModeQuery returns subject for empty / null / undefined / blank input", () => {
+  assert.deepEqual(parseSearchModeQuery(null), { ok: true, value: "subject" });
+  assert.deepEqual(parseSearchModeQuery(undefined), { ok: true, value: "subject" });
+  assert.deepEqual(parseSearchModeQuery(""), { ok: true, value: "subject" });
+  assert.deepEqual(parseSearchModeQuery("   "), { ok: true, value: "subject" });
+});
+
+test("parseSearchModeQuery accepts all allowed mode values", () => {
+  for (const mode of ALLOWED_SEARCH_MODES) {
+    assert.deepEqual(parseSearchModeQuery(mode), { ok: true, value: mode });
+  }
+  // leading/trailing whitespace is trimmed
+  assert.deepEqual(parseSearchModeQuery("  pickaxe  "), { ok: true, value: "pickaxe" });
+});
+
+test("parseSearchModeQuery rejects values outside the allowlist", () => {
+  for (const raw of ["Pickaxe", "PICKAXE", "grep", "diff", "path", "author", "s"]) {
+    const result = parseSearchModeQuery(raw);
+    assert.equal(result.ok, false, `expected "${raw}" to be rejected`);
+    assert.equal(result.error, "Invalid mode parameter");
+  }
+});
+
+test("parseSearchModeQuery rejects values with embedded whitespace or injection attempts", () => {
+  for (const raw of ["pickaxe regex", "pickaxe; rm -rf", "pick axe"]) {
+    const result = parseSearchModeQuery(raw);
+    assert.equal(result.ok, false, `expected "${raw}" to be rejected`);
+    assert.equal(result.error, "Invalid mode parameter");
+  }
+});
+
+test("parseSearchModeQuery rejects non-string input", () => {
+  assert.deepEqual(parseSearchModeQuery(123), { ok: false, error: "Invalid mode parameter" });
+  assert.deepEqual(parseSearchModeQuery({}), { ok: false, error: "Invalid mode parameter" });
+  assert.deepEqual(parseSearchModeQuery([]), { ok: false, error: "Invalid mode parameter" });
+  assert.deepEqual(parseSearchModeQuery(true), { ok: false, error: "Invalid mode parameter" });
+});
+
+// --- parsePatternQuery ---
+
+test("parsePatternQuery returns empty string for null / undefined / empty / blank", () => {
+  assert.deepEqual(parsePatternQuery(null), { ok: true, value: "" });
+  assert.deepEqual(parsePatternQuery(undefined), { ok: true, value: "" });
+  assert.deepEqual(parsePatternQuery(""), { ok: true, value: "" });
+  assert.deepEqual(parsePatternQuery("   "), { ok: true, value: "" });
+});
+
+test("parsePatternQuery accepts a normal search string", () => {
+  assert.deepEqual(parsePatternQuery("OAUTH_SECRET"), { ok: true, value: "OAUTH_SECRET" });
+  assert.deepEqual(parsePatternQuery("  hello world  "), { ok: true, value: "hello world" });
+});
+
+test("parsePatternQuery accepts hyphen-leading patterns (attached form safety)", () => {
+  // Hyphen-leading patterns are valid at the validation layer; callers use
+  // attached form (-S-delete) so Git never sees them as flags.
+  assert.deepEqual(parsePatternQuery("-delete"), { ok: true, value: "-delete" });
+  assert.deepEqual(parsePatternQuery("--force"), { ok: true, value: "--force" });
+});
+
+test("parsePatternQuery accepts exactly PATTERN_MAX_LENGTH characters", () => {
+  const maxPattern = "a".repeat(PATTERN_MAX_LENGTH);
+  assert.deepEqual(parsePatternQuery(maxPattern), { ok: true, value: maxPattern });
+});
+
+test("parsePatternQuery rejects strings exceeding PATTERN_MAX_LENGTH", () => {
+  const tooLong = "a".repeat(PATTERN_MAX_LENGTH + 1);
+  assert.deepEqual(parsePatternQuery(tooLong), {
+    ok: false,
+    error: "Invalid pattern parameter",
+  });
+});
+
+test("parsePatternQuery rejects embedded control characters", () => {
+  // NUL byte
+  assert.deepEqual(parsePatternQuery("foo bar"), {
+    ok: false,
+    error: "Invalid pattern parameter",
+  });
+  // TAB
+  assert.deepEqual(parsePatternQuery("foo\tbar"), {
+    ok: false,
+    error: "Invalid pattern parameter",
+  });
+  // newline
+  assert.deepEqual(parsePatternQuery("foo\nbar"), {
+    ok: false,
+    error: "Invalid pattern parameter",
+  });
+  // DEL (0x7f)
+  assert.deepEqual(parsePatternQuery("foobar"), {
+    ok: false,
+    error: "Invalid pattern parameter",
+  });
+});
+
+test("parsePatternQuery rejects non-string input", () => {
+  assert.deepEqual(parsePatternQuery(123), { ok: false, error: "Invalid pattern parameter" });
+  assert.deepEqual(parsePatternQuery({}), { ok: false, error: "Invalid pattern parameter" });
+  assert.deepEqual(parsePatternQuery(true), { ok: false, error: "Invalid pattern parameter" });
 });

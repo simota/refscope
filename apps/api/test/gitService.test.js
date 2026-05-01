@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   ancestorMergeBaseArgs,
+  buildSearchModeArgs,
   commitListLogArgs,
   commitDiffShowArgs,
   commitMetadataShowArgs,
@@ -915,4 +916,282 @@ test("normalizes git signature status codes for API responses", () => {
   assert.equal(parseSignatureStatus("N"), "unsigned");
   assert.equal(parseSignatureStatus("N\n"), "unsigned");
   assert.equal(parseSignatureStatus(""), "unknown");
+});
+
+// --- buildSearchModeArgs unit tests ---
+
+test("buildSearchModeArgs pickaxe mode uses attached form -SPATTERN", () => {
+  assert.deepEqual(buildSearchModeArgs("pickaxe", "OAUTH_SECRET", ""), ["-SOAUTH_SECRET"]);
+});
+
+test("buildSearchModeArgs pickaxe mode with hyphen-leading pattern stays safe via attached form", () => {
+  // "-S-delete" is a single argument — Git interprets it as pickaxe for "-delete",
+  // not as the -S flag followed by a separate -delete flag.
+  assert.deepEqual(buildSearchModeArgs("pickaxe", "-delete", ""), ["-S-delete"]);
+});
+
+test("buildSearchModeArgs regex mode uses attached form -GPATTERN", () => {
+  assert.deepEqual(buildSearchModeArgs("regex", "foo.*bar", ""), ["-Gfoo.*bar"]);
+});
+
+test("buildSearchModeArgs message mode uses --grep with raw regex (no escaping)", () => {
+  assert.deepEqual(buildSearchModeArgs("message", "^feat", ""), [
+    "--regexp-ignore-case",
+    "--extended-regexp",
+    "--grep=^feat",
+  ]);
+});
+
+test("buildSearchModeArgs subject mode with search uses escaped --grep for backward compat", () => {
+  assert.deepEqual(buildSearchModeArgs("subject", "", "hello"), [
+    "--regexp-ignore-case",
+    "--extended-regexp",
+    "--grep=hello",
+  ]);
+  // Special regex chars are escaped when passed via legacy `search` param
+  assert.deepEqual(buildSearchModeArgs("subject", "", "Fix a.b"), [
+    "--regexp-ignore-case",
+    "--extended-regexp",
+    "--grep=Fix a\\.b",
+  ]);
+});
+
+test("buildSearchModeArgs returns empty array when mode has no pattern and no search", () => {
+  assert.deepEqual(buildSearchModeArgs("subject", "", ""), []);
+  assert.deepEqual(buildSearchModeArgs("pickaxe", "", ""), []);
+  assert.deepEqual(buildSearchModeArgs("regex", "", ""), []);
+  assert.deepEqual(buildSearchModeArgs("message", "", ""), []);
+});
+
+// --- listCommits search mode integration tests ---
+
+test("listCommits rejects invalid mode before running git", async () => {
+  const service = createGitService({
+    repositories: new Map(),
+    gitTimeoutMs: 1000,
+    diffMaxBytes: 1024,
+  });
+
+  const result = await service.listCommits(
+    { id: "demo", name: "demo", path: "/tmp/not-needed" },
+    new URLSearchParams({ mode: "invalid" }),
+  );
+
+  assert.deepEqual(result, {
+    status: 400,
+    body: { error: "Invalid mode parameter" },
+  });
+});
+
+test("listCommits rejects pattern with control characters before running git", async () => {
+  const service = createGitService({
+    repositories: new Map(),
+    gitTimeoutMs: 1000,
+    diffMaxBytes: 1024,
+  });
+
+  const result = await service.listCommits(
+    { id: "demo", name: "demo", path: "/tmp/not-needed" },
+    new URLSearchParams({ mode: "pickaxe", pattern: "foo\x00bar" }),
+  );
+
+  assert.deepEqual(result, {
+    status: 400,
+    body: { error: "Invalid pattern parameter" },
+  });
+});
+
+test("listCommits rejects combining search with non-subject mode", async () => {
+  const service = createGitService({
+    repositories: new Map(),
+    gitTimeoutMs: 1000,
+    diffMaxBytes: 1024,
+  });
+
+  const result = await service.listCommits(
+    { id: "demo", name: "demo", path: "/tmp/not-needed" },
+    new URLSearchParams({ search: "foo", mode: "pickaxe", pattern: "bar" }),
+  );
+
+  assert.deepEqual(result, {
+    status: 400,
+    body: { error: "Cannot combine search and mode parameters" },
+  });
+});
+
+test("listCommits allows combining search with mode=subject (backward compatible)", async () => {
+  // search + mode=subject must NOT be rejected with the "Cannot combine" 400.
+  // Use a real temp repo so the request reaches the git layer without a hard error.
+  const repoPath = createTempPath("rtgv-search-subject-compat-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "hello\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "feat: hello");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024,
+    });
+
+    const result = await service.listCommits(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ search: "hello", mode: "subject" }),
+    );
+
+    // Must succeed (not return the "Cannot combine" error)
+    assert.equal(result.status, 200);
+    assert.notEqual(result.body?.error, "Cannot combine search and mode parameters");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("listCommits pickaxe mode finds commits where a literal token appears or disappears", async () => {
+  const repoPath = createTempPath("rtgv-pickaxe-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+
+    // Commit 1: introduce the secret
+    fs.writeFileSync(path.join(repoPath, "config.txt"), "SUPER_SECRET_TOKEN=abc123\n");
+    git(repoPath, "add", "config.txt");
+    git(repoPath, "commit", "-m", "add secret token");
+
+    // Commit 2: unrelated change (should NOT be in pickaxe results)
+    fs.writeFileSync(path.join(repoPath, "README.md"), "docs\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "add readme");
+
+    // Commit 3: remove the secret
+    fs.writeFileSync(path.join(repoPath, "config.txt"), "TOKEN_REMOVED=true\n");
+    git(repoPath, "add", "config.txt");
+    git(repoPath, "commit", "-m", "remove secret token");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 4096,
+    });
+
+    const result = await service.listCommits(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ mode: "pickaxe", pattern: "SUPER_SECRET_TOKEN" }),
+    );
+
+    assert.equal(result.status, 200);
+    // Both the commit that added and the commit that removed the token should appear
+    assert.equal(result.body.length, 2);
+    const subjects = result.body.map((c) => c.subject).sort();
+    assert.deepEqual(subjects, ["add secret token", "remove secret token"]);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("listCommits regex mode finds commits whose diff matches a regex", async () => {
+  const repoPath = createTempPath("rtgv-regex-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+
+    // Commit 1: add a function with a specific pattern in the diff
+    fs.writeFileSync(path.join(repoPath, "api.js"), "function fetchData() { return null; }\n");
+    git(repoPath, "add", "api.js");
+    git(repoPath, "commit", "-m", "add fetchData function");
+
+    // Commit 2: unrelated change
+    fs.writeFileSync(path.join(repoPath, "README.md"), "readme\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "add readme");
+
+    // Commit 3: modify the function name (diff contains the old name in removal)
+    fs.writeFileSync(path.join(repoPath, "api.js"), "function loadData() { return null; }\n");
+    git(repoPath, "add", "api.js");
+    git(repoPath, "commit", "-m", "rename fetchData to loadData");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 4096,
+    });
+
+    const result = await service.listCommits(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ mode: "regex", pattern: "fetch.*Data" }),
+    );
+
+    assert.equal(result.status, 200);
+    // Both commits touching the function name should appear
+    assert.ok(result.body.length >= 1, "expected at least one regex match");
+    const subjects = result.body.map((c) => c.subject);
+    assert.ok(subjects.some((s) => s.includes("fetchData") || s.includes("rename")));
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("listCommits message mode finds commits by commit message regex", async () => {
+  const repoPath = createTempPath("rtgv-message-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+
+    fs.writeFileSync(path.join(repoPath, "a.txt"), "a\n");
+    git(repoPath, "add", "a.txt");
+    git(repoPath, "commit", "-m", "feat: add feature A");
+
+    fs.writeFileSync(path.join(repoPath, "b.txt"), "b\n");
+    git(repoPath, "add", "b.txt");
+    git(repoPath, "commit", "-m", "fix: fix bug B");
+
+    fs.writeFileSync(path.join(repoPath, "c.txt"), "c\n");
+    git(repoPath, "add", "c.txt");
+    git(repoPath, "commit", "-m", "feat: add feature C");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 4096,
+    });
+
+    const result = await service.listCommits(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ mode: "message", pattern: "^feat:" }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.length, 2, "should find exactly the two feat: commits");
+    const subjects = result.body.map((c) => c.subject).sort();
+    assert.deepEqual(subjects, ["feat: add feature A", "feat: add feature C"]);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("listCommits rejects duplicate mode parameter before running git", async () => {
+  const service = createGitService({
+    repositories: new Map(),
+    gitTimeoutMs: 1000,
+    diffMaxBytes: 1024,
+  });
+
+  const result = await service.listCommits(
+    { id: "demo", name: "demo", path: "/tmp/not-needed" },
+    new URLSearchParams([
+      ["mode", "pickaxe"],
+      ["mode", "regex"],
+    ]),
+  );
+
+  assert.deepEqual(result, {
+    status: 400,
+    body: { error: "Duplicate mode parameter" },
+  });
 });

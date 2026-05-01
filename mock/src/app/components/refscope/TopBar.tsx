@@ -11,6 +11,12 @@ import {
   PanelLeftOpen,
   Eye,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "../ui/tooltip";
+import type { SearchMode } from "../../api";
 import type { GitRef, Repository } from "./data";
 
 export function TopBar({
@@ -39,6 +45,10 @@ export function TopBar({
   onAuthorChange,
   path,
   onPathChange,
+  searchMode,
+  onSearchModeChange,
+  searchPattern,
+  onSearchPatternChange,
   summaryViewOpen,
   onToggleSummaryView,
   sidebarCollapsed,
@@ -69,6 +79,10 @@ export function TopBar({
   onAuthorChange: (value: string) => void;
   path: string;
   onPathChange: (value: string) => void;
+  searchMode: SearchMode;
+  onSearchModeChange: (mode: SearchMode) => void;
+  searchPattern: string;
+  onSearchPatternChange: (value: string) => void;
   summaryViewOpen: boolean;
   onToggleSummaryView: () => void;
   sidebarCollapsed: boolean;
@@ -175,35 +189,50 @@ export function TopBar({
       </label>
 
       <div className="flex-1 flex items-center justify-center gap-2 px-4">
-        <div
-          className="flex items-center gap-2 px-3 w-full max-w-xl"
-          style={{
-            height: 30,
-            background: "var(--rs-bg-canvas)",
-            border: "1px solid var(--rs-border)",
-            borderRadius: "var(--rs-radius-sm)",
-          }}
-        >
-          <Search size={13} style={{ color: "var(--rs-text-muted)" }} />
-          <input
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="Search commit messages…"
-            className="bg-transparent outline-none flex-1"
-            style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
-          />
-          <span
-            className="flex items-center gap-1 px-1.5 rounded"
-            title="Author and path search via Cmd+K (Command Palette)"
+        <div className="flex items-center gap-1.5 w-full max-w-2xl">
+          <SearchModeSelector mode={searchMode} onChange={onSearchModeChange} />
+          <div
+            className="flex items-center gap-2 px-3 flex-1"
             style={{
-              fontSize: 11,
-              color: "var(--rs-text-muted)",
+              height: 30,
+              background: "var(--rs-bg-canvas)",
               border: "1px solid var(--rs-border)",
-              fontFamily: "var(--rs-mono)",
+              borderRadius: "var(--rs-radius-sm)",
             }}
           >
-            <Command size={10} /> K
-          </span>
+            <Search size={13} style={{ color: "var(--rs-text-muted)" }} aria-hidden />
+            {searchMode === "subject" ? (
+              <input
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder="Search commit messages…"
+                aria-label="Search commit messages"
+                className="bg-transparent outline-none flex-1"
+                style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
+              />
+            ) : (
+              <input
+                value={searchPattern}
+                onChange={(event) => onSearchPatternChange(event.target.value)}
+                placeholder={SEARCH_MODE_PLACEHOLDERS[searchMode]}
+                aria-label={SEARCH_MODE_ARIA_LABELS[searchMode]}
+                className="bg-transparent outline-none flex-1"
+                style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
+              />
+            )}
+            <span
+              className="flex items-center gap-1 px-1.5 rounded"
+              title="Author and path search via Cmd+K (Command Palette)"
+              style={{
+                fontSize: 11,
+                color: "var(--rs-text-muted)",
+                border: "1px solid var(--rs-border)",
+                fontFamily: "var(--rs-mono)",
+              }}
+            >
+              <Command size={10} /> K
+            </span>
+          </div>
         </div>
         <div
           className="hidden xl:flex items-center gap-2 px-3"
@@ -438,4 +467,118 @@ function formatRefOption(ref: GitRef) {
   if (ref.type === "tag") return `tag: ${ref.shortName}`;
   if (ref.type === "remote") return `remote: ${ref.shortName}`;
   return ref.shortName;
+}
+
+// Short labels match `hidden xl:flex` breakpoint budget; tooltip exposes the full Git option.
+const SEARCH_MODES: Array<{
+  mode: SearchMode;
+  label: string;
+  tooltip: string;
+}> = [
+  {
+    mode: "subject",
+    label: "Subj",
+    tooltip: "Subject search (git log --grep=<escaped>)\nMatches commit subjects, case-insensitive.",
+  },
+  {
+    mode: "pickaxe",
+    label: "-S",
+    tooltip: "Pickaxe (git log -S<pattern>)\nFinds commits where the number of occurrences of <pattern> changed.\nUse for: tracking where a string was added or removed.",
+  },
+  {
+    mode: "regex",
+    label: "-G",
+    tooltip: "Regex diff search (git log -G<regex>)\nFinds commits where any diff line matches <regex>.\nUse for: pattern-matching inside code changes.",
+  },
+  {
+    mode: "message",
+    label: "--grep",
+    tooltip: "Message regex (git log --grep=<regex>)\nMatches the full commit message (subject + body) as a raw regex.\nCase-insensitive.",
+  },
+];
+
+const SEARCH_MODE_PLACEHOLDERS: Record<SearchMode, string> = {
+  subject: "Search commit messages…",
+  pickaxe: "Search added/removed strings (-S)…",
+  regex: "Regex match diff lines (-G)…",
+  message: "Regex match commit messages (--grep)…",
+};
+
+const SEARCH_MODE_ARIA_LABELS: Record<SearchMode, string> = {
+  subject: "Search commit messages",
+  pickaxe: "Pickaxe pattern (-S): search added or removed strings",
+  regex: "Regex pattern (-G): search diff lines",
+  message: "Message regex (--grep): search commit messages",
+};
+
+function SearchModeSelector({
+  mode,
+  onChange,
+}: {
+  mode: SearchMode;
+  onChange: (mode: SearchMode) => void;
+}) {
+  return (
+    <div
+      className="flex items-center"
+      role="group"
+      aria-label="Search mode"
+      style={{
+        height: 30,
+        background: "var(--rs-bg-canvas)",
+        border: "1px solid var(--rs-border)",
+        borderRadius: "var(--rs-radius-sm)",
+        overflow: "hidden",
+      }}
+    >
+      {SEARCH_MODES.map(({ mode: m, label, tooltip }, index) => {
+        const isActive = m === mode;
+        const isFirst = index === 0;
+        return (
+          <Tooltip key={m}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => onChange(m)}
+                aria-pressed={isActive}
+                aria-label={`Search mode: ${label}`}
+                style={{
+                  height: 30,
+                  padding: "0 7px",
+                  fontSize: 11,
+                  fontFamily: "var(--rs-mono)",
+                  cursor: "pointer",
+                  borderLeft: isFirst ? undefined : "1px solid var(--rs-border)",
+                  background: isActive
+                    ? "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 20%)"
+                    : "transparent",
+                  color: isActive ? "var(--rs-accent)" : "var(--rs-text-muted)",
+                  fontWeight: isActive ? 600 : 400,
+                  whiteSpace: "nowrap",
+                  transition: "background 80ms ease-out, color 80ms ease-out",
+                }}
+              >
+                {label}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent
+              side="bottom"
+              style={{
+                background: "var(--rs-bg-elevated)",
+                color: "var(--rs-text-primary)",
+                border: "1px solid var(--rs-border)",
+                fontSize: 11,
+                fontFamily: "var(--rs-mono)",
+                maxWidth: 320,
+                whiteSpace: "pre-line",
+                zIndex: "var(--rs-z-overlay)",
+              }}
+            >
+              {tooltip}
+            </TooltipContent>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
 }
