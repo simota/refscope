@@ -3,7 +3,7 @@
  * 1 path = 1 円形バブルノード。コミットは「編集イベント」として統計に集約される。
  * force-directed simulation (60 tick 一括) でバブルを配置する。
  */
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   ReactFlow,
   Background,
@@ -27,9 +27,10 @@ import {
   type SimulationNodeDatum,
   type SimulationLinkDatum,
 } from 'd3-force';
-import { getCommit } from '../../api';
+import { getCommit, type WorkTreeResponse } from '../../api';
 import type { Commit, CommitDetail } from './data';
 import { FileContextMenu } from './FileContextMenu';
+import { extractWorkTreeFiles } from '../../lib/workTreeFiles';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -378,6 +379,7 @@ export type ActivityLensProps = {
   selectedCommitHash: string | null;
   onSelectCommit: (hash: string) => void;
   onOpenFileHistory?: (path: string) => void;
+  workTree?: WorkTreeResponse | null;
   paused?: boolean;
 };
 
@@ -542,6 +544,7 @@ export function ActivityLens({
   repoId,
   commits,
   onOpenFileHistory,
+  workTree,
 }: ActivityLensProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -718,16 +721,91 @@ export function ActivityLens({
     });
   }, [commits, detailCache]);
 
+  // Merge working tree changes into statistics for rendering.
+  // Same path → bump commitCount/added/deleted; new path → create a fresh stat.
+  const mergedStats = useMemo(() => {
+    const wtFiles = extractWorkTreeFiles(workTree);
+    if (wtFiles.length === 0) return statistics;
+
+    const wtByPath = new Map<
+      string,
+      { added: number; deleted: number; status: string }
+    >();
+    for (const f of wtFiles) {
+      const ex = wtByPath.get(f.path);
+      if (ex) {
+        wtByPath.set(f.path, {
+          added: ex.added + f.added,
+          deleted: ex.deleted + f.deleted,
+          status: ex.status,
+        });
+      } else {
+        wtByPath.set(f.path, {
+          added: f.added,
+          deleted: f.deleted,
+          status: f.status,
+        });
+      }
+    }
+
+    const merged = new Map<string, FileStat>(statistics);
+    const snapshot = workTree?.snapshotAt ?? '';
+
+    for (const [path, agg] of wtByPath) {
+      const existing = merged.get(path);
+      if (existing) {
+        merged.set(path, {
+          ...existing,
+          commitCount: existing.commitCount + 1,
+          totalAdded: existing.totalAdded + agg.added,
+          totalDeleted: existing.totalDeleted + agg.deleted,
+          lastSeenHash: 'WORKING-TREE',
+          lastSeenShortHash: 'WT',
+          lastSeenSubject: 'Working tree (uncommitted)',
+          lastSeenAuthor: 'Working tree',
+          lastSeenTime: snapshot,
+          lastStatus: agg.status,
+        });
+      } else {
+        let idx = firstSeenIndexRef.current.get(path);
+        if (idx === undefined) {
+          idx = firstSeenIndexRef.current.size;
+          firstSeenIndexRef.current.set(path, idx);
+        }
+        const slash = path.lastIndexOf('/');
+        merged.set(path, {
+          path,
+          basename: slash === -1 ? path : path.slice(slash + 1),
+          parentDir: slash === -1 ? '' : path.slice(0, slash),
+          commitCount: 1,
+          totalAdded: agg.added,
+          totalDeleted: agg.deleted,
+          lastSeenHash: 'WORKING-TREE',
+          lastSeenShortHash: 'WT',
+          lastSeenSubject: 'Working tree (uncommitted)',
+          lastSeenAuthor: 'Working tree',
+          lastSeenTime: snapshot,
+          lastStatus: agg.status,
+          firstSeenIndex: idx,
+          highlightedUntil: 0,
+          isNewFile: false,
+          appearedAt: 0,
+        });
+      }
+    }
+    return merged;
+  }, [statistics, workTree]);
+
   // Run simulation and rebuild nodes whenever statistics or container size changes
   useEffect(() => {
-    if (statistics.size === 0) return;
+    if (mergedStats.size === 0) return;
     if (containerWidth === 0 || containerHeight === 0) return;
 
     const nowMs = Date.now();
-    const statsArray = Array.from(statistics.values());
+    const statsArray = Array.from(mergedStats.values());
 
     // Build edges first (needed for simulation links)
-    const builtEdges = buildCoChangeEdges(detailCache, statistics);
+    const builtEdges = buildCoChangeEdges(detailCache, mergedStats);
 
     // Run simulation
     const positions = runSimulation(
@@ -763,7 +841,7 @@ export function ActivityLens({
     setNodes(newNodes);
     setEdges(builtEdges);
   }, [
-    statistics,
+    mergedStats,
     detailCache,
     containerWidth,
     containerHeight,
