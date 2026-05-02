@@ -8,28 +8,35 @@ nothing to install, configure, or clone first.
 
 ## Usage
 
+Refscope is published from GitHub, not the npm registry, so the package
+identifier is the repository itself.
+
 ```sh
 cd /path/to/your/repo
-npx refscope
+npx -y github:simota/refscope
 ```
 
 In whatever directory you run it, Refscope opens an observatory for that
-repository. By default, Refscope observes the current working directory, binds
-to `127.0.0.1:4175`, and opens your browser to that URL. Press `Ctrl+C` to
-stop.
+repository. By default, Refscope observes the current working directory,
+binds to `127.0.0.1:4175`, and opens your browser to that URL. Press
+`Ctrl+C` to stop.
 
 To observe a different repository without changing directories:
 
 ```sh
-npx refscope --repo /absolute/path/to/another/repo
+npx -y github:simota/refscope --repo /absolute/path/to/another/repo
 ```
 
-If the package name `refscope` is unavailable in your registry, install the
-scoped fallback:
+To pin a specific revision instead of the default branch, append a tag or
+commit:
 
 ```sh
-npx @simota/refscope
+npx -y github:simota/refscope#v0.0.1
 ```
+
+The first run downloads the repository, runs `npm install`, and triggers
+the `prepare` script, which copies the API source into `bundled-api/` and
+builds the bundled UI. Subsequent invocations use the npx cache.
 
 ## Options
 

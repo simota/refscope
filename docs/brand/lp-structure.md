@@ -529,3 +529,9 @@ site/                               # new top-level directory for the GitHub Pag
 - Hero meta line updated from `Allowlist-scoped` to `One command` to reflect zero-install.
 - "Zero-install CLI" was not yet in Beyond MVP (it was planned as a future item but not explicitly listed); added `Static export` to `Likely next` as a replacement roadmap item.
 - Building from source (`make dev-self`) retained as a small footnote in Quickstart for contributors.
+
+### 2026-05-02 — distribution moved off the npm registry
+- The CLI is no longer published to npm. Instead, `npx -y github:simota/refscope` installs and runs from this repository directly via npm's GitHub-shorthand support.
+- Quickstart code blocks updated from `npx refscope` to `npx -y github:simota/refscope`. The two-step structure and the cwd-by-default story are unchanged.
+- `apps/cli/README.md` and the CLI's not-a-Git-working-tree error message were updated to match.
+- Trade-off accepted: the command is longer, but distribution becomes versionable by tag (`#v0.0.1`), keeps the source of truth in one repository, and removes the npm-name occupancy concern.

@@ -1,12 +1,12 @@
 ---
 import CopyButton from "./CopyButton.astro";
 
-const repoUrl = "https://github.com/owner/refscope";
-const specUrl = "https://github.com/owner/refscope/blob/main/docs/spec-v0.md";
+const repoUrl = "https://github.com/simota/refscope";
+const specUrl = "https://github.com/simota/refscope/blob/main/docs/spec-v0.md";
 
-const cmdRun = "npx refscope";
+const cmdRun = "npx -y github:simota/refscope";
 const url2 = "http://127.0.0.1:4175";
-const cmdAltRepo = "npx refscope --repo /absolute/path/to/git/repo";
+const cmdAltRepo = "npx -y github:simota/refscope --repo /absolute/path/to/git/repo";
 ---
 <section id="quickstart" class="rs-section" aria-labelledby="quickstart-heading">
   <div class="rs-container">

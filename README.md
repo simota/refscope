@@ -1,15 +1,22 @@
 # Refscope
 
-Refscope is a local web application for inspecting Git refs and history updates
-as they happen. The repository currently contains the product/architecture
-specification, a Vite React mock UI, and the first backend API slice for reading
-allowlisted Git repositories.
+> An observatory for Git refs and history. Local, read-only, allowlist-scoped.
+
+Refscope watches one Git repository and records what changes — force pushes,
+rebases, resets, ref movements, commit arrivals — while keeping observed facts
+separate from any interpretation. It runs entirely on your machine, does not
+write to the repository, and does not invoke external GPG.
+
+Landing page: <https://simota.github.io/refscope/>
 
 ## Repository layout
 
+- `apps/cli/`: `refscope` CLI — `npx -y github:simota/refscope` serves the API and the bundled UI on one port. Distributed from this repository, not from the npm registry.
+- `apps/api/`: read-only Git inspection API (Node.js 22 ESM, no framework).
+- `mock/`: React + Vite UI. Bundled into the CLI at publish time; developed against the live API in this repository.
+- `apps/web/`: Astro landing page deployed to GitHub Pages.
+- `docs/brand/`: brand guidelines, design tokens, voice and tone, microcopy, and the LP specification.
 - `docs/spec-v0.md`: product and architecture specification.
-- `apps/api/`: local Node.js API for safe, read-only Git history access.
-- `mock/`: Vite React mock UI.
 
 ## Prerequisites
 
@@ -18,14 +25,37 @@ allowlisted Git repositories.
 
 This repository uses pnpm workspaces from the root. Keep a single root `pnpm-lock.yaml` committed when dependencies are installed or changed.
 
-## Setup
+## Run without installing
+
+Refscope is run directly from this GitHub repository. There is no npm package to install and nothing to clone by hand — Node.js 22 is the only prerequisite.
+
+```sh
+cd /path/to/your/repo
+npx -y github:simota/refscope
+```
+
+Refscope opens at `http://127.0.0.1:4175` and observes the current working directory. To watch a different repository:
+
+```sh
+npx -y github:simota/refscope --repo /absolute/path/to/another/repo
+```
+
+Pin a tag if you want a specific revision: `npx -y github:simota/refscope#v0.0.1`. Without a tag, `npx` follows the default branch.
+
+Full options and the CLI security model are in [`apps/cli/README.md`](apps/cli/README.md).
+
+## Building from source
+
+The sections below this are for working on Refscope itself — the API, the mock UI, the CLI, and the landing page.
+
+### Setup
 
 ```sh
 corepack enable
 pnpm install
 ```
 
-## Development
+### Development
 
 Start the API and UI for this repository with one command:
 
@@ -111,25 +141,43 @@ RTGV_ALLOWED_ORIGINS=http://localhost:5173,https://viewer.example.test
 Origins with paths, queries, fragments, credentials, or non-HTTP schemes are
 rejected during API startup.
 
-## Build
+### Build
 
-Build the mock UI from the repository root:
+Build the API and the mock UI from the repository root:
 
 ```sh
 pnpm build
 ```
 
-Equivalent explicit command:
+Build a specific package:
 
 ```sh
-pnpm build:mock
+pnpm build:api          # syntax-check the API
+pnpm build:mock         # build the mock UI
+pnpm build:cli          # bundle the CLI (apps/api/src + mock/dist into apps/cli/)
+pnpm --filter @realtime-git-viewer/web build   # build the landing page
 ```
 
-Build only the API:
+### Working with the CLI source
+
+Build and run the unpublished CLI without npm publishing:
 
 ```sh
-pnpm build:api
+pnpm --filter refscope build
+node apps/cli/bin/refscope.mjs --repo "$(pwd)" --no-open
 ```
+
+`pnpm --filter refscope build` copies `apps/api/src/*.js` into `apps/cli/src/bundled-api/` and builds the mock UI with `VITE_RTGV_API_BASE_URL=""` into `apps/cli/src/static/`. The same script runs as `prepublishOnly`, so the published tarball is self-contained and has no workspace dependencies.
+
+### Working with the landing page
+
+```sh
+pnpm --filter @realtime-git-viewer/web dev      # local preview at 127.0.0.1:4321
+pnpm --filter @realtime-git-viewer/web build    # produce dist/
+pnpm capture:web                                # regenerate captured screenshots and OGP card
+```
+
+The captured media in `apps/web/public/media/` is committed; the capture script is for refreshing it after meaningful mock UI changes. GitHub Pages deployment is automated by `.github/workflows/pages.yml` on push to `main`.
 
 ## API
 
