@@ -22,7 +22,7 @@ Options:
   --no-open                 Do not open a browser window on startup
   --ref-poll <ms>           Ref polling interval for live updates (default: 2000)
   --git-timeout <ms>        Per-Git-command timeout (default: 5000)
-  --diff-max-bytes <bytes>  Maximum diff payload retained in memory (default: 512000)
+  --diff-max-bytes <bytes>  Maximum diff payload retained in memory (default: 4000000)
   -h, --help                Show this help and exit
   -v, --version             Show version and exit
 

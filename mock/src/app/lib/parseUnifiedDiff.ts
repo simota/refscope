@@ -8,7 +8,7 @@
  * `headerLines` and the parser keeps walking — it never throws.
  *
  * Why hand-rolled instead of a library: the API server limits diff output to
- * `RTGV_DIFF_MAX_BYTES` (default 512 KB) and rejects everything dangerous
+ * `RTGV_DIFF_MAX_BYTES` (default 4 MB) and rejects everything dangerous
  * before spawn, so the parser only ever sees small, well-formed-ish output.
  * A 200-line state machine fits this contract better than a 50-KB dependency.
  */

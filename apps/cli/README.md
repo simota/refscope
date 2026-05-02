@@ -48,7 +48,7 @@ builds the bundled UI. Subsequent invocations use the npx cache.
 | `--no-open` | (off) | Do not open a browser window on startup. |
 | `--ref-poll <ms>` | `2000` | Ref polling interval for live updates. |
 | `--git-timeout <ms>` | `5000` | Per-Git-command timeout. |
-| `--diff-max-bytes <bytes>` | `512000` | Maximum diff payload retained in memory. |
+| `--diff-max-bytes <bytes>` | `4000000` | Maximum diff payload retained in memory. |
 | `-h`, `--help` | | Show usage and exit. |
 | `-v`, `--version` | | Show version and exit. |
 
