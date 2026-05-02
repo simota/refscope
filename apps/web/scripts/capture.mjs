@@ -2,7 +2,7 @@
 /**
  * Refscope LP — media capture script.
  *
- * Captures hero PNG + 5 demo scenes against the local mock UI.
+ * Captures hero PNG + 5 demo scenes against the local UI.
  * Run after `make dev-self` is up (UI on 127.0.0.1:5173, API on 127.0.0.1:4175).
  *
  * Outputs to apps/web/public/media/.
@@ -54,13 +54,13 @@ async function waitForServer(url, timeoutMs = 30_000) {
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
-  throw new Error(`Mock UI did not respond at ${url} within ${timeoutMs}ms — start it with \`make dev-self\``);
+  throw new Error(`UI did not respond at ${url} within ${timeoutMs}ms — start it with \`make dev-self\``);
 }
 
 /**
- * Apply theme by overriding next-themes / mock storage.
- * Refscope mock uses a `theme` key on document; if light theme is not yet
- * implemented in the mock, this is a no-op and dark stays.
+ * Apply theme by overriding next-themes / local storage.
+ * Refscope UI uses a `theme` key on document; if light theme is not yet
+ * implemented in the UI, this is a no-op and dark stays.
  */
 async function applyTheme(page, theme) {
   await page.evaluate((t) => {
@@ -122,7 +122,7 @@ async function captureRewrite(page, theme) {
   await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
   await applyTheme(page, theme);
   await settle(page);
-  // Sidebar selector is a guess based on mock layout; fall back to full screenshot.
+  // Sidebar selector is a guess based on the UI layout; fall back to full screenshot.
   const candidates = ["aside", "[data-testid='sidebar']", ".rs-sidebar", "nav[aria-label='Refs']"];
   let selector = null;
   for (const c of candidates) {
@@ -182,7 +182,7 @@ async function captureCommitDetail(page, theme) {
   await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
   await applyTheme(page, theme);
   await settle(page);
-  // The detail column is the right ~45% of the viewport. The mock UI has no
+  // The detail column is the right ~45% of the viewport. The UI has no
   // stable test id for this panel, so clip directly rather than risk grabbing
   // the Compare bar by selector accident.
   const split = Math.floor(VIEWPORT.width * 0.55);

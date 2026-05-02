@@ -12,7 +12,7 @@
 | **`positioning.md`** | 競合比較表、差別化軸、ポジショニングステートメント、避ける positioning trap、Refscope ならではの場面、カテゴリ宣言 | README / LP / pitch 文言、競合対応、機能優先順位の判断 | Compete |
 | **`visual-direction.md`** | ビジュアル原則、カラー戦略、タイポグラフィ、レイアウト、モーション、アイコン、アクセシビリティ targets、ロゴ案 | UI 実装の判断、デザインレビュー、外部デザイナー発注 | Vision |
 | **`tokens.json`** | DTCG v2025.10 準拠のデザイントークン（color / typography / spacing / radius / elevation / motion / z-index、light/dark 両モード） | コンポーネント実装、Figma → コード連携、トークン更新 | Muse |
-| **`tailwind-theme.css`** | Tailwind v4 `@theme` 用 CSS 変数定義。`mock/src/styles/` への配置候補 | Tailwind v4 設定、`mock/` UI 移行 | Muse |
+| **`tailwind-theme.css`** | Tailwind v4 `@theme` 用 CSS 変数定義。`apps/ui/src/styles/` への配置候補 | Tailwind v4 設定、`apps/ui/` 移行 | Muse |
 | **`tokens-rationale.md`** | 各トークン群の意図、コントラスト比検証表、使用ガイド | トークン変更時の影響評価、アクセシビリティ監査 | Muse |
 | **`voice-and-tone.md`** | Voice 原則、状況別 tone shift、言葉選び decision rules、英日文体ガイド、avoid words list、命名規約 | 全テキスト記述、エラーメッセージ設計、ドキュメント執筆 | Prose |
 | **`microcopy.md`** | empty state / status badge / rewrite notice / error message / CORS 救済 / pause / command palette / first-run / README 1-liner — 英日併記。末尾に既存実装の置換マッピング | UI 実装、文言レビュー、i18n 整備 | Prose |
@@ -60,8 +60,8 @@
 
 | 優先度 | 担当候補 | アクション |
 |---|---|---|
-| 高 | Artisan | `microcopy.md` §12 の置換マッピングを `mock/src/app/components/refscope/` に適用 |
-| 高 | Artisan / Forge | `tailwind-theme.css` を `mock/src/styles/` に統合し、既存トークンを Refscope トークンに移行 |
+| 高 | Artisan | `microcopy.md` §12 の置換マッピングを `apps/ui/src/app/components/refscope/` に適用 |
+| 高 | Artisan / Forge | `tailwind-theme.css` を `apps/ui/src/styles/` に統合し、既存トークンを Refscope トークンに移行 |
 | 中 | Echo | Aki ペルソナでのスクリーンリーダー読み上げ検証 (微コピー全 10 種) |
 | 中 | Vision / 外部デザイナー | ロゴ第一候補「同心円のレチクル」の制作と favicon (16/32/180px) 出力 |
 | 中 | Showcase | Storybook で Refscope コンポーネントカタログを構築し、token 適用を視覚検証 |

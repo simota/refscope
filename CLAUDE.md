@@ -7,11 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Refscope is a local web app that inspects Git refs and history in real time. The repo is a pnpm workspace (`pnpm-workspace.yaml`) with two runtimes:
 
 - `apps/api/` — Node 22+ HTTP API. Plain ESM JavaScript, no framework, no TypeScript toolchain. Uses `node:http` directly.
-- `mock/` — Vite + React 18 UI. Tailwind v4, Radix UI primitives, shadcn-style components.
+- `apps/ui/` — Vite + React 18 UI (the product's main interface). Tailwind v4, Radix UI primitives, shadcn-style components.
+- `apps/web/` — Astro 5 public landing page (GitHub Pages target). Static, no runtime API calls.
+- `apps/cli/` — `npx`-runnable launcher that ships the bundled API + UI as static assets.
 - `docs/spec-v0.md` and `docs/user-demand-report.md` carry product/architecture intent.
 - `.agents/` holds per-agent journals; `scripts/orbit/full-implementation/` runs an autonomous Codex implementation loop (not invoked by Claude — only via `make orbit`).
 
-The mock UI talks to the API over HTTP/SSE. There is no shared package between them.
+The UI talks to the API over HTTP/SSE. There is no shared package between them.
 
 ## Commands
 
@@ -19,9 +21,9 @@ Run from the repository root unless noted. The `Makefile` is the canonical entry
 
 - `make dev-self` — start API + UI against this repository (the simplest happy path).
 - `make dev-app RTGV_REPOS=viewer=/absolute/path` — start both against another allowlisted repo. `RTGV_REPOS` must be a comma list of `id=/absolute/git/root` entries; the helper `scripts/dev/validate-repos.sh` rejects relative paths, missing paths, or non-Git roots before anything starts.
-- `make dev-api RTGV_REPOS=...` / `make dev-mock` — start one side only.
-- `make build` — `pnpm build:api && pnpm build:mock`. The API "build" is just `node --check` against each source file (there is no transpile step). `pnpm build:mock` runs `vite build`.
-- `make test` — runs `pnpm --filter @realtime-git-viewer/api test`, which is `node --test` against `apps/api/test/`. The mock has no test suite.
+- `make dev-api RTGV_REPOS=...` / `make dev-ui` — start one side only.
+- `make build` — `pnpm build:api && pnpm build:ui && pnpm build:web`. The API "build" is just `node --check` against each source file (there is no transpile step). `pnpm build:ui` runs `vite build`.
+- `make test` — runs `pnpm --filter @realtime-git-viewer/api test`, which is `node --test` against `apps/api/test/`. The UI has no test suite.
 - Single API test: `node --test apps/api/test/gitRunner.test.js` (or filter with `--test-name-pattern`).
 - `make verify` — full Orbit verification gate (`scripts/orbit/full-implementation/verify.sh`). Use this before claiming a non-trivial change is done.
 - `make audit` — `pnpm audit --audit-level high`.
@@ -53,17 +55,17 @@ loadConfig() → createGitService(config) → createRequestHandler(config, gitSe
 
 Cryptographic signature verification is intentionally **not** performed — `signed: false`, `signatureStatus: "unknown"`, `--no-show-signature` everywhere. Don't add `gpg.program` or pretty-format placeholders that would invoke GPG.
 
-## Mock UI architecture
+## UI architecture
 
-- `mock/src/app/App.tsx` is the single state owner: active repo, selected ref, commit list, selected commit, filters, pause state, SSE subscription. Children in `mock/src/app/components/refscope/` (`TopBar`, `BranchSidebar`, `CommitTimeline`, `DetailPanel`, `CommandPalette`) receive props and emit callbacks — they don't fetch.
-- `mock/src/app/api.ts` is the only place that calls the backend; SSE handling is colocated.
-- `mock/src/app/components/ui/` holds shadcn-style primitives over Radix; reuse these for new UI rather than introducing another component library.
+- `apps/ui/src/app/App.tsx` is the single state owner: active repo, selected ref, commit list, selected commit, filters, pause state, SSE subscription. Children in `apps/ui/src/app/components/refscope/` (`TopBar`, `BranchSidebar`, `CommitTimeline`, `DetailPanel`, `CommandPalette`) receive props and emit callbacks — they don't fetch.
+- `apps/ui/src/app/api.ts` is the only place that calls the backend; SSE handling is colocated.
+- `apps/ui/src/app/components/ui/` holds shadcn-style primitives over Radix; reuse these for new UI rather than introducing another component library.
 - The command palette (`Cmd/Ctrl+K`) operates on the same live state as the rest of the UI — it must not maintain a parallel ref/commit list.
 
 ## Conventions
 
 - API code is **JavaScript ESM**, not TypeScript. Don't introduce a TS build step in `apps/api/`. Use JSDoc if types are valuable.
 - Tests use `node:test` + `node:assert/strict`. No Vitest/Jest in the API.
-- The root `pnpm-lock.yaml` is the only lockfile; never add a nested one in `apps/*` or `mock/`.
+- The root `pnpm-lock.yaml` is the only lockfile; never add a nested one in `apps/*`.
 - Commits follow conventional-commit prefixes (`feat`, `fix`, `chore`, `docs`) as visible in recent history.
 - Agent journals (`.agents/*.md`, `.agents/PROJECT.md`) are append-only logs maintained by named agents (Plea, Nexus, Orbit, Builder). Don't edit them unless the task is explicitly journal maintenance.

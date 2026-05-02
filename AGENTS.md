@@ -2,10 +2,10 @@
 
 ## Project Structure & Module Organization
 
-This repository contains the specification and Vite React mock for a realtime Git log viewer.
+This repository contains the specification and Vite React UI for a realtime Git log viewer.
 
 - `docs/spec-v0.md`: initial architecture and product design.
-- `mock/`: Vite React mock UI for the proposed viewer.
+- `apps/ui/`: Vite React UI for the viewer (the product's main interface).
 - `AGENTS.md`: contributor and agent guidance for future work.
 
 When implementation begins, separate source code by runtime:
@@ -20,8 +20,8 @@ When implementation begins, separate source code by runtime:
 Use pnpm from the repository root. The root `pnpm-lock.yaml` is the only dependency lockfile.
 
 - `pnpm install`: install workspace dependencies.
-- `pnpm dev`: start the mock UI.
-- `pnpm build`: build the mock UI.
+- `pnpm dev`: start the UI.
+- `pnpm build`: build the UI.
 - `pnpm audit --audit-level high`: check for high-severity dependency issues.
 
 No test or lint script is configured yet. Add scripts before documenting them as required checks.

@@ -25,7 +25,7 @@ CONVERGENCE_WINDOW="${CONVERGENCE_WINDOW:-3}"
 CONVERGENCE_THRESHOLD="${CONVERGENCE_THRESHOLD:-0.85}"
 CODEX_MODEL="${CODEX_MODEL:-}"
 CODEX_SANDBOX="${CODEX_SANDBOX:-workspace-write}"
-AUTOCOMMIT_PATHS="${AUTOCOMMIT_PATHS:-apps mock docs scripts package.json pnpm-lock.yaml pnpm-workspace.yaml README.md AGENTS.md .agents}"
+AUTOCOMMIT_PATHS="${AUTOCOMMIT_PATHS:-apps docs scripts package.json pnpm-lock.yaml pnpm-workspace.yaml README.md AGENTS.md .agents}"
 
 STATE_FILE="${LOOP_DIR}/state.env"
 PROGRESS_FILE="${LOOP_DIR}/progress.md"
@@ -157,7 +157,7 @@ stage_loop_changes() {
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     case "${path}" in
-      node_modules/*|mock/node_modules/*|mock/dist/*|.DS_Store|scripts/orbit/full-implementation/runner.log*|scripts/orbit/full-implementation/runner.jsonl|scripts/orbit/full-implementation/state.env|scripts/orbit/full-implementation/state.env.sha256|scripts/orbit/full-implementation/.circuit-state|scripts/orbit/full-implementation/actions.log)
+      node_modules/*|apps/*/node_modules/*|apps/*/dist/*|.DS_Store|scripts/orbit/full-implementation/runner.log*|scripts/orbit/full-implementation/runner.jsonl|scripts/orbit/full-implementation/state.env|scripts/orbit/full-implementation/state.env.sha256|scripts/orbit/full-implementation/.circuit-state|scripts/orbit/full-implementation/actions.log)
         continue
         ;;
     esac

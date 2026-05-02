@@ -13,7 +13,7 @@ Landing page: <https://simota.github.io/refscope/>
 
 - `apps/cli/`: `refscope` CLI — `npx -y github:simota/refscope` serves the API and the bundled UI on one port. Distributed from this repository, not from the npm registry.
 - `apps/api/`: read-only Git inspection API (Node.js 22 ESM, no framework).
-- `mock/`: React + Vite UI. Bundled into the CLI at publish time; developed against the live API in this repository.
+- `apps/ui/`: React + Vite UI. Bundled into the CLI at publish time; developed against the live API in this repository.
 - `apps/web/`: Astro landing page deployed to GitHub Pages.
 - `docs/brand/`: brand guidelines, design tokens, voice and tone, microcopy, and the LP specification.
 - `docs/spec-v0.md`: product and architecture specification.
@@ -46,7 +46,7 @@ Full options and the CLI security model are in [`apps/cli/README.md`](apps/cli/R
 
 ## Building from source
 
-The sections below this are for working on Refscope itself — the API, the mock UI, the CLI, and the landing page.
+The sections below this are for working on Refscope itself — the API, the UI, the CLI, and the landing page.
 
 ### Setup
 
@@ -79,7 +79,7 @@ Equivalent explicit two-terminal setup:
 
 ```sh
 RTGV_REPOS=viewer=/absolute/path/to/git/repo pnpm dev:api
-VITE_RTGV_API_BASE_URL=http://127.0.0.1:4175 pnpm dev:mock
+VITE_RTGV_API_BASE_URL=http://127.0.0.1:4175 pnpm dev:ui
 ```
 
 The API listens on `http://127.0.0.1:4175` by default.
@@ -88,7 +88,7 @@ The web UI reads the API at `http://127.0.0.1:4175` by default. Override it
 when the API runs elsewhere:
 
 ```sh
-VITE_RTGV_API_BASE_URL=http://127.0.0.1:4175 pnpm dev:mock
+VITE_RTGV_API_BASE_URL=http://127.0.0.1:4175 pnpm dev:ui
 ```
 
 When multiple repositories are allowlisted, the web UI repository selector switches
@@ -143,7 +143,7 @@ rejected during API startup.
 
 ### Build
 
-Build the API and the mock UI from the repository root:
+Build the API and the UI from the repository root:
 
 ```sh
 pnpm build
@@ -153,8 +153,8 @@ Build a specific package:
 
 ```sh
 pnpm build:api          # syntax-check the API
-pnpm build:mock         # build the mock UI
-pnpm build:cli          # bundle the CLI (apps/api/src + mock/dist into apps/cli/)
+pnpm build:ui           # build the UI
+pnpm build:cli          # bundle the CLI (apps/api/src + apps/ui/dist into apps/cli/)
 pnpm --filter @realtime-git-viewer/web build   # build the landing page
 ```
 
@@ -167,7 +167,7 @@ pnpm --filter refscope build
 node apps/cli/bin/refscope.mjs --repo "$(pwd)" --no-open
 ```
 
-`pnpm --filter refscope build` copies `apps/api/src/*.js` into `apps/cli/src/bundled-api/` and builds the mock UI with `VITE_RTGV_API_BASE_URL=""` into `apps/cli/src/static/`. The same script runs as `prepublishOnly`, so the published tarball is self-contained and has no workspace dependencies.
+`pnpm --filter refscope build` copies `apps/api/src/*.js` into `apps/cli/src/bundled-api/` and builds the UI with `VITE_RTGV_API_BASE_URL=""` into `apps/cli/src/static/`. The same script runs as `prepublishOnly`, so the published tarball is self-contained and has no workspace dependencies.
 
 ### Working with the landing page
 
@@ -177,7 +177,7 @@ pnpm --filter @realtime-git-viewer/web build    # produce dist/
 pnpm capture:web                                # regenerate captured screenshots and OGP card
 ```
 
-The captured media in `apps/web/public/media/` is committed; the capture script is for refreshing it after meaningful mock UI changes. GitHub Pages deployment is automated by `.github/workflows/pages.yml` on push to `main`.
+The captured media in `apps/web/public/media/` is committed; the capture script is for refreshing it after meaningful UI changes. GitHub Pages deployment is automated by `.github/workflows/pages.yml` on push to `main`.
 
 ## API
 

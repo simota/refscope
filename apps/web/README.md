@@ -17,7 +17,7 @@ Run from the repository root or with `--filter @realtime-git-viewer/web`.
 | `pnpm --filter @realtime-git-viewer/web dev` | Astro dev server on `http://127.0.0.1:4321`. |
 | `pnpm --filter @realtime-git-viewer/web build` | Static build into `dist/`. |
 | `pnpm --filter @realtime-git-viewer/web preview` | Serve `dist/` for local verification. |
-| `pnpm --filter @realtime-git-viewer/web capture` | Capture demo media from a running mock UI. See `scripts/README.md`. |
+| `pnpm --filter @realtime-git-viewer/web capture` | Capture demo media from a running UI. See `scripts/README.md`. |
 
 Root-level shortcuts (defined in the workspace `package.json`):
 `pnpm dev:web`, `pnpm build:web`, `pnpm capture:web`.
@@ -47,5 +47,5 @@ they diverge, the version in `docs/brand/` is canonical.
 
 ## Files this package will not touch
 
-- `apps/api/`, `mock/` — separate packages.
+- `apps/api/`, `apps/ui/` — separate packages.
 - The root `Makefile` — Nexus owns target additions.

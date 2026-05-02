@@ -1,6 +1,6 @@
 # Refscope — Microcopy
 
-This is the authoritative copy deck for Refscope. Every string is paired with its Japanese counterpart. Strings here override any draft text currently in `mock/src/app/components/refscope/`. The replacement mapping at the end of this document is the migration list for existing components.
+This is the authoritative copy deck for Refscope. Every string is paired with its Japanese counterpart. Strings here override any draft text currently in `apps/ui/src/app/components/refscope/`. The replacement mapping at the end of this document is the migration list for existing components.
 
 All copy follows `voice-and-tone.md`. If a string here conflicts with that guide, the guide wins and this file must be updated.
 
@@ -257,7 +257,7 @@ Note: feature names that are themselves Git terminology (`branch`, `tag`, `ref`,
 
 ## 12. Replacement mapping (current strings → recommended strings)
 
-This is the migration list. Each row is a string that exists in `mock/src/app/components/refscope/` today and the recommended replacement. Apply during the next copy-pass; coordinate with Artisan/Builder so component logic that branches on string values is updated atomically.
+This is the migration list. Each row is a string that exists in `apps/ui/src/app/components/refscope/` today and the recommended replacement. Apply during the next copy-pass; coordinate with Artisan/Builder so component logic that branches on string values is updated atomically.
 
 | # | File | Current string | Recommended (EN) | Recommended (JA) | Reason |
 |---|------|---------------|------------------|------------------|--------|
