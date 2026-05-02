@@ -12,6 +12,7 @@ const ALLOWED_GIT_COMMANDS = new Set([
   "rev-parse",
   "show",
   "stash",
+  "submodule",
   "worktree",
 ]);
 
@@ -22,6 +23,7 @@ const ALLOWED_GIT_COMMANDS = new Set([
 // map have no subcommand restriction (e.g. `log`, `diff`).
 const ALLOWED_GIT_SUBCOMMANDS = new Map([
   ["stash", new Set(["list"])],
+  ["submodule", new Set(["status"])],
   ["worktree", new Set(["list"])],
 ]);
 const MAX_TIMEOUT_MS = 2_147_483_647;

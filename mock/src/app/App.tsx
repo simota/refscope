@@ -43,15 +43,19 @@ import {
   fetchWorkTree,
   getCommit,
   getDiff,
+  getRepoState,
   listCommits,
   listRefs,
   listRepositories,
   listStashes,
+  listSubmodules,
   listWorktrees,
   type DiffPayload,
   type RefDriftEntry,
+  type RepoStateResponse,
   type SearchMode,
   type StashEntry,
+  type SubmoduleEntry,
   type ViewerEvent,
   type WorkTreeResponse,
   type WorktreeEntry,
@@ -186,6 +190,8 @@ export default function App() {
   // not on every commit selection — they're slow-moving observation facts.
   const [stashes, setStashes] = useState<StashEntry[]>([]);
   const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
+  const [submodules, setSubmodules] = useState<SubmoduleEntry[]>([]);
+  const [repoState, setRepoState] = useState<RepoStateResponse | null>(null);
   const workTreeAbortRef = useRef<AbortController | null>(null);
   const workTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRefRef = useRef(selectedRef);
@@ -562,24 +568,32 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepo]);
 
-  // Stash + linked-worktree listings refresh per repo. Failure here is a soft
-  // miss: the sidebar just shows the empty state. A repo with neither stashes
-  // nor extra worktrees is the common case, and we don't want a transient
-  // network hiccup to evict an otherwise-working sidebar.
+  // Repo-scoped sidebar facts refresh per repo. All four endpoints are
+  // failure-soft — missing data degrades to an empty section / clean banner
+  // rather than evicting the sidebar; transient network blips shouldn't
+  // surface as red error UI for these slow-moving observation facts.
   useEffect(() => {
     if (!selectedRepo) {
       setStashes([]);
       setWorktrees([]);
+      setSubmodules([]);
+      setRepoState(null);
       return;
     }
     let cancelled = false;
     Promise.all([
       listStashes(selectedRepo).catch(() => [] as StashEntry[]),
       listWorktrees(selectedRepo).catch(() => [] as WorktreeEntry[]),
-    ]).then(([stashList, worktreeList]) => {
+      listSubmodules(selectedRepo).catch(() => [] as SubmoduleEntry[]),
+      getRepoState(selectedRepo).catch(
+        () => null as RepoStateResponse | null,
+      ),
+    ]).then(([stashList, worktreeList, submoduleList, state]) => {
       if (cancelled) return;
       setStashes(stashList);
       setWorktrees(worktreeList);
+      setSubmodules(submoduleList);
+      setRepoState(state);
     });
     return () => {
       cancelled = true;
@@ -1057,6 +1071,7 @@ export default function App() {
           onExpand={() => setSidebarCollapsed(false)}
         >
           <BranchSidebar
+            repoId={selectedRepo}
             refs={refs}
             selectedRef={selectedRef}
             onSelectRef={(ref) => {
@@ -1070,6 +1085,8 @@ export default function App() {
             onSetRefAsCompareTarget={setCompareTarget}
             stashes={stashes}
             worktrees={worktrees}
+            submodules={submodules}
+            repoState={repoState}
           />
         </ResizablePanel>
         <ResizableHandle withHandle aria-label="Resize branch sidebar" />

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { GitCommandError, runGit } from "./gitRunner.js";
 import {
   isValidGitRef,
@@ -189,6 +191,39 @@ export function createGitService(config) {
       );
       const worktrees = parseWorktreePorcelain(stdout, repo.path);
       return { status: 200, body: { worktrees } };
+    },
+
+    async getRepoState(repo) {
+      // Active in-progress operations (merge / rebase / cherry-pick / revert
+      // / bisect / sequencer). Detection is by presence of canonical marker
+      // files inside `.git/`; the spec is in Git's documentation and stable
+      // across versions. We resolve `.git` via `rev-parse --absolute-git-dir`
+      // so linked worktrees (whose `.git` is a file pointing elsewhere) work.
+      const { stdout } = await runGit(
+        repo,
+        ["rev-parse", "--absolute-git-dir"],
+        { timeoutMs: config.gitTimeoutMs },
+      );
+      const gitDir = stdout.trim();
+      const operations = collectInProgressOperations(gitDir);
+      return { status: 200, body: { gitDir, operations } };
+    },
+
+    async listSubmodules(repo) {
+      // `git submodule status --recursive` emits one line per submodule:
+      //   ' <hash> <path> (<describe>)'   — initialized, in sync
+      //   '+<hash> <path> (<describe>)'   — initialized, modified
+      //   '-<hash> <path>'                — uninitialized
+      //   'U<hash> <path>'                — merge conflicts in submodule
+      // The leading space-or-flag is the status indicator. Repos with no
+      // submodules return empty stdout.
+      const { stdout } = await runGit(
+        repo,
+        ["submodule", "status", "--recursive"],
+        { timeoutMs: config.gitTimeoutMs },
+      );
+      const submodules = parseSubmoduleStatus(stdout);
+      return { status: 200, body: { submodules } };
     },
 
     async getRefSnapshot(repo) {
@@ -1254,6 +1289,145 @@ function parseWorktreePorcelain(stdout, primaryPath) {
   }
   if (current) worktrees.push(current);
   return worktrees;
+}
+
+/**
+ * Probe the .git directory for canonical in-progress operation markers. The
+ * file paths and semantics are part of Git's documented surface and have
+ * been stable for many releases; new operations would just mean a new entry
+ * here. We catch each `statSync` individually so a missing marker (the
+ * common case) doesn't poison the whole probe.
+ *
+ * For each marker we expose just enough metadata for the UI to render a
+ * meaningful banner — typically the target hash or branch name — without
+ * promising any state we'd need to keep watching the filesystem to maintain.
+ */
+function collectInProgressOperations(gitDir) {
+  const operations = [];
+  const merge = readFirstLine(path.join(gitDir, "MERGE_HEAD"));
+  if (merge !== null) {
+    operations.push({
+      kind: "merge",
+      targetHash: merge || null,
+      message: readFile(path.join(gitDir, "MERGE_MSG")) || null,
+    });
+  }
+  const cherry = readFirstLine(path.join(gitDir, "CHERRY_PICK_HEAD"));
+  if (cherry !== null) {
+    operations.push({ kind: "cherry-pick", targetHash: cherry || null });
+  }
+  const revert = readFirstLine(path.join(gitDir, "REVERT_HEAD"));
+  if (revert !== null) {
+    operations.push({ kind: "revert", targetHash: revert || null });
+  }
+  if (statIsDir(path.join(gitDir, "rebase-merge"))) {
+    operations.push({
+      kind: "rebase",
+      backend: "merge",
+      headName: readFirstLine(path.join(gitDir, "rebase-merge", "head-name")) ?? null,
+      onto: readFirstLine(path.join(gitDir, "rebase-merge", "onto")) ?? null,
+    });
+  } else if (statIsDir(path.join(gitDir, "rebase-apply"))) {
+    operations.push({
+      kind: "rebase",
+      backend: "apply",
+      headName: readFirstLine(path.join(gitDir, "rebase-apply", "head-name")) ?? null,
+      onto: readFirstLine(path.join(gitDir, "rebase-apply", "onto")) ?? null,
+    });
+  }
+  if (statExists(path.join(gitDir, "BISECT_LOG"))) {
+    operations.push({
+      kind: "bisect",
+      start: readFirstLine(path.join(gitDir, "BISECT_START")) || null,
+    });
+  }
+  if (statIsDir(path.join(gitDir, "sequencer"))) {
+    // `sequencer/` is set up for multi-step cherry-pick / revert. Surfacing
+    // it separately lets the UI explain the queue when CHERRY_PICK_HEAD /
+    // REVERT_HEAD aren't currently set (between steps).
+    operations.push({ kind: "sequencer" });
+  }
+  return operations;
+}
+
+function readFirstLine(filePath) {
+  try {
+    const data = fs.readFileSync(filePath, "utf8");
+    const newline = data.indexOf("\n");
+    return (newline === -1 ? data : data.slice(0, newline)).trim();
+  } catch {
+    return null;
+  }
+}
+
+function readFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function statIsDir(filePath) {
+  try {
+    return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function statExists(filePath) {
+  try {
+    fs.statSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Parse `git submodule status --recursive` lines. Each line starts with a
+ * one-character status flag (or a leading space), followed by the SHA-1, the
+ * path, and an optional `(describe)` annotation in parens. The describe
+ * field is most useful when the submodule's HEAD points at a tag/branch and
+ * may be omitted for detached states.
+ */
+function parseSubmoduleStatus(stdout) {
+  return stdout
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const flag = line[0];
+      // Strip the flag character. Then split: <hash> <path> [(describe)]
+      const rest = line.slice(1);
+      const hashEnd = rest.indexOf(" ");
+      if (hashEnd === -1) return null;
+      const hash = rest.slice(0, hashEnd);
+      const afterHash = rest.slice(hashEnd + 1);
+      // The describe annotation is wrapped in parens. We split on " (" to
+      // protect against paths containing spaces (rare but allowed).
+      const describeStart = afterHash.lastIndexOf(" (");
+      let pathField;
+      let describe = null;
+      if (describeStart !== -1 && afterHash.endsWith(")")) {
+        pathField = afterHash.slice(0, describeStart);
+        describe = afterHash.slice(describeStart + 2, -1);
+      } else {
+        pathField = afterHash;
+      }
+      return {
+        path: pathField,
+        hash,
+        shortHash: /^[0-9a-f]+$/i.test(hash) ? hash.slice(0, 7) : hash,
+        describe,
+        initialized: flag !== "-",
+        modified: flag === "+",
+        conflicted: flag === "U",
+        uninitialized: flag === "-",
+      };
+    })
+    .filter(Boolean);
 }
 
 /**

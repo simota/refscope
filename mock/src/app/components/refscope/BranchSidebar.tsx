@@ -10,10 +10,26 @@ import {
   Archive,
   FolderTree,
   Lock,
+  Pin,
+  PinOff,
+  Box,
+  GitMerge,
+  Crosshair,
+  RotateCcw,
+  Workflow,
+  Undo2,
+  Cherry,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { GitRef, RealtimeAlert } from "./data";
-import type { StashEntry, WorktreeEntry } from "../../api";
+import type {
+  RepoOperation,
+  RepoStateResponse,
+  StashEntry,
+  SubmoduleEntry,
+  WorktreeEntry,
+} from "../../api";
+import { usePinnedRefs } from "../../hooks/usePinnedRefs";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -29,6 +45,7 @@ export type RefDriftSummary = {
 };
 
 export function BranchSidebar({
+  repoId,
   refs,
   selectedRef,
   onSelectRef,
@@ -40,7 +57,12 @@ export function BranchSidebar({
   onSetRefAsCompareTarget,
   stashes = [],
   worktrees = [],
+  submodules = [],
+  repoState = null,
 }: {
+  // Pinned refs are scoped per-repo so favourites from one project don't
+  // leak into another. The hook is no-op when repoId is empty (initial load).
+  repoId: string;
   refs: GitRef[];
   selectedRef: string;
   onSelectRef: (ref: string) => void;
@@ -63,7 +85,17 @@ export function BranchSidebar({
   // checkouts), distinct from the per-commit "working tree" view in the
   // timeline. The primary entry corresponds to the repo refscope is serving.
   worktrees?: WorktreeEntry[];
+  // `git submodule status --recursive` entries.
+  submodules?: SubmoduleEntry[];
+  // Active in-progress operations (merge / rebase / cherry-pick / revert /
+  // bisect / sequencer). `null` while the initial fetch is pending.
+  repoState?: RepoStateResponse | null;
 }) {
+  const { isPinned, toggle: togglePin } = usePinnedRefs(repoId);
+  // Resolve pinned ref names back to live refs in the current snapshot —
+  // pins to deleted branches degrade to "not shown" rather than rendering
+  // dangling rows.
+  const pinnedRefs = refs.filter((ref) => isPinned(ref.name));
   const branches = refs.filter((ref) => ref.type === "branch");
   const tags = refs.filter((ref) => ref.type === "tag");
   const remotes = refs.filter((ref) => ref.type === "remote");
@@ -82,6 +114,44 @@ export function BranchSidebar({
         borderRight: "1px solid var(--rs-border)",
       }}
     >
+      {repoState && repoState.operations.length > 0 ? (
+        <RepoStateBanner operations={repoState.operations} />
+      ) : null}
+
+      {pinnedRefs.length > 0 ? (
+        <Section
+          icon={<Pin size={11} />}
+          title="PINNED"
+          hint={String(pinnedRefs.length)}
+        >
+          {pinnedRefs.map((ref) => (
+            <BranchRow
+              key={`pinned:${ref.name}`}
+              active={selectedRef === ref.shortName || selectedRef === ref.name}
+              dot={
+                ref.type === "tag"
+                  ? "var(--rs-git-merge)"
+                  : ref.type === "remote"
+                    ? "var(--rs-text-muted)"
+                    : "var(--rs-accent)"
+              }
+              name={ref.shortName}
+              fullName={ref.name}
+              hint={ref.type === "branch" ? ref.hash.slice(0, 7) : undefined}
+              muted={ref.type === "remote"}
+              drift={driftMap?.get(ref.name) ?? null}
+              driftScale={driftScale}
+              baseLabel={baseLabel}
+              onClick={() => onSelectRef(ref.name)}
+              onSetCompareBase={onSetRefAsCompareBase}
+              onSetCompareTarget={onSetRefAsCompareTarget}
+              isPinned
+              onTogglePin={() => togglePin(ref.name)}
+            />
+          ))}
+        </Section>
+      ) : null}
+
       <Section icon={<GitBranch size={11} />} title="REF MAP">
         <RefMap refs={refs} selectedRef={selectedRef} />
       </Section>
@@ -102,6 +172,8 @@ export function BranchSidebar({
               onClick={() => onSelectRef(ref.name)}
               onSetCompareBase={onSetRefAsCompareBase}
               onSetCompareTarget={onSetRefAsCompareTarget}
+              isPinned={isPinned(ref.name)}
+              onTogglePin={() => togglePin(ref.name)}
             />
           ))
         ) : (
@@ -120,6 +192,8 @@ export function BranchSidebar({
               onClick={() => onSelectRef(ref.name)}
               onSetCompareBase={onSetRefAsCompareBase}
               onSetCompareTarget={onSetRefAsCompareTarget}
+              isPinned={isPinned(ref.name)}
+              onTogglePin={() => togglePin(ref.name)}
             />
           ))
         ) : (
@@ -142,6 +216,8 @@ export function BranchSidebar({
               onClick={() => onSelectRef(ref.name)}
               onSetCompareBase={onSetRefAsCompareBase}
               onSetCompareTarget={onSetRefAsCompareTarget}
+              isPinned={isPinned(ref.name)}
+              onTogglePin={() => togglePin(ref.name)}
             />
           ))
         ) : (
@@ -205,6 +281,20 @@ export function BranchSidebar({
           ))
         ) : (
           <EmptyRow>No worktrees</EmptyRow>
+        )}
+      </Section>
+
+      <Section
+        icon={<Box size={11} />}
+        title="SUBMODULES"
+        hint={submodules.length ? String(submodules.length) : undefined}
+      >
+        {submodules.length ? (
+          submodules.map((submodule) => (
+            <SubmoduleRow key={submodule.path} submodule={submodule} />
+          ))
+        ) : (
+          <EmptyRow>No submodules</EmptyRow>
         )}
       </Section>
 
@@ -580,6 +670,8 @@ function BranchRow({
   onClick,
   onSetCompareBase,
   onSetCompareTarget,
+  isPinned,
+  onTogglePin,
 }: {
   name: string;
   fullName?: string;
@@ -593,6 +685,8 @@ function BranchRow({
   onClick?: () => void;
   onSetCompareBase?: (refName: string) => void;
   onSetCompareTarget?: (refName: string) => void;
+  isPinned?: boolean;
+  onTogglePin?: () => void;
 }) {
   const button = (
     <button
@@ -626,6 +720,9 @@ function BranchRow({
         }}
       />
       <span className="flex-1 truncate">{name}</span>
+      {isPinned ? (
+        <Pin size={9} aria-label="Pinned" style={{ color: "var(--rs-accent)" }} />
+      ) : null}
       {drift ? (
         <DriftHalo
           ahead={drift.ahead}
@@ -656,6 +753,8 @@ function BranchRow({
       onSwitch={onClick}
       onSetCompareBase={onSetCompareBase}
       onSetCompareTarget={onSetCompareTarget}
+      isPinned={isPinned}
+      onTogglePin={onTogglePin}
     >
       {button}
     </RefRowMenu>
@@ -674,6 +773,8 @@ function RefRowMenu({
   onSwitch,
   onSetCompareBase,
   onSetCompareTarget,
+  isPinned,
+  onTogglePin,
   children,
 }: {
   shortName: string;
@@ -681,6 +782,8 @@ function RefRowMenu({
   onSwitch?: () => void;
   onSetCompareBase?: (refName: string) => void;
   onSetCompareTarget?: (refName: string) => void;
+  isPinned?: boolean;
+  onTogglePin?: () => void;
   children: ReactNode;
 }) {
   // Without the canonical full name we can't safely drive copy / compare on
@@ -714,6 +817,13 @@ function RefRowMenu({
         <ContextMenuItem disabled={!onSwitch} onSelect={() => onSwitch?.()}>
           <ArrowRightToLine />
           Switch to this ref
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!onTogglePin}
+          onSelect={() => onTogglePin?.()}
+        >
+          {isPinned ? <PinOff /> : <Pin />}
+          {isPinned ? "Unpin" : "Pin to top"}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
@@ -1067,6 +1177,234 @@ function WorktreeRow({
  * — refscope never *recomputes* dates, only re-presents them. Returns the
  * raw input on parse failure so the caller still sees something useful.
  */
+/**
+ * Submodule row. Displays the submodule path with the leaf component
+ * emphasised, the SHA-1 the parent repo is pointing at, and any local
+ * status flags (modified / uninitialized / conflicted). Right-click offers
+ * copy of path and hash — switching into a submodule is out of scope for a
+ * read-only viewer, so we don't pretend to support that.
+ */
+function SubmoduleRow({ submodule }: { submodule: SubmoduleEntry }) {
+  const segments = submodule.path.split("/").filter(Boolean);
+  const leaf = segments[segments.length - 1] ?? submodule.path;
+  const prefix = segments.slice(0, -1).join("/");
+  const flag = submodule.conflicted
+    ? "conflict"
+    : submodule.uninitialized
+      ? "uninit"
+      : submodule.modified
+        ? "modified"
+        : null;
+  const flagColor =
+    submodule.conflicted || submodule.modified
+      ? "var(--rs-warning)"
+      : "var(--rs-text-muted)";
+  const button = (
+    <div
+      className="mx-1 px-2 flex flex-col"
+      style={{
+        padding: "4px 10px",
+        borderRadius: 6,
+        opacity: submodule.uninitialized ? 0.65 : 1,
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className="flex-1 truncate"
+          title={submodule.path}
+          style={{
+            fontSize: 12,
+            fontFamily: "var(--rs-mono)",
+            color: "var(--rs-text-primary)",
+          }}
+        >
+          {prefix ? (
+            <span style={{ color: "var(--rs-text-muted)" }}>{prefix}/</span>
+          ) : null}
+          {leaf}
+        </span>
+        {flag ? (
+          <span
+            className="px-1.5 rounded"
+            style={{
+              fontSize: 9,
+              color: flagColor,
+              border: `1px solid color-mix(in oklab, var(--rs-border), ${flagColor} 40%)`,
+              fontFamily: "var(--rs-mono)",
+            }}
+          >
+            {flag}
+          </span>
+        ) : null}
+      </div>
+      <div
+        className="flex items-center gap-2"
+        style={{ fontSize: 10, color: "var(--rs-text-muted)" }}
+      >
+        <span style={{ fontFamily: "var(--rs-mono)" }}>
+          {submodule.shortHash}
+        </span>
+        {submodule.describe ? (
+          <span title={submodule.describe} className="truncate">
+            {submodule.describe}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{button}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          onSelect={() => void navigator.clipboard?.writeText(submodule.path)}
+        >
+          <Copy />
+          Copy submodule path
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!submodule.initialized}
+          onSelect={() => void navigator.clipboard?.writeText(submodule.hash)}
+        >
+          <Copy />
+          Copy commit hash
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/**
+ * Banner that shows active in-progress operations (merge / rebase /
+ * cherry-pick / revert / bisect / sequencer). Render order matches
+ * `repoState.operations`; callers conditionally mount this only when at
+ * least one operation is active so the clean case adds zero UI.
+ */
+function RepoStateBanner({ operations }: { operations: RepoOperation[] }) {
+  return (
+    <div
+      role="status"
+      aria-label="Repository state"
+      style={{
+        margin: "8px 8px 4px",
+        padding: "8px 10px",
+        borderRadius: 6,
+        background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 14%)",
+        border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 50%)",
+      }}
+    >
+      <div
+        className="flex items-center gap-1.5"
+        style={{
+          fontSize: 10,
+          letterSpacing: "0.08em",
+          fontWeight: 600,
+          color: "var(--rs-warning)",
+          marginBottom: 4,
+        }}
+      >
+        <AlertTriangle size={11} />
+        IN PROGRESS
+      </div>
+      <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+        {operations.map((op, index) => (
+          <li
+            key={`${op.kind}:${index}`}
+            className="flex items-center gap-2"
+            style={{
+              fontSize: 12,
+              color: "var(--rs-text-primary)",
+              padding: "2px 0",
+            }}
+          >
+            <RepoOperationIcon op={op} />
+            <RepoOperationLabel op={op} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function RepoOperationIcon({ op }: { op: RepoOperation }) {
+  const color = "var(--rs-warning)";
+  if (op.kind === "merge") return <GitMerge size={11} style={{ color }} />;
+  if (op.kind === "rebase") return <RotateCcw size={11} style={{ color }} />;
+  if (op.kind === "cherry-pick") return <Cherry size={11} style={{ color }} />;
+  if (op.kind === "revert") return <Undo2 size={11} style={{ color }} />;
+  if (op.kind === "bisect") return <Crosshair size={11} style={{ color }} />;
+  return <Workflow size={11} style={{ color }} />;
+}
+
+function RepoOperationLabel({ op }: { op: RepoOperation }) {
+  if (op.kind === "merge") {
+    return (
+      <span className="truncate">
+        Merge in progress
+        {op.targetHash ? (
+          <span
+            style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)", marginLeft: 6 }}
+          >
+            ({op.targetHash.slice(0, 7)})
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  if (op.kind === "rebase") {
+    return (
+      <span className="truncate">
+        Rebase ({op.backend}) in progress
+        {op.headName ? (
+          <span style={{ color: "var(--rs-text-muted)", marginLeft: 6 }}>
+            {op.headName.replace(/^refs\/heads\//, "")} → {op.onto?.slice(0, 7) ?? "?"}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  if (op.kind === "cherry-pick") {
+    return (
+      <span className="truncate">
+        Cherry-pick in progress
+        {op.targetHash ? (
+          <span
+            style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)", marginLeft: 6 }}
+          >
+            ({op.targetHash.slice(0, 7)})
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  if (op.kind === "revert") {
+    return (
+      <span className="truncate">
+        Revert in progress
+        {op.targetHash ? (
+          <span
+            style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)", marginLeft: 6 }}
+          >
+            ({op.targetHash.slice(0, 7)})
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  if (op.kind === "bisect") {
+    return (
+      <span className="truncate">
+        Bisect in progress
+        {op.start ? (
+          <span style={{ color: "var(--rs-text-muted)", marginLeft: 6 }}>
+            from {op.start}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  return <span>Sequencer queued</span>;
+}
 
 function formatRelativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -1091,6 +1429,8 @@ function TagRow({
   onClick,
   onSetCompareBase,
   onSetCompareTarget,
+  isPinned,
+  onTogglePin,
 }: {
   name: string;
   fullName?: string;
@@ -1098,6 +1438,8 @@ function TagRow({
   onClick?: () => void;
   onSetCompareBase?: (refName: string) => void;
   onSetCompareTarget?: (refName: string) => void;
+  isPinned?: boolean;
+  onTogglePin?: () => void;
 }) {
   const button = (
     <button
@@ -1124,6 +1466,9 @@ function TagRow({
     >
       <ChevronRight size={11} style={{ color: "var(--rs-git-merge)" }} />
       <span className="flex-1 truncate text-left">{name}</span>
+      {isPinned ? (
+        <Pin size={9} aria-label="Pinned" style={{ color: "var(--rs-accent)" }} />
+      ) : null}
     </button>
   );
 
@@ -1134,6 +1479,8 @@ function TagRow({
       onSwitch={onClick}
       onSetCompareBase={onSetCompareBase}
       onSetCompareTarget={onSetCompareTarget}
+      isPinned={isPinned}
+      onTogglePin={onTogglePin}
     >
       {button}
     </RefRowMenu>

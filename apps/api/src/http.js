@@ -56,6 +56,16 @@ export function createRequestHandler(config, gitService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "submodules") {
+        const result = await gitService.listSubmodules(repo.value);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "state") {
+        const result = await gitService.getRepoState(repo.value);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "refsDrift") {
         const result = await gitService.getRefDrift(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
@@ -131,6 +141,12 @@ function matchRoute(method, pathname) {
   }
   if (parts.length === 4 && parts[3] === "worktrees") {
     return { name: "worktrees", params: { repoId } };
+  }
+  if (parts.length === 4 && parts[3] === "submodules") {
+    return { name: "submodules", params: { repoId } };
+  }
+  if (parts.length === 4 && parts[3] === "state") {
+    return { name: "state", params: { repoId } };
   }
   // `/refs/drift` is a literal sub-path that lives one segment deeper than
   // `/refs`. Distinct `parts.length` keeps the two from colliding, but we

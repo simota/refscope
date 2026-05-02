@@ -90,6 +90,56 @@ export async function listWorktrees(repoId: string): Promise<WorktreeEntry[]> {
   return body.worktrees;
 }
 
+export type SubmoduleEntry = {
+  path: string;
+  hash: string;
+  shortHash: string;
+  describe: string | null;
+  initialized: boolean;
+  modified: boolean;
+  conflicted: boolean;
+  uninitialized: boolean;
+};
+
+export async function listSubmodules(
+  repoId: string,
+): Promise<SubmoduleEntry[]> {
+  const body = await getJson<{ submodules: SubmoduleEntry[] }>(
+    `/api/repos/${encodeURIComponent(repoId)}/submodules`,
+  );
+  return body.submodules;
+}
+
+export type RepoOperation =
+  | {
+      kind: "merge";
+      targetHash: string | null;
+      message: string | null;
+    }
+  | { kind: "cherry-pick"; targetHash: string | null }
+  | { kind: "revert"; targetHash: string | null }
+  | {
+      kind: "rebase";
+      backend: "merge" | "apply";
+      headName: string | null;
+      onto: string | null;
+    }
+  | { kind: "bisect"; start: string | null }
+  | { kind: "sequencer" };
+
+export type RepoStateResponse = {
+  gitDir: string;
+  operations: RepoOperation[];
+};
+
+export async function getRepoState(
+  repoId: string,
+): Promise<RepoStateResponse> {
+  return getJson<RepoStateResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/state`,
+  );
+}
+
 export type SearchMode = "subject" | "pickaxe" | "regex" | "message";
 
 export async function listCommits(
