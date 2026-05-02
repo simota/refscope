@@ -1,0 +1,126 @@
+---
+import scenes from "../data/demo-scenes.json";
+
+const basePath = (import.meta.env.BASE_URL ?? "/").replace(/\/$/, "");
+const repoUrl = "https://github.com/owner/refscope";
+
+/* Lightweight inline backtick formatter for scene descriptions.
+   Splits on backtick pairs and renders inner segments as <code>. */
+function formatBackticks(input: string): { code: boolean; text: string }[] {
+  const parts: { code: boolean; text: string }[] = [];
+  const re = /`([^`]+)`/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(input)) !== null) {
+    if (m.index > last) parts.push({ code: false, text: input.slice(last, m.index) });
+    parts.push({ code: true, text: m[1] });
+    last = re.lastIndex;
+  }
+  if (last < input.length) parts.push({ code: false, text: input.slice(last) });
+  return parts;
+}
+---
+<section id="demo" class="rs-section" aria-labelledby="demo-heading">
+  <div class="rs-container">
+    <p class="rs-eyebrow">Demo</p>
+    <h2 id="demo-heading">Five scenes. Each is a single observation, captured from the running mock UI.</h2>
+
+    <ol class="rs-demo">
+      {scenes.map((s) => (
+        <li class="rs-demo__row">
+          <div class="rs-demo__caption">
+            <span class="rs-demo__num" aria-hidden="true">{s.n}</span>
+            <h3 class="rs-demo__title">{s.title}</h3>
+            <p class="rs-demo__body">
+              {formatBackticks(s.description).map((p) => (p.code ? <code>{p.text}</code> : <span>{p.text}</span>))}
+            </p>
+          </div>
+
+          <figure class="rs-demo__figure">
+            <picture>
+              <source
+                media="(prefers-color-scheme: dark)"
+                srcset={`${basePath}/media/demo-${s.n}-${s.slug}-dark.png`}
+              />
+              <img
+                src={`${basePath}/media/demo-${s.n}-${s.slug}-light.png`}
+                width="1280"
+                height="800"
+                loading="lazy"
+                decoding="async"
+                alt={s.alt}
+              />
+            </picture>
+          </figure>
+        </li>
+      ))}
+    </ol>
+
+    <div class="rs-demo__cta">
+      <a class="btn btn-primary" href={repoUrl} rel="noreferrer noopener" target="_blank">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2 .37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span>View on GitHub</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .rs-demo {
+    list-style: none;
+    margin: var(--spacing-6) 0 0;
+    padding: 0;
+    display: grid;
+    gap: clamp(32px, 5vw, 56px);
+  }
+  .rs-demo__row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--spacing-4);
+    align-items: start;
+  }
+  @media (min-width: 900px) {
+    .rs-demo__row {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      gap: var(--spacing-8);
+    }
+    .rs-demo__row:nth-child(even) { direction: rtl; }
+    .rs-demo__row:nth-child(even) > * { direction: ltr; }
+  }
+  .rs-demo__num {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--rs-fg-subtle);
+    letter-spacing: var(--tracking-wide);
+  }
+  .rs-demo__title {
+    margin-block: var(--spacing-2) var(--spacing-3);
+    font-size: clamp(18px, 2.2vw, 22px);
+    line-height: var(--leading-snug);
+    letter-spacing: var(--tracking-tight);
+  }
+  .rs-demo__body { color: var(--rs-fg-subtle); line-height: var(--leading-normal); }
+  .rs-demo__body code {
+    font-size: 0.92em;
+    color: var(--rs-fg-base);
+  }
+
+  .rs-demo__figure {
+    margin: 0;
+    padding: 0;
+  }
+  .rs-demo__figure picture {
+    display: block;
+    border: 1px solid var(--rs-border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--rs-bg-sunken);
+    overflow: hidden;
+    aspect-ratio: 16 / 10;
+  }
+  .rs-demo__figure img { width: 100%; height: auto; }
+
+  .rs-demo__cta {
+    margin-top: var(--spacing-8);
+    text-align: center;
+  }
+</style>

@@ -1,0 +1,82 @@
+---
+const cards = [
+  {
+    title: "History rewrites, recorded as facts",
+    body: "When a force push, rebase, or reset moves a ref, Refscope captures the previous tip, the new tip, the time, and the source of detection. The recoverable hash stays visible so the work is never described as lost.",
+    glyph: "rewrite",
+  },
+  {
+    title: "Observation and interpretation, kept apart",
+    body: "What was observed (ref, hash, timestamp) is shown in one column. What it means (rewritten, merge, signature unknown) is shown in another. You can paste the facts into a postmortem without copying anyone's opinion.",
+    glyph: "split",
+  },
+  {
+    title: "A calm UI that lets you read",
+    body: "Live updates do not steal focus, do not auto-scroll, and pause on demand. Status is conveyed by colour, shape, and text together — the page survives greyscale printing, screen readers, and reduced motion.",
+    glyph: "calm",
+  },
+];
+---
+<section id="what-you-get" class="rs-section" aria-labelledby="what-you-get-heading">
+  <div class="rs-container">
+    <p class="rs-eyebrow">What you get</p>
+    <h2 id="what-you-get-heading">Three things Refscope does that other Git tools do not.</h2>
+
+    <div class="rs-grid-3 rs-wyg">
+      {cards.map((c) => (
+        <article class="rs-wyg__card rs-card">
+          <span class="rs-wyg__glyph" aria-hidden="true">
+            {c.glyph === "rewrite" && (
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 8h8" />
+                <path d="M7 5l3 3-3 3" />
+                <path d="M14 13V3" />
+              </svg>
+            )}
+            {c.glyph === "split" && (
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 3v3l5 4 5-4V3" />
+                <path d="M3 13l5-4 5 4" />
+              </svg>
+            )}
+            {c.glyph === "calm" && (
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M5 8h6" />
+              </svg>
+            )}
+          </span>
+          <h3 class="rs-wyg__title">{c.title}</h3>
+          <p class="rs-wyg__body">{c.body}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .rs-wyg { margin-top: var(--spacing-6); }
+  .rs-wyg__card {
+    display: grid;
+    gap: var(--spacing-3);
+  }
+  .rs-wyg__glyph {
+    width: 24px; height: 24px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--color-accent-500);
+  }
+  [data-theme="dark"] .rs-wyg__glyph,
+  .dark .rs-wyg__glyph { color: var(--color-accent-400); }
+
+  .rs-wyg__title {
+    font-size: var(--text-md);
+    font-weight: var(--font-weight-medium);
+    line-height: var(--leading-snug);
+    letter-spacing: var(--tracking-tight);
+  }
+  .rs-wyg__body {
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+  }
+</style>

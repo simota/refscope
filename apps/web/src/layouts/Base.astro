@@ -1,0 +1,140 @@
+---
+/**
+ * Base layout for the Refscope landing page.
+ *
+ * Owns the document head: meta, preload, JSON-LD, theme-stub script,
+ * and the skip link + live region that wrap the main content.
+ *
+ * The theme-stub script is inlined in <head> so the resolved theme is
+ * applied on first paint; this prevents a flash of unstyled theme on
+ * load and keeps focus on the toggle when the user changes themes.
+ */
+import "../styles/global.css";
+
+interface Props {
+  title?: string;
+  description?: string;
+  pathname?: string;
+}
+
+const {
+  title = "Refscope — an observatory for Git refs and history",
+  description = "Refscope is a local, read-only observatory for Git refs and history. It records what changes and keeps observed facts separate from interpretation.",
+  pathname = "/",
+} = Astro.props;
+
+const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://owner.github.io";
+const basePath = (import.meta.env.BASE_URL ?? "/").replace(/\/$/, "");
+const canonical = `${siteUrl}${basePath}${pathname === "/" ? "" : pathname}`.replace(/\/$/, "") || `${siteUrl}${basePath}`;
+const ogImage = `${siteUrl}${basePath}/og-card.png`;
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Refscope",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "macOS, Linux, Windows",
+  description: "A local, read-only observatory for Git refs and history.",
+  url: canonical,
+  softwareVersion: "0.x",
+  license: "https://opensource.org/licenses/MIT",
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  codeRepository: "https://github.com/owner/refscope",
+};
+---
+
+<!doctype html>
+<html lang="en" data-theme-pref="system">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="generator" content={Astro.generator} />
+
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="oklch(0.985 0.006 250)" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="oklch(0.108 0.006 250)" />
+
+    <link rel="icon" type="image/svg+xml" href={`${basePath}/favicon.svg`} />
+
+    {/* Inter — preload Regular for LCP. Medium loads on demand. */}
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      crossorigin="anonymous"
+      href="https://fonts.gstatic.com/s/inter/v19/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfMZg.woff2"
+    />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+
+    {/* Open Graph */}
+    <meta property="og:title" content="Refscope — an observatory for Git refs and history" />
+    <meta property="og:description" content="A local, read-only observer that records when Git refs move and what changed, with observed facts separated from interpretation." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Refscope wordmark next to a commit timeline excerpt showing one history-rewritten notice." />
+
+    {/* Twitter */}
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Refscope — an observatory for Git refs and history" />
+    <meta name="twitter:description" content="A local, read-only observer that records when Git refs move." />
+    <meta name="twitter:image" content={ogImage} />
+
+    {/* JSON-LD: SoftwareApplication */}
+    <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+
+    {/*
+      Theme stub — runs synchronously before first paint.
+      Reads the persisted preference and resolves to a class on <html>.
+      The toggle island reads/writes the same key.
+    */}
+    <script is:inline>
+      (function () {
+        try {
+          var key = "refscope-theme";
+          var pref = localStorage.getItem(key) || "system";
+          var resolved =
+            pref === "system"
+              ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+              : pref;
+          document.documentElement.dataset.theme = resolved;
+          document.documentElement.dataset.themePref = pref;
+          if (resolved === "dark") {
+            document.documentElement.classList.add("dark");
+          }
+        } catch (_) {
+          /* localStorage may be unavailable; fall through to media query CSS. */
+        }
+      })();
+    </script>
+  </head>
+
+  <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
+
+    <slot />
+
+    {/*
+      Single polite live region for clipboard feedback.
+      Components write to #rs-live; nothing else should announce here.
+    */}
+    <div
+      id="rs-live"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;"
+    ></div>
+  </body>
+</html>

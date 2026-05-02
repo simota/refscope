@@ -8,8 +8,12 @@
     "build:api": "pnpm --filter @realtime-git-viewer/api build",
     "dev:mock": "pnpm --filter @realtime-git-viewer/mock dev",
     "build:mock": "pnpm --filter @realtime-git-viewer/mock build",
+    "dev:web": "pnpm --filter @realtime-git-viewer/web dev",
+    "build:web": "pnpm --filter @realtime-git-viewer/web build",
+    "preview:web": "pnpm --filter @realtime-git-viewer/web preview",
+    "capture:web": "pnpm --filter @realtime-git-viewer/web capture",
     "dev": "pnpm dev:mock",
-    "build": "pnpm build:api && pnpm build:mock",
+    "build": "pnpm build:api && pnpm build:mock && pnpm build:web",
     "test": "pnpm --filter @realtime-git-viewer/api test"
   },
   "pnpm": {

@@ -1,0 +1,118 @@
+---
+import CopyButton from "./CopyButton.astro";
+
+const repoUrl = "https://github.com/owner/refscope";
+const specUrl = "https://github.com/owner/refscope/blob/main/docs/spec-v0.md";
+
+const cmd1 = "corepack enable && pnpm install";
+const cmd2 = "make dev-self";
+const url3 = "http://127.0.0.1:5173";
+const cmdAlt = "make dev-app RTGV_REPOS=viewer=/absolute/path/to/git/repo";
+---
+<section id="quickstart" class="rs-section" aria-labelledby="quickstart-heading">
+  <div class="rs-container">
+    <p class="rs-eyebrow">Quickstart</p>
+    <h2 id="quickstart-heading">Three steps. Refscope runs against this repository by default — no configuration needed for the first look.</h2>
+
+    <ol class="rs-qs">
+      <li class="rs-qs__step">
+        <p class="rs-qs__action"><strong>Install dependencies</strong></p>
+        <div class="rs-qs__code">
+          <pre><code>{cmd1}</code></pre>
+          <CopyButton value={cmd1} />
+        </div>
+      </li>
+      <li class="rs-qs__step">
+        <p class="rs-qs__action"><strong>Start the API and UI against this repository</strong></p>
+        <div class="rs-qs__code">
+          <pre><code>{cmd2}</code></pre>
+          <CopyButton value={cmd2} />
+        </div>
+      </li>
+      <li class="rs-qs__step">
+        <p class="rs-qs__action"><strong>Open the observatory</strong></p>
+        <div class="rs-qs__code">
+          <pre><code>{url3}</code></pre>
+          <CopyButton value={url3} label="Copy URL" />
+        </div>
+      </li>
+    </ol>
+
+    <p class="rs-qs__alt">
+      To observe another repository, pass an absolute path: <code>{cmdAlt}</code>. The makefile rejects relative paths and non-Git roots before anything starts.
+    </p>
+
+    <div class="rs-qs__ctas">
+      <a class="btn btn-primary" href={repoUrl} rel="noreferrer noopener" target="_blank">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2 .37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span>View on GitHub</span>
+      </a>
+      <a class="btn btn-ghost" href={specUrl} rel="noreferrer noopener" target="_blank">Read the spec</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .rs-qs {
+    list-style: none;
+    counter-reset: step;
+    margin: var(--spacing-6) 0 0;
+    padding: 0;
+    display: grid;
+    gap: var(--spacing-4);
+  }
+  .rs-qs__step {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 32px 1fr;
+    gap: var(--spacing-3) var(--spacing-4);
+    padding: var(--spacing-4) var(--spacing-4);
+    background: var(--rs-bg-raised);
+    border: 1px solid var(--rs-border-subtle);
+    border-radius: var(--radius-sm);
+  }
+  .rs-qs__step::before {
+    content: counter(step, decimal-leading-zero);
+    grid-row: 1 / span 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--rs-border-base);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--rs-fg-subtle);
+  }
+  .rs-qs__action {
+    grid-column: 2;
+    font-size: var(--text-md);
+  }
+  .rs-qs__code {
+    grid-column: 2;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: stretch;
+    gap: var(--spacing-2);
+  }
+  .rs-qs__code pre {
+    margin: 0;
+    background: var(--rs-bg-base);
+  }
+  .rs-qs__alt {
+    margin-top: var(--spacing-6);
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+  }
+  .rs-qs__alt code {
+    font-size: 0.92em;
+  }
+  .rs-qs__ctas {
+    margin-top: var(--spacing-6);
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-2);
+  }
+</style>

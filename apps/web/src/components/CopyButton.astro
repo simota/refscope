@@ -1,0 +1,87 @@
+---
+/**
+ * Inline "Copy" button for code blocks.
+ * Uses the async Clipboard API; on success briefly shows "Copied" and
+ * announces it through the global #rs-live polite live region.
+ */
+interface Props {
+  value: string;
+  label?: string;
+}
+const { value, label = "Copy" } = Astro.props;
+---
+<button
+  type="button"
+  class="rs-copy"
+  data-copy={value}
+  aria-label={`Copy command: ${value}`}
+>
+  <span class="rs-copy__icon" aria-hidden="true">
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5" y="5" width="9" height="9" rx="1.5" />
+      <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" />
+    </svg>
+  </span>
+  <span class="rs-copy__label">{label}</span>
+</button>
+
+<style>
+  .rs-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1);
+    padding: var(--spacing-1) var(--spacing-2);
+    border: 1px solid var(--rs-border-base);
+    border-radius: var(--radius-sm);
+    background: var(--rs-bg-base);
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-xs);
+    font-family: var(--font-mono);
+  }
+  .rs-copy:hover { color: var(--rs-fg-base); background: var(--rs-surface-hover); }
+  .rs-copy[data-state="ok"]    { color: var(--color-success-fg); border-color: var(--color-success-border); }
+  .rs-copy[data-state="error"] { color: var(--color-error-fg);   border-color: var(--color-error-border); }
+</style>
+
+<script>
+  /* One delegated handler for every CopyButton on the page. */
+  (function () {
+    if ((window as unknown as { __rsCopyBound?: boolean }).__rsCopyBound) return;
+    (window as unknown as { __rsCopyBound?: boolean }).__rsCopyBound = true;
+
+    function announce(message: string) {
+      const live = document.getElementById("rs-live");
+      if (!live) return;
+      live.textContent = "";
+      // Force a tick so duplicate messages still announce.
+      requestAnimationFrame(() => { live.textContent = message; });
+    }
+
+    document.addEventListener("click", async (event) => {
+      const target = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(".rs-copy");
+      if (!target) return;
+      const value = target.dataset.copy ?? "";
+      const labelEl = target.querySelector<HTMLElement>(".rs-copy__label");
+      const original = labelEl?.textContent ?? "Copy";
+
+      try {
+        await navigator.clipboard.writeText(value);
+        target.dataset.state = "ok";
+        if (labelEl) labelEl.textContent = "Copied";
+        announce("Copied to clipboard");
+        window.setTimeout(() => {
+          if (labelEl) labelEl.textContent = original;
+          delete target.dataset.state;
+        }, 2000);
+      } catch {
+        target.dataset.state = "error";
+        if (labelEl) labelEl.textContent = "Couldn't copy";
+        announce("Couldn't copy to clipboard");
+        window.setTimeout(() => {
+          if (labelEl) labelEl.textContent = original;
+          delete target.dataset.state;
+        }, 3000);
+      }
+    });
+  })();
+</script>

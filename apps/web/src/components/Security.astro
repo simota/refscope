@@ -1,0 +1,119 @@
+---
+const rows = [
+  {
+    what: "Repository access",
+    how: "Allowlist via `RTGV_REPOS`. Only listed repository ids are served.",
+  },
+  {
+    what: "Git commands",
+    how: "A fixed read-only set: `cat-file`, `diff`, `for-each-ref`, `log`, `merge-base`, `rev-list`, `rev-parse`, `show`.",
+  },
+  {
+    what: "Spawn model",
+    how: "Argument-array, `shell: false`, `--no-pager`, bounded stdout and stderr, timeouts.",
+  },
+  {
+    what: "Environment",
+    how: "`GIT_*`, SSH agent, proxies, GCM, lazy fetch, terminal prompt, optional locks, ext-diff, and textconv are stripped or disabled.",
+  },
+  {
+    what: "Cryptographic signatures",
+    how: "Not verified. Refscope reports `signed: false` and `signatureStatus: \"unknown\"` rather than guess.",
+  },
+  {
+    what: "Network surface",
+    how: "Localhost HTTP. Default origins: `127.0.0.1:5173`, `localhost:5173`. Override with `RTGV_ALLOWED_ORIGINS`.",
+  },
+];
+
+const specUrl = "https://github.com/owner/refscope/blob/main/docs/spec-v0.md#14-security-design";
+
+function inlineCode(input: string) {
+  const parts: { code: boolean; text: string }[] = [];
+  const re = /`([^`]+)`/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(input)) !== null) {
+    if (m.index > last) parts.push({ code: false, text: input.slice(last, m.index) });
+    parts.push({ code: true, text: m[1] });
+    last = re.lastIndex;
+  }
+  if (last < input.length) parts.push({ code: false, text: input.slice(last) });
+  return parts;
+}
+---
+<section id="security" class="rs-section" aria-labelledby="security-heading">
+  <div class="rs-container">
+    <p class="rs-eyebrow">Security and sandbox</p>
+    <h2 id="security-heading">Refscope reads from Git. It does not write back.</h2>
+    <p class="rs-lede">The constraints below are enforced in code, not in documentation.</p>
+
+    <div class="rs-sec__table-wrap">
+      <table class="rs-sec__table">
+        <thead>
+          <tr><th scope="col">What</th><th scope="col">How</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr>
+              <th scope="row">{r.what}</th>
+              <td>
+                {inlineCode(r.how).map((p) => (p.code ? <code>{p.text}</code> : <span>{p.text}</span>))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="rs-sec__cta">
+      <a class="btn btn-ghost" href={specUrl} rel="noreferrer noopener" target="_blank">Read the spec</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .rs-sec__table-wrap {
+    margin-top: var(--spacing-6);
+    border: 1px solid var(--rs-border-subtle);
+    border-radius: var(--radius-sm);
+    overflow-x: auto;
+  }
+  .rs-sec__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+  }
+  .rs-sec__table thead {
+    background: var(--rs-bg-raised);
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .rs-sec__table th,
+  .rs-sec__table td {
+    text-align: left;
+    padding: var(--spacing-3) var(--spacing-4);
+    vertical-align: top;
+    border-top: 1px solid var(--rs-border-subtle);
+  }
+  .rs-sec__table thead th { border-top: 0; }
+  .rs-sec__table tbody th {
+    width: 32%;
+    color: var(--rs-fg-base);
+    font-weight: var(--font-weight-medium);
+  }
+  .rs-sec__table td {
+    color: var(--rs-fg-subtle);
+    font-family: var(--font-mono);
+    font-size: var(--text-mono-xs);
+    line-height: 1.55;
+  }
+  .rs-sec__table td code {
+    background: var(--color-info-bg);
+    border-color: var(--color-info-border);
+  }
+  .rs-sec__cta { margin-top: var(--spacing-4); }
+</style>

@@ -1,0 +1,364 @@
+/*
+ * Refscope LP — global stylesheet
+ * Tailwind v4 + design tokens (see ./tailwind-theme.css).
+ *
+ * Order matters:
+ *   1. @import "tailwindcss" first so the engine is registered.
+ *   2. Theme tokens second; they extend Tailwind via @theme inline.
+ *   3. Base reset and minimal element styles last.
+ */
+
+@import "tailwindcss";
+@import "./tailwind-theme.css";
+
+/* ── Self-host Inter (subset, 2 weights) and JetBrains Mono via Google Fonts.
+ *    `font-display: swap` is enforced upstream. We preload Inter Regular in
+ *    the document <head> for LCP-critical text.
+ *    These declarations are CSS-only fallbacks; the <link rel="preload"> in
+ *    Base.astro is the actual hint to the browser. */
+
+/* ─────────────────────────────────────────────
+   Base reset and document defaults
+   ───────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* 16px root so rem maths in Tailwind utilities still align with browser defaults
+     even though our text scale is anchored to 14-15px via tokens. */
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background-color: var(--rs-bg-base);
+  color: var(--rs-fg-base);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Theme transition is intentionally near-instant. The observatory does
+   not perform; switching modes is a state change, not an event. */
+:root {
+  color-scheme: light dark;
+  --rs-theme-transition: background-color var(--duration-fast) var(--ease-standard),
+                         color var(--duration-fast) var(--ease-standard),
+                         border-color var(--duration-fast) var(--ease-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --rs-theme-transition: none;
+  }
+}
+
+body,
+header,
+nav,
+main,
+section,
+footer,
+article,
+aside,
+button,
+a {
+  transition: var(--rs-theme-transition);
+}
+
+/* ─────────────────────────────────────────────
+   Typography rhythm
+   ───────────────────────────────────────────── */
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-tight);
+  color: var(--rs-fg-base);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: inherit;
+}
+
+code, kbd, samp, pre {
+  font-family: var(--font-mono);
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-variant-numeric: tabular-nums;
+}
+
+code {
+  font-size: 0.92em;
+  padding: 0 0.3em;
+  border-radius: var(--radius-none);
+  background: var(--color-info-bg);
+  color: var(--rs-fg-base);
+  border: 1px solid var(--color-info-border);
+}
+
+pre {
+  margin: 0;
+  padding: var(--spacing-4);
+  background: var(--rs-bg-sunken);
+  border: 1px solid var(--rs-border-subtle);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-size: var(--text-sm);
+  line-height: var(--leading-tight);
+}
+pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+img, picture, video, svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* ─────────────────────────────────────────────
+   Focus indicator — double ring, accent + halo.
+   Applied to every keyboard-focusable element.
+   See visual-direction.md §7.
+   ───────────────────────────────────────────── */
+
+:focus {
+  outline: 0;
+}
+
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+  box-shadow: 0 0 0 calc(var(--focus-ring-width) + var(--focus-ring-offset))
+              oklch(0.108 0.006 250 / 0.25);
+  border-radius: var(--radius-sm);
+}
+
+[data-theme="dark"] :focus-visible,
+.dark :focus-visible {
+  box-shadow: 0 0 0 calc(var(--focus-ring-width) + var(--focus-ring-offset))
+              oklch(0.985 0.006 250 / 0.20);
+}
+
+/* ─────────────────────────────────────────────
+   Skip link
+   ───────────────────────────────────────────── */
+
+.skip-link {
+  position: absolute;
+  top: var(--spacing-2);
+  left: var(--spacing-2);
+  z-index: var(--z-tooltip);
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--rs-bg-overlay);
+  color: var(--rs-fg-base);
+  border: 1px solid var(--rs-border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  transform: translateY(-200%);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+/* ─────────────────────────────────────────────
+   Selection
+   ───────────────────────────────────────────── */
+
+::selection {
+  background: var(--color-accent-500);
+  color: var(--color-neutral-950);
+}
+
+/* ─────────────────────────────────────────────
+   Layout helpers used across LP sections
+   ───────────────────────────────────────────── */
+
+.rs-container {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--spacing-6);
+}
+
+@media (min-width: 768px) {
+  .rs-container {
+    padding-inline: var(--spacing-8);
+  }
+}
+
+.rs-section {
+  padding-block: clamp(48px, 8vw, 96px);
+  border-top: 1px solid var(--rs-border-subtle);
+}
+
+.rs-section:first-of-type {
+  border-top: 0;
+}
+
+.rs-eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--rs-fg-subtle);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.rs-eyebrow::before {
+  content: "";
+  width: 18px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.rs-section h2 {
+  font-size: clamp(22px, 2.4vw, 28px);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-tight);
+  margin-block: var(--spacing-3) var(--spacing-2);
+}
+
+.rs-section .rs-lede {
+  color: var(--rs-fg-subtle);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  max-width: 64ch;
+}
+
+.rs-card {
+  background: var(--rs-bg-raised);
+  border: 1px solid var(--rs-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-6);
+}
+
+.rs-grid-3 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--spacing-4);
+}
+@media (min-width: 768px) {
+  .rs-grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.rs-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--spacing-4);
+}
+@media (min-width: 768px) {
+  .rs-grid-2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ─────────────────────────────────────────────
+   Buttons
+   ───────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--leading-snug);
+  border: 1px solid transparent;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.btn-primary {
+  background: var(--rs-fg-base);
+  color: var(--rs-bg-base);
+  border-color: var(--rs-fg-base);
+}
+.btn-primary:hover {
+  background: var(--color-neutral-700);
+  border-color: var(--color-neutral-700);
+}
+[data-theme="dark"] .btn-primary:hover,
+.dark .btn-primary:hover {
+  background: var(--color-neutral-200);
+  border-color: var(--color-neutral-200);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--rs-fg-base);
+  border-color: var(--rs-border-base);
+}
+.btn-ghost:hover {
+  background: var(--rs-surface-hover);
+}
+
+.btn-tertiary {
+  background: transparent;
+  color: var(--rs-fg-subtle);
+  border-color: transparent;
+  padding-inline: var(--spacing-2);
+}
+.btn-tertiary:hover {
+  color: var(--rs-fg-base);
+}
+
+/* ─────────────────────────────────────────────
+   Section reveal — disabled under reduced motion.
+   The LP intentionally avoids scroll-triggered reveals
+   per visual-direction.md §5; this is here only to
+   document that the rule is enforced by absence.
+   ───────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

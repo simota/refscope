@@ -1,0 +1,50 @@
+---
+/* The single narrative-tone section. Three short paragraphs, no bullets. */
+---
+<section id="why-observatory" class="rs-section" aria-labelledby="why-observatory-heading">
+  <div class="rs-container rs-why">
+    <p class="rs-eyebrow">Why an observatory?</p>
+    <h2 id="why-observatory-heading">A telescope log, not an alarm bell.</h2>
+
+    <div class="rs-why__body">
+      <p>
+        Git history is rewritten in places no one is watching. A force push, a reset, a reflog
+        expiry — yesterday's commit becomes today's stranger, and the only record of the change is
+        the change itself.
+      </p>
+      <p>
+        Refscope is the observatory. It opens beside your repository, records what was observed,
+        and separates that record from any interpretation. It does not raise alarms. It does not
+        infer intent. It writes down the time, the ref, and both hashes, the way a telescope log
+        writes down the time, the coordinates, and the seeing conditions.
+      </p>
+      <p>
+        When the question comes — "what happened to <code>main</code> at 02:17?" — Refscope has an
+        answer that does not require trust in Refscope. The evidence is there, in the same form a
+        Git command would have produced, with the interpretation labelled separately so it can be
+        agreed with or rejected on its own.
+      </p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .rs-why { max-width: 760px; }
+  .rs-why h2 {
+    font-size: clamp(22px, 2.6vw, 30px);
+    line-height: var(--leading-snug);
+    letter-spacing: var(--tracking-tight);
+    margin-block: var(--spacing-3) var(--spacing-6);
+    max-width: 30ch;
+  }
+  .rs-why__body { display: grid; gap: var(--spacing-4); }
+  .rs-why__body p {
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-md);
+    line-height: 1.65;
+  }
+  .rs-why__body code {
+    font-size: 0.92em;
+    color: var(--rs-fg-base);
+  }
+</style>

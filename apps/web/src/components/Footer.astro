@@ -1,0 +1,130 @@
+---
+import ThemeToggle from "./ThemeToggle.astro";
+
+const repoUrl = "https://github.com/owner/refscope";
+const issuesUrl = `${repoUrl}/issues`;
+const releasesUrl = `${repoUrl}/releases`;
+
+const cols = [
+  {
+    heading: "Repository",
+    links: [
+      { label: "View on GitHub", href: repoUrl, external: true },
+      { label: "Issues", href: issuesUrl, external: true },
+      { label: "Releases", href: releasesUrl, external: true },
+    ],
+  },
+  {
+    heading: "Documentation",
+    links: [
+      { label: "Spec (v0)", href: `${repoUrl}/blob/main/docs/spec-v0.md`, external: true },
+      { label: "User demand reports", href: `${repoUrl}/blob/main/docs/user-demand-report.md`, external: true },
+      { label: "Brand", href: `${repoUrl}/tree/main/docs/brand`, external: true },
+    ],
+  },
+  {
+    heading: "Project",
+    links: [
+      { label: "License (MIT)", href: `${repoUrl}/blob/main/LICENSE`, external: true },
+      { label: "Code of conduct", href: `${repoUrl}/blob/main/CODE_OF_CONDUCT.md`, external: true },
+      { label: "Contributing", href: `${repoUrl}/blob/main/CONTRIBUTING.md`, external: true },
+    ],
+  },
+];
+
+const buildSha = (process.env.GITHUB_SHA ?? "").slice(0, 7) || "local";
+---
+<footer class="rs-footer">
+  <div class="rs-container rs-footer__inner">
+    <div class="rs-footer__cols">
+      {cols.map((c) => (
+        <section>
+          <h2 class="rs-footer__heading">{c.heading}</h2>
+          <ul>
+            {c.links.map((l) => (
+              <li>
+                <a href={l.href} {...(l.external ? { rel: "noreferrer noopener", target: "_blank" } : {})}>{l.label}</a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+
+    <p class="rs-footer__line">
+      Refscope — a quiet observatory for Git refs and history. Local-first, read-only, allowlist-scoped.
+    </p>
+
+    <div class="rs-footer__row">
+      <ThemeToggle />
+      <p class="rs-footer__sha">
+        <span class="rs-footer__sha-label">build</span>
+        <code>{buildSha}</code>
+      </p>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .rs-footer {
+    border-top: 1px solid var(--rs-border-subtle);
+    padding-block: var(--spacing-8);
+    background: var(--rs-bg-base);
+  }
+  .rs-footer__cols {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--spacing-6);
+  }
+  @media (min-width: 768px) {
+    .rs-footer__cols { grid-template-columns: repeat(3, 1fr); }
+  }
+  .rs-footer__heading {
+    font-size: var(--text-xs);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    color: var(--rs-fg-subtle);
+    margin-bottom: var(--spacing-3);
+  }
+  .rs-footer ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--spacing-2);
+  }
+  .rs-footer a {
+    color: var(--rs-fg-base);
+    font-size: var(--text-sm);
+  }
+  .rs-footer a:hover { color: var(--color-accent-500); }
+
+  .rs-footer__line {
+    margin-top: var(--spacing-8);
+    text-align: center;
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+  }
+  .rs-footer__row {
+    margin-top: var(--spacing-6);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-3);
+    flex-wrap: wrap;
+  }
+  .rs-footer__sha {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-xs);
+  }
+  .rs-footer__sha-label {
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+    font-family: var(--font-mono);
+  }
+</style>

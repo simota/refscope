@@ -1,0 +1,84 @@
+---
+const next = [
+  { name: "Period summaries", note: "that aggregate observations across a window" },
+  { name: "Pinned refs",      note: "for repositories with many branches" },
+  { name: "File history",     note: "from a single path back through renames" },
+];
+
+const out = [
+  { name: "Cryptographic signature verification", note: "(would invoke external GPG)" },
+  { name: "Operations against the repository",     note: "(no commit, no push, no rebase)" },
+  { name: "Cloud or remote agent",                 note: "(local-first only)" },
+];
+---
+<section id="beyond-mvp" class="rs-section" aria-labelledby="beyond-mvp-heading">
+  <div class="rs-container">
+    <p class="rs-eyebrow">Beyond MVP</p>
+    <h2 id="beyond-mvp-heading">What is not yet here.</h2>
+    <p class="rs-lede">Refscope is a v0. Below is what is honest to say about what comes next, and what does not.</p>
+
+    <div class="rs-grid-2 rs-bm">
+      <div class="rs-card rs-bm__col">
+        <h3 class="rs-bm__title"><code>Likely next</code></h3>
+        <ul>
+          {next.map((i) => (
+            <li><code>{i.name}</code> <span>{i.note}</span></li>
+          ))}
+        </ul>
+      </div>
+      <div class="rs-card rs-bm__col">
+        <h3 class="rs-bm__title"><code>Not in scope</code></h3>
+        <ul>
+          {out.map((i) => (
+            <li><code>{i.name}</code> <span>{i.note}</span></li>
+          ))}
+        </ul>
+      </div>
+    </div>
+
+    <p class="rs-bm__foot">
+      No quarter-by-quarter dates. No Q3-2026 promises. The repository's open issues are the source of truth.
+    </p>
+  </div>
+</section>
+
+<style>
+  .rs-bm { margin-top: var(--spacing-6); }
+  .rs-bm__col { display: grid; gap: var(--spacing-3); }
+  .rs-bm__title {
+    font-size: var(--text-sm);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: var(--tracking-wide);
+    color: var(--rs-fg-subtle);
+    text-transform: uppercase;
+  }
+  .rs-bm__title code {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font-size: 1em;
+  }
+  .rs-bm ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--spacing-2);
+  }
+  .rs-bm li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--spacing-2);
+    font-size: var(--text-base);
+    color: var(--rs-fg-base);
+    line-height: var(--leading-snug);
+  }
+  .rs-bm li span { color: var(--rs-fg-subtle); font-size: var(--text-sm); }
+  .rs-bm__foot {
+    margin-top: var(--spacing-6);
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-sm);
+  }
+</style>

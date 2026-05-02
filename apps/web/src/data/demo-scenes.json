@@ -1,0 +1,66 @@
+[
+  {
+    "n": "01",
+    "slug": "rewrite-detection",
+    "title": "A force push is recorded, not announced",
+    "description": "The sidebar shows the ref name, the previous tip, the current tip, and the observed time. Nothing flashes. The recoverable hash stays visible so the user can run `git reflog` to recover.",
+    "alt": "Sidebar showing a history-rewritten notice for the main branch with previous tip, current tip, and observation time visible.",
+    "lengthSec": 8
+  },
+  {
+    "n": "02",
+    "slug": "commit-timeline",
+    "title": "The commit timeline reads top to bottom",
+    "description": "Each commit is one row: hash, author, message, additions and deletions, signature status. New commits arrive without scrolling the row you were reading.",
+    "alt": "Commit timeline listing ten commits in a dense table; the most recent commit row is highlighted to mark it as newly observed.",
+    "lengthSec": 7
+  },
+  {
+    "n": "03",
+    "slug": "compare-bar",
+    "title": "Compare bar pins a base and a target",
+    "description": "Pick a base ref and a target ref. Refscope returns ahead and behind counts, file totals, and three copyable Git commands — `log`, `diff --stat`, `diff` — with the revisions kept as separate tokens.",
+    "alt": "Compare bar with main as base and a feature branch as target, showing ahead and behind counts and three copyable Git commands.",
+    "lengthSec": 9
+  },
+  {
+    "n": "04",
+    "slug": "pause-live-updates",
+    "title": "Live updates, paused",
+    "description": "Press pause. New observations are counted in the badge but the timeline holds still. Resume to apply the queue. Useful when you are reading a commit and a teammate force-pushes.",
+    "alt": "Three-pane layout with the top bar's pause control engaged; the timeline holds its position while a counter records queued live updates.",
+    "lengthSec": 8
+  },
+  {
+    "n": "05",
+    "slug": "command-palette",
+    "title": "Command palette, same state as the page",
+    "description": "Cmd or Ctrl plus K. Run `pause`, `copy current commit hash`, `clear path filter`, and the page state updates in place. The palette does not maintain a parallel list of refs or commits.",
+    "alt": "Command palette open with the pause command highlighted; the rest of the page is dimmed but readable behind the palette.",
+    "lengthSec": 6
+  },
+  {
+    "n": "06",
+    "slug": "commit-detail",
+    "title": "Commit detail, with facts in their own column",
+    "description": "Hash, parents, refs, change graph, file-status mix, and the changed-files list sit in a column of their own. Interpretation lives in badges next to the facts, never inside them — paste the hash without copying anyone's opinion.",
+    "alt": "Commit detail panel showing the full commit hash, parent commits, refs, a change graph, the file status mix, and a list of changed files.",
+    "lengthSec": 7
+  },
+  {
+    "n": "07",
+    "slug": "period-summary",
+    "title": "Period summary as an observation log",
+    "description": "Aggregate observations over a window into labelled bars — commit count, additions, deletions, signed commits, merge commits, and live-update arrivals — read like a telescope's nightly log.",
+    "alt": "Period summary view showing labelled bars for commit count, additions, deletions, signed commits, merges, and live-update arrivals.",
+    "lengthSec": 7
+  },
+  {
+    "n": "08",
+    "slug": "cvd-theme",
+    "title": "Color-blind safe palette, one toggle away",
+    "description": "Switch the status palette to the Wong scheme so red, orange, blue, and yellow stay distinguishable for protan, deutan, and tritan vision. Status text and shapes carry the same meaning in either palette.",
+    "alt": "Top bar with the CVD toggle on; sidebar and timeline are rendered in the Wong color-blind safe palette.",
+    "lengthSec": 6
+  }
+]
