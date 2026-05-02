@@ -162,8 +162,8 @@ base(0) → raised(10) → dropdown(100) → sticky(200) → overlay(300) → mo
 ```
 docs/brand/
   tokens.json          ← DTCG v2025.10 準拠。単一の真実の源泉
-  tailwind-theme.css   ← Tailwind v4 @theme 定義。mock/src/styles/ へコピーして統合
+  tailwind-theme.css   ← Tailwind v4 @theme 定義。apps/ui/src/styles/ へコピーして統合
   tokens-rationale.md  ← このファイル
 ```
 
-`mock/src/styles/theme.css` の既存シャドウ/ラジウス定義は本トークンに置き換えてください。移行時は既存の `--radius: 0.625rem`（10px）を `--radius-sm: 4px` に変更する点に注意してください（8px以上禁止制約への適合）。
+`apps/ui/src/styles/theme.css` の既存シャドウ/ラジウス定義は本トークンに置き換えてください。移行時は既存の `--radius: 0.625rem`（10px）を `--radius-sm: 4px` に変更する点に注意してください（8px以上禁止制約への適合）。

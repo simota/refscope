@@ -1,5 +1,5 @@
 {
-  "name": "@realtime-git-viewer/mock",
+  "name": "@realtime-git-viewer/ui",
   "private": true,
   "version": "0.0.1",
   "type": "module",

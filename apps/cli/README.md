@@ -137,7 +137,7 @@ node apps/cli/bin/refscope.mjs --repo "$(pwd)" --no-open
 ```
 
 `pnpm --filter refscope build` copies `apps/api/src/*.js` into
-`apps/cli/src/bundled-api/` and builds the mock UI with
+`apps/cli/src/bundled-api/` and builds the UI with
 `VITE_RTGV_API_BASE_URL=""` into `apps/cli/src/static/`. The same script
 runs as `prepublishOnly`, so the published tarball is self-contained and
 has no workspace dependencies.

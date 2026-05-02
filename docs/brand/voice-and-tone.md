@@ -167,4 +167,4 @@ These words must not appear in product copy. Substitutions are listed in section
 - Any new user-facing string must be checked against sections 3, 4, 5, and 6 before it ships.
 - Status labels (`new`, `rewritten`, `force-pushed`, `merge`, `signature unknown`, `error`) are governed in `microcopy.md` section "Status badges". They are normalized vocabulary; do not invent synonyms in code.
 - When a string fails the voice check, propose the rewrite alongside the original; do not silently change strings that may be referenced elsewhere.
-- The replacement mapping at the end of `microcopy.md` is the canonical migration list for existing strings in `mock/src/app/components/refscope/`.
+- The replacement mapping at the end of `microcopy.md` is the canonical migration list for existing strings in `apps/ui/src/app/components/refscope/`.

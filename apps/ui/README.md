@@ -1,8 +1,8 @@
-# Realtime Git Viewer Mock
+# Realtime Git Viewer UI
 
-This package contains the Vite React UI for Realtime Git Viewer. It keeps the
-original mock visual baseline, but the main repository, ref, commit, detail, and
-diff flows now read from the local API service.
+This package contains the Vite React UI for Realtime Git Viewer — the
+product's main interface. The repository, ref, commit, detail, and diff
+flows read from the local API service.
 
 ## Running from the repository root
 
@@ -12,10 +12,10 @@ Install dependencies with the root workspace:
 pnpm install
 ```
 
-Start the mock UI:
+Start the UI:
 
 ```sh
-pnpm dev:mock
+pnpm dev:ui
 ```
 
 By default the UI reads `http://127.0.0.1:4175`. Start the API separately with
@@ -23,7 +23,7 @@ an allowlisted repository:
 
 ```sh
 RTGV_REPOS=viewer=/absolute/path/to/git/repo pnpm dev:api
-VITE_RTGV_API_BASE_URL=http://127.0.0.1:4175 pnpm dev:mock
+VITE_RTGV_API_BASE_URL=http://127.0.0.1:4175 pnpm dev:ui
 ```
 
 The `RTGV_REPOS` path must be an absolute Git working tree root containing a
@@ -64,17 +64,17 @@ The commit detail panel can copy the selected commit hash or a local
 `git show --stat --patch <hash>` command to the clipboard without running any
 Git command from the browser.
 The sidebar alert section starts empty and is populated from real
-`history_rewritten` SSE events instead of static mock warnings.
+`history_rewritten` SSE events instead of static placeholder warnings.
 Commits first observed through real `commit_added` SSE events are highlighted as
 new in the timeline after the UI refreshes from the API. The highlight is kept
 only in browser state and clears when switching repositories.
 Typed SSE `error` events from the API are shown in the timeline as sanitized
 API errors, while ordinary connection failures still update the live status.
 
-Build the mock UI:
+Build the UI:
 
 ```sh
-pnpm build:mock
+pnpm build:ui
 ```
 
 The repository keeps dependency resolution in the root `pnpm-lock.yaml`; do not add package-manager lockfiles inside this package.

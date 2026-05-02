@@ -20,22 +20,21 @@
     "refscope": "./apps/cli/bin/refscope.mjs"
   },
   "workspaces": [
-    "apps/*",
-    "mock"
+    "apps/*"
   ],
   "scripts": {
     "dev:api": "pnpm --filter @realtime-git-viewer/api dev",
     "build:api": "pnpm --filter @realtime-git-viewer/api build",
-    "dev:mock": "pnpm --filter @realtime-git-viewer/mock dev",
-    "build:mock": "pnpm --filter @realtime-git-viewer/mock build",
+    "dev:ui": "pnpm --filter @realtime-git-viewer/ui dev",
+    "build:ui": "pnpm --filter @realtime-git-viewer/ui build",
     "dev:web": "pnpm --filter @realtime-git-viewer/web dev",
     "build:web": "pnpm --filter @realtime-git-viewer/web build",
     "preview:web": "pnpm --filter @realtime-git-viewer/web preview",
     "capture:web": "pnpm --filter @realtime-git-viewer/web capture",
     "build:cli": "pnpm --filter refscope build",
     "dev:cli": "pnpm --filter refscope build && node apps/cli/bin/refscope.mjs --repo .",
-    "dev": "pnpm dev:mock",
-    "build": "pnpm build:api && pnpm build:mock && pnpm build:web",
+    "dev": "pnpm dev:ui",
+    "build": "pnpm build:api && pnpm build:ui && pnpm build:web",
     "test": "pnpm --filter @realtime-git-viewer/api test",
     "prepare": "node apps/cli/scripts/build.mjs"
   },
