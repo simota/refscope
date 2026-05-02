@@ -79,7 +79,46 @@ export type RealtimeAlert = {
   observedAt: string;
   detectionSource: "polling" | "reconnect_recovery" | "direct_ref_change";
   explanation: string;
+  /** Optional confidence level for how the rewrite was detected. */
+  confidence?: 'exact' | 'inferred';
+  /** Optional evidence details for why this alert was raised. */
+  evidence?: {
+    method: string;
+    observedAt: string;
+    gitCommand?: string;
+  };
 };
+
+// ---------------------------------------------------------------------------
+// (B) Fact-Visual schema separation
+// ---------------------------------------------------------------------------
+
+export type RepoView<TFacts> = {
+  facts: TFacts;
+  derived?: Record<string, unknown>;
+  meta: {
+    schemaVersion: string;
+    capturedAt: string;
+    refscopeVersion?: string;
+    gitRunnerCommands?: string[];
+  };
+};
+
+export function buildRepoView<TFacts>(
+  facts: TFacts,
+  opts?: Partial<RepoView<TFacts>['meta']> & { derived?: Record<string, unknown> },
+): RepoView<TFacts> {
+  const { derived, ...metaOverrides } = opts ?? {};
+  return {
+    facts,
+    derived,
+    meta: {
+      schemaVersion: '0.1.0-prototype',
+      capturedAt: new Date().toISOString(),
+      ...metaOverrides,
+    },
+  };
+}
 
 export type CommitDetail = {
   hash: string;
