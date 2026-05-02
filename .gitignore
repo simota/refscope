@@ -3,11 +3,9 @@ node_modules/
 dist/
 .vite/
 
-# Refscope CLI bundled output (populated by `pnpm --filter refscope build`)
-apps/cli/src/bundled-api/*
-!apps/cli/src/bundled-api/.gitkeep
-apps/cli/src/static/*
-!apps/cli/src/static/.gitkeep
+# Refscope CLI bundled output is intentionally tracked so
+# `npx -y github:simota/refscope` works without a build step.
+# Refresh with `pnpm --filter refscope build` before committing CLI changes.
 
 # Astro web app
 apps/web/.astro/

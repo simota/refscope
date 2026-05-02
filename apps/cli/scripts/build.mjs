@@ -19,7 +19,6 @@ const API_SRC = path.join(REPO_ROOT, "apps", "api", "src");
 const MOCK_DIST = path.join(REPO_ROOT, "mock", "dist");
 const BUNDLED_API_DIR = path.join(CLI_DIR, "src", "bundled-api");
 const STATIC_DIR = path.join(CLI_DIR, "src", "static");
-const KEEP_FILE = ".gitkeep";
 
 run().catch((error) => {
   process.stderr.write(`build: ${error?.stack ?? error}\n`);
@@ -27,6 +26,14 @@ run().catch((error) => {
 });
 
 async function run() {
+  if (await isAlreadyBundled() && !process.env.REFSCOPE_BUILD_FORCE) {
+    // The repo ships pre-built bundled-api/ and static/ so `npx github:` works
+    // without invoking vite. Skip when those exist; pass REFSCOPE_BUILD_FORCE=1
+    // to rebuild explicitly.
+    log("bundled-api/ and static/ already present, skipping (set REFSCOPE_BUILD_FORCE=1 to override)");
+    return;
+  }
+
   log("syncing API source into bundled-api/");
   await syncApiSource();
 
@@ -39,6 +46,16 @@ async function run() {
   log("done");
 }
 
+async function isAlreadyBundled() {
+  try {
+    await fs.access(path.join(BUNDLED_API_DIR, "config.js"));
+    await fs.access(path.join(STATIC_DIR, "index.html"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function syncApiSource() {
   await resetDir(BUNDLED_API_DIR);
   const entries = await fs.readdir(API_SRC, { withFileTypes: true });
@@ -48,7 +65,6 @@ async function syncApiSource() {
     if (entry.name.endsWith(".test.js")) continue;
     await fs.copyFile(path.join(API_SRC, entry.name), path.join(BUNDLED_API_DIR, entry.name));
   }
-  await fs.writeFile(path.join(BUNDLED_API_DIR, KEEP_FILE), "");
 }
 
 async function buildMock() {
@@ -74,7 +90,6 @@ async function buildMock() {
 async function syncStaticDist() {
   await resetDir(STATIC_DIR);
   await copyDir(MOCK_DIST, STATIC_DIR);
-  await fs.writeFile(path.join(STATIC_DIR, KEEP_FILE), "");
 }
 
 async function resetDir(dir) {
