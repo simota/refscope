@@ -11,6 +11,18 @@ const ALLOWED_GIT_COMMANDS = new Set([
   "rev-list",
   "rev-parse",
   "show",
+  "stash",
+  "worktree",
+]);
+
+// Some Git porcelain commands have both read and write subcommands. The
+// runner allowlist gates the top-level command, but we layer a second
+// allowlist here so a future caller can't accidentally invoke `stash drop`
+// or `worktree remove` through this same gate. Commands not present in this
+// map have no subcommand restriction (e.g. `log`, `diff`).
+const ALLOWED_GIT_SUBCOMMANDS = new Map([
+  ["stash", new Set(["list"])],
+  ["worktree", new Set(["list"])],
 ]);
 const MAX_TIMEOUT_MS = 2_147_483_647;
 export const MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -188,5 +200,9 @@ function validateGitArgs(args) {
   }
   if (!ALLOWED_GIT_COMMANDS.has(args[0])) {
     throw new Error("Git command is not allowed");
+  }
+  const subcommandAllowlist = ALLOWED_GIT_SUBCOMMANDS.get(args[0]);
+  if (subcommandAllowlist && !subcommandAllowlist.has(args[1])) {
+    throw new Error("Git subcommand is not allowed");
   }
 }

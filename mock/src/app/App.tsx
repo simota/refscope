@@ -46,11 +46,15 @@ import {
   listCommits,
   listRefs,
   listRepositories,
+  listStashes,
+  listWorktrees,
   type DiffPayload,
   type RefDriftEntry,
   type SearchMode,
+  type StashEntry,
   type ViewerEvent,
   type WorkTreeResponse,
+  type WorktreeEntry,
 } from "./api";
 import type { RefDriftSummary } from "./components/refscope/BranchSidebar";
 
@@ -177,6 +181,11 @@ export default function App() {
   const [recentFileHistoryPaths, setRecentFileHistoryPaths] = useState<string[]>(
     () => loadRecentFileHistoryPaths(),
   );
+  // Stash + linked-worktree listings live alongside refs because the sidebar
+  // renders them next to branches / tags. They re-fetch on repo change but
+  // not on every commit selection — they're slow-moving observation facts.
+  const [stashes, setStashes] = useState<StashEntry[]>([]);
+  const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
   const workTreeAbortRef = useRef<AbortController | null>(null);
   const workTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRefRef = useRef(selectedRef);
@@ -551,6 +560,30 @@ export default function App() {
     // itself depends on is `selectedRepo`, mirroring existing precedent in
     // this file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRepo]);
+
+  // Stash + linked-worktree listings refresh per repo. Failure here is a soft
+  // miss: the sidebar just shows the empty state. A repo with neither stashes
+  // nor extra worktrees is the common case, and we don't want a transient
+  // network hiccup to evict an otherwise-working sidebar.
+  useEffect(() => {
+    if (!selectedRepo) {
+      setStashes([]);
+      setWorktrees([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      listStashes(selectedRepo).catch(() => [] as StashEntry[]),
+      listWorktrees(selectedRepo).catch(() => [] as WorktreeEntry[]),
+    ]).then(([stashList, worktreeList]) => {
+      if (cancelled) return;
+      setStashes(stashList);
+      setWorktrees(worktreeList);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedRepo]);
 
   // Shortcut wiring lives further down (see `shortcutBindings` + `useKeyboardShortcuts`)
@@ -1035,6 +1068,8 @@ export default function App() {
             driftBaseShortName={driftBaseShortName}
             onSetRefAsCompareBase={setCompareBase}
             onSetRefAsCompareTarget={setCompareTarget}
+            stashes={stashes}
+            worktrees={worktrees}
           />
         </ResizablePanel>
         <ResizableHandle withHandle aria-label="Resize branch sidebar" />

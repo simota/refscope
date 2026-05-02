@@ -46,6 +46,16 @@ export function createRequestHandler(config, gitService) {
         sendJson(res, 200, { refs: await gitService.listRefs(repo.value) });
         return;
       }
+      if (route.name === "stashes") {
+        const result = await gitService.listStashes(repo.value);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "worktrees") {
+        const result = await gitService.listWorktrees(repo.value);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "refsDrift") {
         const result = await gitService.getRefDrift(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
@@ -116,6 +126,12 @@ function matchRoute(method, pathname) {
 
   const repoId = parts[2];
   if (parts.length === 4 && parts[3] === "refs") return { name: "refs", params: { repoId } };
+  if (parts.length === 4 && parts[3] === "stashes") {
+    return { name: "stashes", params: { repoId } };
+  }
+  if (parts.length === 4 && parts[3] === "worktrees") {
+    return { name: "worktrees", params: { repoId } };
+  }
   // `/refs/drift` is a literal sub-path that lives one segment deeper than
   // `/refs`. Distinct `parts.length` keeps the two from colliding, but we
   // match the longer form first for symmetry with the `/commits/summary`

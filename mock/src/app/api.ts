@@ -56,6 +56,40 @@ export async function listRefs(repoId: string) {
   return body.refs;
 }
 
+export type StashEntry = {
+  name: string;
+  hash: string;
+  shortHash: string;
+  committedAt: string | null;
+  subject: string;
+};
+
+export async function listStashes(repoId: string): Promise<StashEntry[]> {
+  const body = await getJson<{ stashes: StashEntry[] }>(
+    `/api/repos/${encodeURIComponent(repoId)}/stashes`,
+  );
+  return body.stashes;
+}
+
+export type WorktreeEntry = {
+  path: string;
+  head: string | null;
+  branch: string | null;
+  branchShortName: string | null;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+  isPrimary: boolean;
+};
+
+export async function listWorktrees(repoId: string): Promise<WorktreeEntry[]> {
+  const body = await getJson<{ worktrees: WorktreeEntry[] }>(
+    `/api/repos/${encodeURIComponent(repoId)}/worktrees`,
+  );
+  return body.worktrees;
+}
+
 export type SearchMode = "subject" | "pickaxe" | "regex" | "message";
 
 export async function listCommits(

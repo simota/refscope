@@ -136,6 +136,61 @@ export function createGitService(config) {
       return listRefs(repo);
     },
 
+    async listStashes(repo) {
+      // Read-only stash list. Format mirrors listRefs (NUL-separated fields)
+      // so the UI can rely on the same parsing convention. We use %ct (commit
+      // timestamp, Unix seconds) over %gd's relative date because the UI
+      // already humanizes timestamps elsewhere — keeping the API in absolute
+      // values means clock drift is the parent's problem, not ours.
+      // We can't put a literal NUL byte in the format argument because
+      // Node's `spawn` rejects argv strings containing NUL. `%x00` is Git's
+      // own escape — it expands to a NUL in the *output*, which is exactly
+      // the separator we then split on (matching listRefs's convention).
+      const { stdout } = await runGit(
+        repo,
+        [
+          "stash",
+          "list",
+          "--no-show-signature",
+          "--format=%gd%x00%H%x00%ct%x00%s",
+        ],
+        { timeoutMs: config.gitTimeoutMs },
+      );
+
+      const stashes = stdout
+        .split("\n")
+        .map((line) => line.trimEnd())
+        .filter(Boolean)
+        .map((line) => {
+          const [refName, hash, ctimeRaw, subject] =
+            line.split(COMMIT_FIELD_SEPARATOR);
+          const committedAt = parseUnixSecondsToIso(ctimeRaw);
+          return {
+            name: refName,
+            hash,
+            shortHash: hash ? hash.slice(0, 7) : "",
+            committedAt,
+            subject: subject ?? "",
+          };
+        });
+      return { status: 200, body: { stashes } };
+    },
+
+    async listWorktrees(repo) {
+      // `git worktree list --porcelain` emits a stanza per worktree separated
+      // by blank lines, with leading `worktree <path>` and optional
+      // `HEAD <oid>`, `branch <ref>`, `bare`, `detached`, `locked`, `prunable`
+      // attribute lines. We map the lot to a stable JSON shape so the UI
+      // never has to re-parse Git's textual contract.
+      const { stdout } = await runGit(
+        repo,
+        ["worktree", "list", "--porcelain"],
+        { timeoutMs: config.gitTimeoutMs },
+      );
+      const worktrees = parseWorktreePorcelain(stdout, repo.path);
+      return { status: 200, body: { worktrees } };
+    },
+
     async getRefSnapshot(repo) {
       const refs = await listRefs(repo);
       return new Map(refs.map((ref) => [ref.name, ref]));
@@ -1145,6 +1200,74 @@ function shortRefName(refName) {
     .replace(/^refs\/heads\//, "")
     .replace(/^refs\/tags\//, "")
     .replace(/^refs\/remotes\//, "");
+}
+
+/**
+ * Parse `git worktree list --porcelain` output. Each worktree is a stanza
+ * separated by blank lines, with a mandatory `worktree <path>` first line
+ * and optional attribute lines. Unknown attribute lines are tolerated and
+ * ignored — Git can add new ones in future versions and refscope shouldn't
+ * fail because of them.
+ *
+ * `primaryPath` is matched (after fs.realpath if needed by callers) to mark
+ * which entry corresponds to the repo refscope is actually serving from;
+ * the UI uses that flag to render an "(this repo)" affordance.
+ */
+function parseWorktreePorcelain(stdout, primaryPath) {
+  const worktrees = [];
+  let current = null;
+  for (const rawLine of stdout.split("\n")) {
+    const line = rawLine.trimEnd();
+    if (line === "") {
+      if (current) {
+        worktrees.push(current);
+        current = null;
+      }
+      continue;
+    }
+    const spaceIndex = line.indexOf(" ");
+    const key = spaceIndex === -1 ? line : line.slice(0, spaceIndex);
+    const value = spaceIndex === -1 ? "" : line.slice(spaceIndex + 1);
+    if (key === "worktree") {
+      current = {
+        path: value,
+        head: null,
+        branch: null,
+        branchShortName: null,
+        bare: false,
+        detached: false,
+        locked: false,
+        prunable: false,
+        isPrimary: value === primaryPath,
+      };
+      continue;
+    }
+    if (!current) continue;
+    if (key === "HEAD") current.head = value || null;
+    else if (key === "branch") {
+      current.branch = value || null;
+      current.branchShortName = value ? shortRefName(value) : null;
+    } else if (key === "bare") current.bare = true;
+    else if (key === "detached") current.detached = true;
+    else if (key === "locked") current.locked = true;
+    else if (key === "prunable") current.prunable = true;
+  }
+  if (current) worktrees.push(current);
+  return worktrees;
+}
+
+/**
+ * Convert Git's `%ct` (Unix seconds, integer) to an ISO-8601 string. Returns
+ * null when the input is malformed so downstream consumers can render a
+ * neutral "—" rather than blowing up on `Invalid Date`.
+ */
+function parseUnixSecondsToIso(raw) {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  const seconds = Number.parseInt(raw, 10);
+  if (!Number.isFinite(seconds)) return null;
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
 }
 
 function refType(refName) {

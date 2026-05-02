@@ -7,9 +7,13 @@ import {
   Copy,
   GitCompareArrows,
   ArrowRightToLine,
+  Archive,
+  FolderTree,
+  Lock,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { GitRef, RealtimeAlert } from "./data";
+import type { StashEntry, WorktreeEntry } from "../../api";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -34,6 +38,8 @@ export function BranchSidebar({
   driftBaseShortName,
   onSetRefAsCompareBase,
   onSetRefAsCompareTarget,
+  stashes = [],
+  worktrees = [],
 }: {
   refs: GitRef[];
   selectedRef: string;
@@ -50,6 +56,13 @@ export function BranchSidebar({
   driftBaseShortName?: string;
   onSetRefAsCompareBase?: (refName: string) => void;
   onSetRefAsCompareTarget?: (refName: string) => void;
+  // `stash list` entries (`refs/stash` + reflog). Right-click hashes can drive
+  // the same compare endpoints as branches, since each stash is a real commit.
+  stashes?: StashEntry[];
+  // `git worktree list` entries — the *git-worktree* feature (multiple
+  // checkouts), distinct from the per-commit "working tree" view in the
+  // timeline. The primary entry corresponds to the repo refscope is serving.
+  worktrees?: WorktreeEntry[];
 }) {
   const branches = refs.filter((ref) => ref.type === "branch");
   const tags = refs.filter((ref) => ref.type === "tag");
@@ -133,6 +146,65 @@ export function BranchSidebar({
           ))
         ) : (
           <EmptyRow>No remotes</EmptyRow>
+        )}
+      </Section>
+
+      <Section
+        icon={<Archive size={11} />}
+        title="STASHES"
+        hint={stashes.length ? String(stashes.length) : undefined}
+      >
+        {stashes.length ? (
+          stashes.map((stash) => (
+            <StashRow
+              key={stash.name}
+              stash={stash}
+              onSetCompareBase={
+                onSetRefAsCompareBase
+                  ? () => onSetRefAsCompareBase(stash.name)
+                  : undefined
+              }
+              onSetCompareTarget={
+                onSetRefAsCompareTarget
+                  ? () => onSetRefAsCompareTarget(stash.name)
+                  : undefined
+              }
+            />
+          ))
+        ) : (
+          <EmptyRow>No stashes</EmptyRow>
+        )}
+      </Section>
+
+      <Section
+        icon={<FolderTree size={11} />}
+        title="WORKTREES"
+        hint={worktrees.length ? String(worktrees.length) : undefined}
+      >
+        {worktrees.length ? (
+          worktrees.map((worktree) => (
+            <WorktreeRow
+              key={worktree.path}
+              worktree={worktree}
+              onSelectBranch={
+                worktree.branch
+                  ? () => onSelectRef(worktree.branch as string)
+                  : undefined
+              }
+              onSetCompareBase={
+                onSetRefAsCompareBase && worktree.branch
+                  ? () => onSetRefAsCompareBase(worktree.branch as string)
+                  : undefined
+              }
+              onSetCompareTarget={
+                onSetRefAsCompareTarget && worktree.branch
+                  ? () => onSetRefAsCompareTarget(worktree.branch as string)
+                  : undefined
+              }
+            />
+          ))
+        ) : (
+          <EmptyRow>No worktrees</EmptyRow>
         )}
       </Section>
 
@@ -453,11 +525,15 @@ function Section({
   title,
   children,
   tone,
+  hint,
 }: {
   icon: React.ReactNode;
   title: string;
   children: React.ReactNode;
   tone?: "warning";
+  // Right-aligned count or status pill — used for STASHES / WORKTREES so the
+  // header conveys "is there anything in here?" at a glance.
+  hint?: string;
 }) {
   return (
     <div className="pt-3 pb-1">
@@ -470,7 +546,21 @@ function Section({
           color: tone === "warning" ? "var(--rs-warning)" : "var(--rs-text-muted)",
         }}
       >
-        {icon} {title}
+        {icon}
+        <span className="flex-1">{title}</span>
+        {hint ? (
+          <span
+            className="px-1.5 rounded"
+            style={{
+              fontSize: 10,
+              fontFamily: "var(--rs-mono)",
+              color: "var(--rs-text-muted)",
+              border: "1px solid var(--rs-border)",
+            }}
+          >
+            {hint}
+          </span>
+        ) : null}
       </div>
       <div className="flex flex-col">{children}</div>
     </div>
@@ -748,6 +838,250 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
+}
+
+/**
+ * Stash entry row. Each stash is a real commit object so the right-click
+ * menu can drive the same compare endpoints as branches/refs (callers wire
+ * `onSetCompareBase/Target` against `stash.name`, e.g. `stash@{0}`).
+ */
+function StashRow({
+  stash,
+  onSetCompareBase,
+  onSetCompareTarget,
+}: {
+  stash: StashEntry;
+  onSetCompareBase?: () => void;
+  onSetCompareTarget?: () => void;
+}) {
+  const button = (
+    <div
+      className="mx-1 px-2 flex flex-col"
+      style={{
+        padding: "4px 10px",
+        borderRadius: 6,
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          style={{
+            fontSize: 11,
+            fontFamily: "var(--rs-mono)",
+            color: "var(--rs-text-muted)",
+          }}
+        >
+          {stash.name}
+        </span>
+        <span
+          className="flex-1 truncate"
+          title={stash.subject}
+          style={{
+            fontSize: 12,
+            color: "var(--rs-text-primary)",
+          }}
+        >
+          {stash.subject || "(no message)"}
+        </span>
+      </div>
+      <div
+        className="flex items-center gap-2"
+        style={{ fontSize: 10, color: "var(--rs-text-muted)" }}
+      >
+        <span style={{ fontFamily: "var(--rs-mono)" }}>{stash.shortHash}</span>
+        {stash.committedAt ? (
+          <span title={stash.committedAt}>{formatRelativeTime(stash.committedAt)}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{button}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          onSelect={() => void navigator.clipboard?.writeText(stash.hash)}
+        >
+          <Copy />
+          Copy commit hash
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => void navigator.clipboard?.writeText(stash.name)}
+        >
+          <Copy />
+          Copy stash ref
+          <span
+            className="ml-auto"
+            style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)" }}
+          >
+            {stash.name}
+          </span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          disabled={!onSetCompareBase}
+          onSelect={() => onSetCompareBase?.()}
+        >
+          <GitCompareArrows />
+          Set as compare base
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!onSetCompareTarget}
+          onSelect={() => onSetCompareTarget?.()}
+        >
+          <GitCompareArrows />
+          Set as compare target
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/**
+ * Linked worktree row (`git worktree list`). The primary entry — the repo
+ * refscope is reading from — is marked so users can distinguish it from
+ * sibling checkouts. Compare/select actions operate on the worktree's branch
+ * (when checked-out non-detached); for detached/bare entries those actions
+ * are disabled because there's no safe ref to use.
+ */
+function WorktreeRow({
+  worktree,
+  onSelectBranch,
+  onSetCompareBase,
+  onSetCompareTarget,
+}: {
+  worktree: WorktreeEntry;
+  onSelectBranch?: () => void;
+  onSetCompareBase?: () => void;
+  onSetCompareTarget?: () => void;
+}) {
+  const branchLabel =
+    worktree.branchShortName ??
+    (worktree.detached ? "detached" : worktree.bare ? "bare" : "(unknown)");
+  const lastSegment = worktree.path.split("/").filter(Boolean).pop() ?? worktree.path;
+  const button = (
+    <div
+      className="mx-1 px-2 flex flex-col"
+      style={{
+        padding: "4px 10px",
+        borderRadius: 6,
+        opacity: worktree.prunable ? 0.6 : 1,
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className="flex-1 truncate"
+          title={worktree.path}
+          style={{
+            fontSize: 12,
+            fontFamily: "var(--rs-mono)",
+            color: "var(--rs-text-primary)",
+          }}
+        >
+          {lastSegment}
+        </span>
+        {worktree.isPrimary ? (
+          <span
+            className="px-1.5 rounded"
+            style={{
+              fontSize: 9,
+              color: "var(--rs-accent)",
+              border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 40%)",
+              fontFamily: "var(--rs-mono)",
+            }}
+          >
+            primary
+          </span>
+        ) : null}
+        {worktree.locked ? (
+          <Lock
+            size={10}
+            aria-label="Locked"
+            style={{ color: "var(--rs-warning)" }}
+          />
+        ) : null}
+      </div>
+      <div
+        className="flex items-center gap-2"
+        style={{ fontSize: 10, color: "var(--rs-text-muted)" }}
+      >
+        <GitBranch size={9} />
+        <span>{branchLabel}</span>
+        {worktree.head ? (
+          <span style={{ fontFamily: "var(--rs-mono)" }}>
+            {worktree.head.slice(0, 7)}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{button}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          onSelect={() => void navigator.clipboard?.writeText(worktree.path)}
+        >
+          <Copy />
+          Copy worktree path
+        </ContextMenuItem>
+        {worktree.branch ? (
+          <ContextMenuItem
+            onSelect={() =>
+              void navigator.clipboard?.writeText(worktree.branch as string)
+            }
+          >
+            <Copy />
+            Copy branch ref
+          </ContextMenuItem>
+        ) : null}
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          disabled={!onSelectBranch}
+          onSelect={() => onSelectBranch?.()}
+        >
+          <ArrowRightToLine />
+          Switch to this branch
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          disabled={!onSetCompareBase}
+          onSelect={() => onSetCompareBase?.()}
+        >
+          <GitCompareArrows />
+          Set branch as compare base
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!onSetCompareTarget}
+          onSelect={() => onSetCompareTarget?.()}
+        >
+          <GitCompareArrows />
+          Set branch as compare target
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/**
+ * Best-effort relative-time renderer for sidebar timestamps. Pure formatting
+ * — refscope never *recomputes* dates, only re-presents them. Returns the
+ * raw input on parse failure so the caller still sees something useful.
+ */
+
+function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return iso;
+  const deltaSec = (Date.now() - then) / 1000;
+  if (deltaSec < 60) return "just now";
+  const deltaMin = deltaSec / 60;
+  if (deltaMin < 60) return `${Math.floor(deltaMin)}m ago`;
+  const deltaHr = deltaMin / 60;
+  if (deltaHr < 24) return `${Math.floor(deltaHr)}h ago`;
+  const deltaDay = deltaHr / 24;
+  if (deltaDay < 30) return `${Math.floor(deltaDay)}d ago`;
+  const deltaMonth = deltaDay / 30;
+  if (deltaMonth < 12) return `${Math.floor(deltaMonth)}mo ago`;
+  return `${Math.floor(deltaMonth / 12)}y ago`;
 }
 
 function TagRow({
