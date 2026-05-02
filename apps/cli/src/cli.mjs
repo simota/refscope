@@ -197,7 +197,7 @@ function parsePositiveInt(flag, value, max) {
 function validateRepoPath(repoPath, { fromCwd } = { fromCwd: false }) {
   const notWorkingTree = (resolvedPath) =>
     fromCwd
-      ? `${resolvedPath} is not a Git working tree. Run \`npx refscope\` from inside a repository, or pass \`--repo <absolute-path>\`.`
+      ? `${resolvedPath} is not a Git working tree. Run \`npx -y github:simota/refscope\` from inside a repository, or pass \`--repo <absolute-path>\`.`
       : `${resolvedPath} is not a Git working tree.`;
 
   let canonicalPath;

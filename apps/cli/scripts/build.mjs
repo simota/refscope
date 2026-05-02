@@ -52,13 +52,23 @@ async function syncApiSource() {
 }
 
 async function buildMock() {
-  await runProcess("pnpm", ["--filter", "@realtime-git-viewer/mock", "build"], {
-    cwd: REPO_ROOT,
-    env: {
-      ...process.env,
-      VITE_RTGV_API_BASE_URL: "",
-    },
-  });
+  // Run vite directly so this script works under both pnpm and plain npm
+  // (the latter is what `npx github:simota/refscope` triggers).
+  const mockDir = path.join(REPO_ROOT, "mock");
+  const env = { ...process.env, VITE_RTGV_API_BASE_URL: "" };
+  const localBin = path.join(mockDir, "node_modules", ".bin", "vite");
+  let viteAvailableLocally = false;
+  try {
+    await fs.access(localBin);
+    viteAvailableLocally = true;
+  } catch {
+    /* fall through to npx */
+  }
+  if (viteAvailableLocally) {
+    await runProcess(localBin, ["build"], { cwd: mockDir, env });
+  } else {
+    await runProcess("npx", ["--yes", "vite@6.4.2", "build"], { cwd: mockDir, env });
+  }
 }
 
 async function syncStaticDist() {

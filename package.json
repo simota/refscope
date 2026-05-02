@@ -1,8 +1,28 @@
 {
-  "name": "realtime-git-viewer",
+  "name": "refscope",
+  "version": "0.0.1",
+  "description": "An observatory for Git refs and history. Local, read-only, allowlist-scoped.",
   "private": true,
-  "version": "0.0.0",
+  "license": "MIT",
+  "homepage": "https://simota.github.io/refscope/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/simota/refscope.git"
+  },
+  "bugs": {
+    "url": "https://github.com/simota/refscope/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "packageManager": "pnpm@10.9.0",
+  "bin": {
+    "refscope": "./apps/cli/bin/refscope.mjs"
+  },
+  "workspaces": [
+    "apps/*",
+    "mock"
+  ],
   "scripts": {
     "dev:api": "pnpm --filter @realtime-git-viewer/api dev",
     "build:api": "pnpm --filter @realtime-git-viewer/api build",
@@ -16,7 +36,8 @@
     "dev:cli": "pnpm --filter refscope build && node apps/cli/bin/refscope.mjs --repo .",
     "dev": "pnpm dev:mock",
     "build": "pnpm build:api && pnpm build:mock && pnpm build:web",
-    "test": "pnpm --filter @realtime-git-viewer/api test"
+    "test": "pnpm --filter @realtime-git-viewer/api test",
+    "prepare": "node apps/cli/scripts/build.mjs"
   },
   "pnpm": {
     "overrides": {
