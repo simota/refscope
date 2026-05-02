@@ -199,11 +199,11 @@ export function TopBar({
         <ChevronDown size={12} />
       </label>
 
-      <div className="min-w-0 flex-1 flex items-center justify-center gap-2 px-4">
-        <div className="min-w-0 flex items-center gap-1.5 w-full max-w-2xl">
+      <div className="min-w-0 flex-1 flex items-center gap-2 px-4">
+        <div className="min-w-0 flex-1 flex items-center gap-1.5">
           <SearchModeSelector mode={searchMode} onChange={onSearchModeChange} />
           <div
-            className="flex items-center gap-2 px-3 flex-1"
+            className="min-w-0 flex items-center gap-2 px-3 flex-1"
             style={{
               height: 30,
               background: "var(--rs-bg-canvas)",
@@ -218,7 +218,7 @@ export function TopBar({
                 onChange={(event) => onSearchChange(event.target.value)}
                 placeholder="Search commit messages…"
                 aria-label="Search commit messages"
-                className="bg-transparent outline-none flex-1"
+                className="bg-transparent outline-none flex-1 min-w-0"
                 style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
               />
             ) : (
@@ -227,7 +227,7 @@ export function TopBar({
                 onChange={(event) => onSearchPatternChange(event.target.value)}
                 placeholder={SEARCH_MODE_PLACEHOLDERS[searchMode]}
                 aria-label={SEARCH_MODE_ARIA_LABELS[searchMode]}
-                className="bg-transparent outline-none flex-1"
+                className="bg-transparent outline-none flex-1 min-w-0"
                 style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
               />
             )}
@@ -246,9 +246,9 @@ export function TopBar({
           </div>
         </div>
         <div
-          className="hidden xl:flex items-center gap-2 px-3"
+          className="hidden xl:flex shrink-0 items-center gap-2 px-3"
           style={{
-            width: 160,
+            width: 120,
             height: 30,
             background: "var(--rs-bg-canvas)",
             border: "1px solid var(--rs-border)",
@@ -265,9 +265,9 @@ export function TopBar({
           />
         </div>
         <div
-          className="hidden xl:flex items-center gap-2 px-3"
+          className="hidden xl:flex shrink-0 items-center gap-2 px-3"
           style={{
-            width: 190,
+            width: 140,
             height: 30,
             background: "var(--rs-bg-canvas)",
             border: "1px solid var(--rs-border)",
