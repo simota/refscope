@@ -3,6 +3,12 @@ node_modules/
 dist/
 .vite/
 
+# Refscope CLI bundled output (populated by `pnpm --filter refscope build`)
+apps/cli/src/bundled-api/*
+!apps/cli/src/bundled-api/.gitkeep
+apps/cli/src/static/*
+!apps/cli/src/static/.gitkeep
+
 # Astro web app
 apps/web/.astro/
 apps/web/dist/

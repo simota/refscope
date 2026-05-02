@@ -13,6 +13,8 @@ importers:
 
   apps/api: {}
 
+  apps/cli: {}
+
   apps/web:
     dependencies:
       astro:

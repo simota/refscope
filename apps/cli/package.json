@@ -1,0 +1,41 @@
+{
+  "name": "refscope",
+  "version": "0.1.0",
+  "description": "An observatory for Git refs and history. Local, read-only, allowlist-scoped.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "refscope": "./bin/refscope.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "git",
+    "refs",
+    "history",
+    "rewrite",
+    "force-push",
+    "observability",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/simota/refscope.git"
+  },
+  "homepage": "https://github.com/simota/refscope#readme",
+  "bugs": {
+    "url": "https://github.com/simota/refscope/issues"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node bin/refscope.mjs --repo .",
+    "prepublishOnly": "node scripts/build.mjs"
+  }
+}
