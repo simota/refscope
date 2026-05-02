@@ -200,7 +200,7 @@ export function TopBar({
       </label>
 
       <div className="min-w-0 flex-1 flex items-center justify-center gap-2 px-4">
-        <div className="min-w-0 flex items-center gap-1.5 w-full max-w-2xl">
+        <div className="min-w-0 flex-1 flex items-center gap-1.5 max-w-2xl">
           <SearchModeSelector mode={searchMode} onChange={onSearchModeChange} />
           <div
             className="flex items-center gap-2 px-3 flex-1"
@@ -246,7 +246,7 @@ export function TopBar({
           </div>
         </div>
         <div
-          className="hidden xl:flex items-center gap-2 px-3"
+          className="hidden xl:flex shrink-0 items-center gap-2 px-3"
           style={{
             width: 160,
             height: 30,
@@ -265,7 +265,7 @@ export function TopBar({
           />
         </div>
         <div
-          className="hidden xl:flex items-center gap-2 px-3"
+          className="hidden xl:flex shrink-0 items-center gap-2 px-3"
           style={{
             width: 190,
             height: 30,
