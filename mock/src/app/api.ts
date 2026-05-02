@@ -179,9 +179,10 @@ export async function listCommits(
   return body.map(toCommit);
 }
 
-export async function getCommit(repoId: string, hash: string) {
+export async function getCommit(repoId: string, hash: string, signal?: AbortSignal) {
   return getJson<CommitDetail>(
     `/api/repos/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(hash)}`,
+    signal,
   );
 }
 
@@ -191,9 +192,14 @@ export type DiffPayload = {
   maxBytes: number;
 };
 
-export async function getDiff(repoId: string, hash: string): Promise<DiffPayload> {
+export async function getDiff(
+  repoId: string,
+  hash: string,
+  signal?: AbortSignal,
+): Promise<DiffPayload> {
   const body = await getJson<{ diff: string; truncated?: boolean; maxBytes?: number }>(
     `/api/repos/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(hash)}/diff`,
+    signal,
   );
   return {
     diff: body.diff ?? "",

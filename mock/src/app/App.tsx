@@ -365,24 +365,46 @@ export default function App() {
     if (!selectedRepo || !selected) {
       setDetail(null);
       setDiff(EMPTY_DIFF);
+      setDetailLoading(false);
       return;
     }
-    let cancelled = false;
+    // Show the indicator immediately so rapid navigation has visible feedback
+    // while we coalesce key-repeat bursts before issuing a fetch.
     setDetailLoading(true);
-    Promise.all([getCommit(selectedRepo, selected), getDiff(selectedRepo, selected)])
-      .then(([nextDetail, nextDiff]) => {
-        if (cancelled) return;
-        setDetail(nextDetail);
-        setDiff(nextDiff);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(errorMessage(err));
-      })
-      .finally(() => {
-        if (!cancelled) setDetailLoading(false);
-      });
+    const controller = new AbortController();
+    // Coalesce rapid `selected` changes (key-repeat / arrow-hold) into a
+    // single fetch. Each useEffect cleanup clears the pending timer and
+    // aborts any in-flight request, so:
+    //   1. fast bursts → only the final selection actually hits the API
+    //   2. single clicks → a 60 ms delay that is imperceptible in practice
+    //   3. in-flight aborts → AbortController stops both fetch and the
+    //      client-side `response.json()` work that previously froze the
+    //      main thread on 4 MB diffs.
+    // This complements the AbortController by also reducing the number of
+    // server-side `git show --patch` spawns the API has to absorb during
+    // rapid navigation.
+    const timer = setTimeout(() => {
+      Promise.all([
+        getCommit(selectedRepo, selected, controller.signal),
+        getDiff(selectedRepo, selected, controller.signal),
+      ])
+        .then(([nextDetail, nextDiff]) => {
+          if (controller.signal.aborted) return;
+          setDetail(nextDetail);
+          setDiff(nextDiff);
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return;
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setError(errorMessage(err));
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setDetailLoading(false);
+        });
+    }, 60);
     return () => {
-      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
     };
   }, [selectedRepo, selected]);
 

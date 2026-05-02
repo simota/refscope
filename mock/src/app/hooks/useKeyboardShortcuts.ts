@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 // Central registry for application-level keyboard shortcuts. Lives as a single
 // hook so that combo parsing, input-focus suppression, and modal suppression
@@ -94,12 +94,21 @@ export function useKeyboardShortcuts(
   bindings: ShortcutBinding[],
   suppressed: boolean,
 ): void {
-  const bindingsRef = useRef(bindings);
+  // Pre-parse combos once per bindings change. Re-parsing inside the keydown
+  // loop wastes work on every keystroke (O(bindings × combo length) per key).
+  const parsedBindings = useMemo(
+    () =>
+      bindings
+        .map((binding) => ({ binding, parsed: parseCombo(binding.combo) }))
+        .filter((entry): entry is { binding: ShortcutBinding; parsed: ParsedCombo } => entry.parsed !== null),
+    [bindings],
+  );
+  const bindingsRef = useRef(parsedBindings);
   const suppressedRef = useRef(suppressed);
 
   useEffect(() => {
-    bindingsRef.current = bindings;
-  }, [bindings]);
+    bindingsRef.current = parsedBindings;
+  }, [parsedBindings]);
 
   useEffect(() => {
     suppressedRef.current = suppressed;
@@ -112,9 +121,7 @@ export function useKeyboardShortcuts(
       if (event.isComposing) return;
       const editable = isEditableTarget(event.target);
       const isSuppressed = suppressedRef.current;
-      for (const binding of bindingsRef.current) {
-        const parsed = parseCombo(binding.combo);
-        if (!parsed) continue;
+      for (const { binding, parsed } of bindingsRef.current) {
         if (!eventMatches(parsed, event)) continue;
         const hasModifier =
           parsed.mod || parsed.ctrl || parsed.meta || parsed.alt;
