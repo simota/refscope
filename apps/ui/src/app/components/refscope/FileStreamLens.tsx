@@ -1,8 +1,9 @@
 // FileStreamLens — ファイル変更を 1 行 1 カードの逆時系列ストリームで表示
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getCommit } from '../../api';
+import { getCommit, type WorkTreeResponse } from '../../api';
 import type { Commit, CommitDetail } from './data';
 import { FileContextMenu } from './FileContextMenu';
+import { extractWorkTreeFiles } from '../../lib/workTreeFiles';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -27,7 +28,10 @@ type StreamEntry = {
   status: string;
   added: number;
   deleted: number;
+  isWorkingTree?: boolean;
 };
+
+const WORKING_TREE_HASH = 'WORKING-TREE';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -93,6 +97,7 @@ export type FileStreamLensProps = {
   selectedCommitHash: string | null;
   onSelectCommit: (hash: string) => void;
   onOpenFileHistory?: (path: string) => void;
+  workTree?: WorkTreeResponse | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -104,6 +109,7 @@ export function FileStreamLens({
   selectedCommitHash,
   onSelectCommit,
   onOpenFileHistory,
+  workTree,
 }: FileStreamLensProps) {
   const [detailCache, setDetailCache] = useState<Map<string, CommitDetail>>(
     () => new Map(),
@@ -174,18 +180,49 @@ export function FileStreamLens({
     return result;
   }, [commits, detailCache]);
 
+  // Working tree → virtual entries (always at the top)
+  const workTreeEntries: StreamEntry[] = useMemo(() => {
+    const files = extractWorkTreeFiles(workTree);
+    if (files.length === 0) return [];
+    const snapshotAt = workTree?.snapshotAt ?? new Date().toISOString();
+    return files.map((f, i) => ({
+      id: `wt::${f.section}::${f.path}::${i}`,
+      commitHash: WORKING_TREE_HASH,
+      commitShortHash: f.section === 'staged' ? 'STAGED' : 'UNSTAGED',
+      subject:
+        f.section === 'staged'
+          ? 'Staged (uncommitted)'
+          : 'Unstaged (uncommitted)',
+      author: 'Working tree',
+      authorDate: snapshotAt,
+      path: f.path,
+      basename: f.basename,
+      parentDir: f.parentDir,
+      status: f.status,
+      added: f.added,
+      deleted: f.deleted,
+      isWorkingTree: true,
+    }));
+  }, [workTree]);
+
+  // Combined feed: working tree entries pinned at top, then commit entries
+  const allEntries = useMemo(
+    () => [...workTreeEntries, ...entries],
+    [workTreeEntries, entries],
+  );
+
   // Track first-seen timestamp per entry id
   useEffect(() => {
     const now = Date.now();
     let changed = false;
-    for (const entry of entries) {
+    for (const entry of allEntries) {
       if (!appearedAtRef.current.has(entry.id)) {
         appearedAtRef.current.set(entry.id, now);
         changed = true;
       }
     }
     if (changed) setTick((t) => t + 1);
-  }, [entries]);
+  }, [allEntries]);
 
   // Heartbeat: re-render every second to expire NEW badges & refresh times
   useEffect(() => {
@@ -198,23 +235,23 @@ export function FileStreamLens({
     const commitHashes = new Set<string>();
     let added = 0;
     let deleted = 0;
-    for (const e of entries) {
-      commitHashes.add(e.commitHash);
+    for (const e of allEntries) {
+      if (e.commitHash !== WORKING_TREE_HASH) commitHashes.add(e.commitHash);
       added += e.added;
       deleted += e.deleted;
     }
     return {
       commits: commitHashes.size,
-      changes: entries.length,
+      changes: allEntries.length,
       added,
       deleted,
     };
-  }, [entries]);
+  }, [allEntries]);
 
-  if (commits.length === 0) {
-    return <EmptyState message="No commits yet — waiting for activity…" />;
-  }
-  if (entries.length === 0) {
+  if (allEntries.length === 0) {
+    if (commits.length === 0) {
+      return <EmptyState message="No commits yet — waiting for activity…" />;
+    }
     return <EmptyState message="Loading commit details…" />;
   }
 
@@ -308,7 +345,7 @@ export function FileStreamLens({
           padding: '10px 14px 32px',
         }}
       >
-        {entries.map((entry) => {
+        {allEntries.map((entry) => {
           const appearedAt = appearedAtRef.current.get(entry.id) ?? 0;
           const elapsed = nowMs - appearedAt;
           const isHighlighted = elapsed < HIGHLIGHT_MS;
@@ -316,7 +353,8 @@ export function FileStreamLens({
           const highlightAlpha = isHighlighted
             ? Math.max(0, 1 - elapsed / HIGHLIGHT_MS)
             : 0;
-          const isSelected = entry.commitHash === selectedCommitHash;
+          const isSelected =
+            !entry.isWorkingTree && entry.commitHash === selectedCommitHash;
           const sColor = statusColor(entry.status);
 
           return (
@@ -325,8 +363,12 @@ export function FileStreamLens({
               className={isHighlighted ? 'rs-stream-row-new' : undefined}
               role="listitem"
               aria-label={`${statusLabel(entry.status)} ${entry.path}`}
-              onClick={() => onSelectCommit(entry.commitHash)}
+              onClick={() => {
+                if (entry.isWorkingTree) return;
+                onSelectCommit(entry.commitHash);
+              }}
               onKeyDown={(e) => {
+                if (entry.isWorkingTree) return;
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
                   onSelectCommit(entry.commitHash);
@@ -362,7 +404,7 @@ export function FileStreamLens({
                       highlightAlpha * 25,
                     )}%)`
                   : '0 1px 2px rgba(0,0,0,0.06)',
-                cursor: 'pointer',
+                cursor: entry.isWorkingTree ? 'default' : 'pointer',
                 transition: 'box-shadow 320ms ease-out, border-color 320ms ease-out',
                 outline: 'none',
                 overflow: 'hidden',
@@ -534,11 +576,15 @@ export function FileStreamLens({
                       fontSize: 10,
                       padding: '1px 5px',
                       borderRadius: 4,
-                      background:
-                        'color-mix(in oklab, var(--rs-bg-canvas), var(--rs-accent) 8%)',
-                      color: 'var(--rs-accent)',
-                      border:
-                        '1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 30%)',
+                      background: entry.isWorkingTree
+                        ? 'color-mix(in oklab, var(--rs-bg-canvas), #f59e0b 14%)'
+                        : 'color-mix(in oklab, var(--rs-bg-canvas), var(--rs-accent) 8%)',
+                      color: entry.isWorkingTree ? '#f59e0b' : 'var(--rs-accent)',
+                      border: entry.isWorkingTree
+                        ? '1px solid color-mix(in oklab, var(--rs-border), #f59e0b 40%)'
+                        : '1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 30%)',
+                      fontWeight: entry.isWorkingTree ? 700 : 400,
+                      letterSpacing: entry.isWorkingTree ? 0.4 : 0,
                     }}
                   >
                     {entry.commitShortHash}

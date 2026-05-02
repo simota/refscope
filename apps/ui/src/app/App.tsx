@@ -1099,6 +1099,7 @@ export default function App() {
             selectedCommitHash={selected || null}
             onSelectCommit={(hash) => { setSelected(hash); }}
             onOpenFileHistory={submitFileHistoryPath}
+            workTree={workTreeHasChanges ? workTree : null}
           />
         </div>
       )}
@@ -1110,6 +1111,7 @@ export default function App() {
             selectedCommitHash={selected || null}
             onSelectCommit={(hash) => { setSelected(hash); }}
             onOpenFileHistory={submitFileHistoryPath}
+            workTree={workTreeHasChanges ? workTree : null}
           />
         </div>
       )}
