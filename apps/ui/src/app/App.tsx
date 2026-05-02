@@ -8,6 +8,7 @@ import { CommandPalette } from "./components/refscope/CommandPalette";
 import { FileHistoryView } from "./components/refscope/FileHistoryView";
 import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
 import { ActivityLens } from "./components/refscope/ActivityLens";
+import { FileStreamLens } from "./components/refscope/FileStreamLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -1097,6 +1098,18 @@ export default function App() {
             commits={commits}
             selectedCommitHash={selected || null}
             onSelectCommit={(hash) => { setSelected(hash); }}
+            onOpenFileHistory={submitFileHistoryPath}
+          />
+        </div>
+      )}
+      {activeLens === 'stream' && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-stream" role="tabpanel" aria-labelledby="lens-tab-stream">
+          <FileStreamLens
+            repoId={selectedRepo || null}
+            commits={commits}
+            selectedCommitHash={selected || null}
+            onSelectCommit={(hash) => { setSelected(hash); }}
+            onOpenFileHistory={submitFileHistoryPath}
           />
         </div>
       )}

@@ -3,7 +3,7 @@
  * 1 path = 1 円形バブルノード。コミットは「編集イベント」として統計に集約される。
  * force-directed simulation (60 tick 一括) でバブルを配置する。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   ReactFlow,
   Background,
@@ -29,6 +29,7 @@ import {
 } from 'd3-force';
 import { getCommit } from '../../api';
 import type { Commit, CommitDetail } from './data';
+import { FileContextMenu } from './FileContextMenu';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -65,6 +66,7 @@ type BubbleNodeData = {
   stat: FileStat;
   nowMs: number;
   radius: number;
+  onContextMenu?: (event: ReactMouseEvent, path: string) => void;
 };
 
 // d3-force simulation types
@@ -134,7 +136,7 @@ function hotBackground(count: number): string {
 // Custom node: BubbleNode (円 + 外部ラベル 2 部構成)
 // ---------------------------------------------------------------------------
 function BubbleNodeComponent({ data }: { data: BubbleNodeData }) {
-  const { stat, nowMs, radius } = data;
+  const { stat, nowMs, radius, onContextMenu } = data;
   const diameter = radius * 2;
 
   const isDeleted = stat.lastStatus === 'D';
@@ -176,6 +178,12 @@ function BubbleNodeComponent({ data }: { data: BubbleNodeData }) {
       role="button"
       tabIndex={0}
       title={`${stat.path}\n${stat.lastSeenSubject}`}
+      onContextMenu={(event) => {
+        if (!onContextMenu) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onContextMenu(event, stat.path);
+      }}
     >
       {/* Handles — 円中心に invisible 固定 */}
       <Handle
@@ -369,6 +377,7 @@ export type ActivityLensProps = {
   commits: Commit[];
   selectedCommitHash: string | null;
   onSelectCommit: (hash: string) => void;
+  onOpenFileHistory?: (path: string) => void;
   paused?: boolean;
 };
 
@@ -532,9 +541,24 @@ function runSimulation(
 export function ActivityLens({
   repoId,
   commits,
+  onOpenFileHistory,
 }: ActivityLensProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+
+  // Right-click context menu state
+  const [menuState, setMenuState] = useState<{
+    x: number;
+    y: number;
+    path: string;
+  } | null>(null);
+
+  const handleNodeContextMenu = useCallback(
+    (event: ReactMouseEvent, path: string) => {
+      setMenuState({ x: event.clientX, y: event.clientY, path });
+    },
+    [],
+  );
 
   // Container size for force center
   const containerRef = useRef<HTMLDivElement>(null);
@@ -727,13 +751,26 @@ export function ActivityLens({
         type: 'bubble',
         position: { x: pos.x - radius, y: pos.y - radius },
         style: { width: radius * 2, height: radius * 2 },
-        data: { stat, nowMs, radius } satisfies BubbleNodeData,
+        data: {
+          stat,
+          nowMs,
+          radius,
+          onContextMenu: handleNodeContextMenu,
+        } satisfies BubbleNodeData,
       };
     });
 
     setNodes(newNodes);
     setEdges(builtEdges);
-  }, [statistics, detailCache, containerWidth, containerHeight, setNodes, setEdges]);
+  }, [
+    statistics,
+    detailCache,
+    containerWidth,
+    containerHeight,
+    setNodes,
+    setEdges,
+    handleNodeContextMenu,
+  ]);
 
   // Re-render nodes every second to update highlight timers
   useEffect(() => {
@@ -1041,6 +1078,18 @@ export function ActivityLens({
           z-index: 1000 !important;
         }
       `}</style>
+
+      {/* Right-click context menu */}
+      <FileContextMenu
+        open={menuState !== null}
+        x={menuState?.x ?? 0}
+        y={menuState?.y ?? 0}
+        path={menuState?.path ?? null}
+        onClose={() => setMenuState(null)}
+        onOpenHistory={(p) => {
+          onOpenFileHistory?.(p);
+        }}
+      />
     </div>
   );
 }
