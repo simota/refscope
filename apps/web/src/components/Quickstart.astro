@@ -4,42 +4,41 @@ import CopyButton from "./CopyButton.astro";
 const repoUrl = "https://github.com/owner/refscope";
 const specUrl = "https://github.com/owner/refscope/blob/main/docs/spec-v0.md";
 
-const cmd1 = "corepack enable && pnpm install";
-const cmd2 = "make dev-self";
-const url3 = "http://127.0.0.1:5173";
-const cmdAlt = "make dev-app RTGV_REPOS=viewer=/absolute/path/to/git/repo";
+const cmdRun = "npx refscope";
+const url2 = "http://127.0.0.1:4175";
+const cmdAltRepo = "npx refscope --repo /absolute/path/to/git/repo";
 ---
 <section id="quickstart" class="rs-section" aria-labelledby="quickstart-heading">
   <div class="rs-container">
     <p class="rs-eyebrow">Quickstart</p>
-    <h2 id="quickstart-heading">Three steps. Refscope runs against this repository by default — no configuration needed for the first look.</h2>
+    <h2 id="quickstart-heading">Two steps. No install needed — Refscope runs against the current directory by default.</h2>
 
     <ol class="rs-qs">
       <li class="rs-qs__step">
-        <p class="rs-qs__action"><strong>Install dependencies</strong></p>
+        <p class="rs-qs__action"><strong>Run Refscope against this directory</strong></p>
         <div class="rs-qs__code">
-          <pre><code>{cmd1}</code></pre>
-          <CopyButton value={cmd1} />
-        </div>
-      </li>
-      <li class="rs-qs__step">
-        <p class="rs-qs__action"><strong>Start the API and UI against this repository</strong></p>
-        <div class="rs-qs__code">
-          <pre><code>{cmd2}</code></pre>
-          <CopyButton value={cmd2} />
+          <pre><code>{cmdRun}</code></pre>
+          <CopyButton value={cmdRun} />
         </div>
       </li>
       <li class="rs-qs__step">
         <p class="rs-qs__action"><strong>Open the observatory</strong></p>
         <div class="rs-qs__code">
-          <pre><code>{url3}</code></pre>
-          <CopyButton value={url3} label="Copy URL" />
+          <pre><code>{url2}</code></pre>
+          <CopyButton value={url2} label="Copy URL" />
         </div>
+        <p class="rs-qs__note">The CLI opens this URL automatically. The address is here for reference.</p>
       </li>
     </ol>
 
     <p class="rs-qs__alt">
-      To observe another repository, pass an absolute path: <code>{cmdAlt}</code>. The makefile rejects relative paths and non-Git roots before anything starts.
+      To watch a different repository, pass an absolute path: <code>{cmdAltRepo}</code>.
+      To skip the auto-open, add <code>--no-open</code>.
+      Refscope rejects non-Git roots before serving.
+    </p>
+
+    <p class="rs-qs__source">
+      Building from source (<code>make dev-self</code>) is documented in the repository readme.
     </p>
 
     <div class="rs-qs__ctas">
@@ -73,7 +72,7 @@ const cmdAlt = "make dev-app RTGV_REPOS=viewer=/absolute/path/to/git/repo";
   }
   .rs-qs__step::before {
     content: counter(step, decimal-leading-zero);
-    grid-row: 1 / span 2;
+    grid-row: 1 / span 3;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -100,6 +99,13 @@ const cmdAlt = "make dev-app RTGV_REPOS=viewer=/absolute/path/to/git/repo";
     margin: 0;
     background: var(--rs-bg-base);
   }
+  .rs-qs__note {
+    grid-column: 2;
+    margin: 0;
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+  }
   .rs-qs__alt {
     margin-top: var(--spacing-6);
     color: var(--rs-fg-subtle);
@@ -107,6 +113,16 @@ const cmdAlt = "make dev-app RTGV_REPOS=viewer=/absolute/path/to/git/repo";
     line-height: var(--leading-normal);
   }
   .rs-qs__alt code {
+    font-size: 0.92em;
+  }
+  .rs-qs__source {
+    margin-top: var(--spacing-3);
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    opacity: 0.7;
+  }
+  .rs-qs__source code {
     font-size: 0.92em;
   }
   .rs-qs__ctas {

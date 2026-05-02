@@ -519,3 +519,13 @@ site/                               # new top-level directory for the GitHub Pag
 **Source agent**: Funnel
 **Status**: v0 (handoff)
 **Downstream**: Artisan (Astro + Tailwind v4 implementation), Nexus (demo capture against mock UI), Growth (post-launch SEO/CRO audit)
+
+---
+
+## Changelog
+
+### 2026-05-02 — `npx refscope` shipped
+- Quickstart simplified from three pnpm steps to one `npx refscope` command (two steps total: run + open URL).
+- Hero meta line updated from `Allowlist-scoped` to `One command` to reflect zero-install.
+- "Zero-install CLI" was not yet in Beyond MVP (it was planned as a future item but not explicitly listed); added `Static export` to `Likely next` as a replacement roadmap item.
+- Building from source (`make dev-self`) retained as a small footnote in Quickstart for contributors.
