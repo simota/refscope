@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, History, Maximize2, Minimize2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FileSearch,
+  History,
+  Maximize2,
+  Minimize2,
+} from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "../ui/context-menu";
 import {
@@ -42,6 +51,7 @@ export function DiffViewer({
   viewMode: viewModeProp,
   onViewModeChange,
   onOpenFileHistory,
+  onFilterByPath,
 }: {
   diff: string;
   truncated: boolean;
@@ -54,6 +64,8 @@ export function DiffViewer({
   // Right-click on a file row opens that file's history. Optional because
   // standalone callers (story scaffolding, snapshot tests) may not need it.
   onOpenFileHistory?: (path: string) => void;
+  // Right-click action: pin this file's path into the global path filter.
+  onFilterByPath?: (path: string) => void;
 }) {
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const totals = useMemo(() => countTotalChanges(parsed), [parsed]);
@@ -298,6 +310,7 @@ export function DiffViewer({
           onKeyDown={handleListKeyDown}
           listStyle={fileListStyle}
           onOpenFileHistory={onOpenFileHistory}
+          onFilterByPath={onFilterByPath}
         />
         <div
           className={fullscreen ? "flex-1 overflow-auto" : "flex-1 overflow-x-auto"}
@@ -567,6 +580,7 @@ function FileList({
   onKeyDown,
   listStyle,
   onOpenFileHistory,
+  onFilterByPath,
 }: {
   files: DiffFile[];
   selectedIndex: number;
@@ -576,6 +590,7 @@ function FileList({
   onKeyDown: (event: React.KeyboardEvent<HTMLUListElement>) => void;
   listStyle?: React.CSSProperties;
   onOpenFileHistory?: (path: string) => void;
+  onFilterByPath?: (path: string) => void;
 }) {
   return (
     <ul
@@ -656,19 +671,38 @@ function FileList({
             </div>
           </li>
         );
-        // Skip wrapping when there's no handler; keeps the row tree identical
-        // to the pre-context-menu shape for callers that don't opt in.
-        if (!onOpenFileHistory) return row;
+        // Skip wrapping when no handler is wired; keeps the row tree identical
+        // to the pre-context-menu shape for callers that don't opt in to any
+        // right-click action at all.
+        if (!onOpenFileHistory && !onFilterByPath) return row;
+        const pathAvailable = historyPath !== "(unknown)";
         return (
           <ContextMenu key={fileKey(file)}>
             <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
             <ContextMenuContent>
               <ContextMenuItem
-                disabled={!historyAvailable}
-                onSelect={() => onOpenFileHistory(historyPath)}
+                disabled={!onOpenFileHistory || !historyAvailable}
+                onSelect={() => onOpenFileHistory?.(historyPath)}
               >
                 <History />
                 Open file history
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                disabled={!pathAvailable}
+                onSelect={() =>
+                  void navigator.clipboard?.writeText(historyPath)
+                }
+              >
+                <Copy />
+                Copy path
+              </ContextMenuItem>
+              <ContextMenuItem
+                disabled={!onFilterByPath || !pathAvailable}
+                onSelect={() => onFilterByPath?.(historyPath)}
+              >
+                <FileSearch />
+                Filter by this path
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>

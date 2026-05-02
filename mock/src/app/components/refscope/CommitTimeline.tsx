@@ -1,4 +1,13 @@
-import { GitMerge, ShieldCheck, AlertTriangle, ChevronDown, RefreshCw } from "lucide-react";
+import {
+  GitMerge,
+  ShieldCheck,
+  AlertTriangle,
+  ChevronDown,
+  RefreshCw,
+  Copy,
+  GitCompareArrows,
+  User,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import type { Commit, CompareResult, GitRef } from "./data";
 import type { WorkTreeResponse } from "../../api";
@@ -7,6 +16,13 @@ import {
   CollapsibleTrigger,
   CollapsibleContent,
 } from "../ui/collapsible";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "../ui/context-menu";
 
 const LANE_COLORS = ["var(--rs-accent)", "var(--rs-git-merge)", "var(--rs-git-modified)"];
 
@@ -44,6 +60,9 @@ export function CommitTimeline({
   isWorkTreeSelected,
   onSelectWorkTree,
   onRefreshWorkTree,
+  onSetCommitAsCompareBase,
+  onSetCommitAsCompareTarget,
+  onFilterByAuthor,
 }: {
   commits: Commit[];
   selected: string;
@@ -82,6 +101,11 @@ export function CommitTimeline({
   isWorkTreeSelected: boolean;
   onSelectWorkTree: () => void;
   onRefreshWorkTree: () => void;
+  // Per-row right-click handlers. All optional so the timeline still renders
+  // (with a smaller menu) if a parent doesn't wire them.
+  onSetCommitAsCompareBase?: (hash: string) => void;
+  onSetCommitAsCompareTarget?: (hash: string) => void;
+  onFilterByAuthor?: (author: string) => void;
 }) {
   const emptyState = activeFilters?.length
     ? {
@@ -151,6 +175,9 @@ export function CommitTimeline({
                 next={commits[i + 1]}
                 selected={c.hash === selected && !isWorkTreeSelected}
                 onClick={() => onSelect(c.hash)}
+                onSetAsCompareBase={onSetCommitAsCompareBase}
+                onSetAsCompareTarget={onSetCommitAsCompareTarget}
+                onFilterByAuthor={onFilterByAuthor}
               />
             ))}
           </ul>
@@ -812,18 +839,25 @@ function CommitRow({
   next,
   selected,
   onClick,
+  onSetAsCompareBase,
+  onSetAsCompareTarget,
+  onFilterByAuthor,
 }: {
   commit: Commit;
   prev?: Commit;
   next?: Commit;
   selected: boolean;
   onClick: () => void;
+  onSetAsCompareBase?: (hash: string) => void;
+  onSetAsCompareTarget?: (hash: string) => void;
+  onFilterByAuthor?: (author: string) => void;
 }) {
   const laneColor = LANE_COLORS[commit.lane] ?? LANE_COLORS[0];
   const fileCount = commit.fileCount ?? commit.files.length;
   const hasStats = commit.added > 0 || commit.deleted > 0 || fileCount > 0;
+  const shortHash = commit.shortHash ?? commit.hash.slice(0, 7);
 
-  return (
+  const row = (
     <li
       role="listitem"
       aria-current={selected ? "true" : undefined}
@@ -926,6 +960,61 @@ function CommitRow({
         ↵ open
       </div>
     </li>
+  );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          onSelect={() => void navigator.clipboard?.writeText(commit.hash)}
+        >
+          <Copy />
+          Copy commit hash
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => void navigator.clipboard?.writeText(shortHash)}
+        >
+          <Copy />
+          Copy short hash
+          <span
+            className="ml-auto"
+            style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)" }}
+          >
+            {shortHash}
+          </span>
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => void navigator.clipboard?.writeText(commit.subject)}
+        >
+          <Copy />
+          Copy subject
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          disabled={!onSetAsCompareBase}
+          onSelect={() => onSetAsCompareBase?.(commit.hash)}
+        >
+          <GitCompareArrows />
+          Set as compare base
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!onSetAsCompareTarget}
+          onSelect={() => onSetAsCompareTarget?.(commit.hash)}
+        >
+          <GitCompareArrows />
+          Set as compare target
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          disabled={!onFilterByAuthor || !commit.author}
+          onSelect={() => onFilterByAuthor?.(commit.author)}
+        >
+          <User />
+          Filter by author "{commit.author}"
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

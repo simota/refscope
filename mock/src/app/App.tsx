@@ -1033,6 +1033,8 @@ export default function App() {
             alerts={realtimeAlerts}
             driftMap={driftMap}
             driftBaseShortName={driftBaseShortName}
+            onSetRefAsCompareBase={setCompareBase}
+            onSetRefAsCompareTarget={setCompareTarget}
           />
         </ResizablePanel>
         <ResizableHandle withHandle aria-label="Resize branch sidebar" />
@@ -1093,6 +1095,12 @@ export default function App() {
               isWorkTreeSelected={selectedWorkTree}
               onSelectWorkTree={handleSelectWorkTree}
               onRefreshWorkTree={handleRefreshWorkTree}
+              onSetCommitAsCompareBase={setCompareBase}
+              onSetCommitAsCompareTarget={setCompareTarget}
+              onFilterByAuthor={(value) => {
+                setAuthor(value);
+                setSelected("");
+              }}
             />
           </div>
         </ResizablePanel>
@@ -1118,6 +1126,10 @@ export default function App() {
             workTreeSelected={selectedWorkTree}
             workTree={workTree}
             onOpenFileHistory={submitFileHistoryPath}
+            onFilterByPath={(value) => {
+              setPath(value);
+              setSelected("");
+            }}
           />
         </ResizablePanel>
       </ResizablePanelGroup>

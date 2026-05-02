@@ -1,8 +1,21 @@
 import { useState } from "react";
-import { Copy, ExternalLink, History, ShieldCheck } from "lucide-react";
+import {
+  Copy,
+  ExternalLink,
+  FileSearch,
+  History,
+  ShieldCheck,
+} from "lucide-react";
 import type { Commit, CommitDetail } from "./data";
 import type { DiffPayload, WorkTreeResponse } from "../../api";
 import { DiffViewer } from "./DiffViewer";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "../ui/context-menu";
 
 export function DetailPanel({
   commit,
@@ -18,6 +31,7 @@ export function DetailPanel({
   workTreeSelected,
   workTree,
   onOpenFileHistory,
+  onFilterByPath,
 }: {
   commit: Commit | null;
   detail: CommitDetail | null;
@@ -34,6 +48,9 @@ export function DetailPanel({
   // Opens the path-input prompt or — when a path is supplied directly —
   // jumps straight to FileHistoryView (state owner: App.tsx).
   onOpenFileHistory: (path: string) => void;
+  // Right-click action: pin a path into the global path filter so the
+  // timeline narrows to commits that touched it.
+  onFilterByPath?: (path: string) => void;
 }) {
   // Hooks must run unconditionally before any early return, otherwise React's
   // rules-of-hooks check trips and reorders break state. The previous version
@@ -47,7 +64,11 @@ export function DetailPanel({
   // worktree changes).
   if (workTreeSelected) {
     return (
-      <WorkTreePanel workTree={workTree} onOpenFileHistory={onOpenFileHistory} />
+      <WorkTreePanel
+        workTree={workTree}
+        onOpenFileHistory={onOpenFileHistory}
+        onFilterByPath={onFilterByPath}
+      />
     );
   }
 
@@ -233,39 +254,65 @@ export function DetailPanel({
             <Empty>{loading ? "Loading changed files…" : "No file changes returned for this commit."}</Empty>
           ) : (
             files.map((f) => (
-              <div
-                key={f.path}
-                className="px-3 flex items-center gap-2"
-                style={{
-                  height: 28,
-                  fontSize: 12,
-                  fontFamily: "var(--rs-mono)",
-                  borderBottom:
-                    "1px solid color-mix(in oklab, var(--rs-border), transparent 60%)",
-                }}
-              >
-                <FileBadge status={f.status} />
-                <span
-                  className="flex-1 truncate"
-                  style={{ color: "var(--rs-text-primary)" }}
-                >
-                  {f.path}
-                </span>
-                <span style={{ color: "var(--rs-git-added)" }}>+{f.added}</span>
-                <span style={{ color: "var(--rs-git-deleted)" }}>-{f.deleted}</span>
-                <button
-                  type="button"
-                  className="rs-icon-btn"
-                  aria-label={`Open file history for ${f.path}`}
-                  title="Open file history"
-                  // Disabled when we lack a repoId — the API needs both repo + path.
-                  disabled={!repoId}
-                  onClick={() => onOpenFileHistory(f.path)}
-                  style={{ width: 22, height: 22 }}
-                >
-                  <History size={12} />
-                </button>
-              </div>
+              <ContextMenu key={f.path}>
+                <ContextMenuTrigger asChild>
+                  <div
+                    className="px-3 flex items-center gap-2"
+                    style={{
+                      height: 28,
+                      fontSize: 12,
+                      fontFamily: "var(--rs-mono)",
+                      borderBottom:
+                        "1px solid color-mix(in oklab, var(--rs-border), transparent 60%)",
+                    }}
+                  >
+                    <FileBadge status={f.status} />
+                    <span
+                      className="flex-1 truncate"
+                      style={{ color: "var(--rs-text-primary)" }}
+                    >
+                      {f.path}
+                    </span>
+                    <span style={{ color: "var(--rs-git-added)" }}>+{f.added}</span>
+                    <span style={{ color: "var(--rs-git-deleted)" }}>-{f.deleted}</span>
+                    <button
+                      type="button"
+                      className="rs-icon-btn"
+                      aria-label={`Open file history for ${f.path}`}
+                      title="Open file history"
+                      // Disabled when we lack a repoId — the API needs both repo + path.
+                      disabled={!repoId}
+                      onClick={() => onOpenFileHistory(f.path)}
+                      style={{ width: 22, height: 22 }}
+                    >
+                      <History size={12} />
+                    </button>
+                  </div>
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem
+                    disabled={!repoId}
+                    onSelect={() => onOpenFileHistory(f.path)}
+                  >
+                    <History />
+                    Open file history
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onSelect={() => void navigator.clipboard?.writeText(f.path)}
+                  >
+                    <Copy />
+                    Copy path
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={!onFilterByPath}
+                    onSelect={() => onFilterByPath?.(f.path)}
+                  >
+                    <FileSearch />
+                    Filter by this path
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
             ))
           )}
         </Section>
@@ -285,6 +332,7 @@ export function DetailPanel({
               viewMode={diffViewMode}
               onViewModeChange={onDiffViewModeChange}
               onOpenFileHistory={onOpenFileHistory}
+              onFilterByPath={onFilterByPath}
             />
           ) : (
             <Empty>{loading ? "Loading diff…" : "No diff returned for this commit."}</Empty>
@@ -312,9 +360,11 @@ export function DetailPanel({
 function WorkTreePanel({
   workTree,
   onOpenFileHistory,
+  onFilterByPath,
 }: {
   workTree: WorkTreeResponse | null;
   onOpenFileHistory: (path: string) => void;
+  onFilterByPath?: (path: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<"staged" | "unstaged">("staged");
 
@@ -426,6 +476,7 @@ function WorkTreePanel({
             // bleeding across tabs and across snapshots.
             commitHash={`worktree:${effectiveTab}:${workTree.snapshotAt}`}
             onOpenFileHistory={onOpenFileHistory}
+            onFilterByPath={onFilterByPath}
           />
         ) : (
           <Empty>

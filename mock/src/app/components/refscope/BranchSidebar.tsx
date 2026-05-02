@@ -1,5 +1,22 @@
-import { GitBranch, Tag, Cloud, AlertTriangle, ChevronRight } from "lucide-react";
+import {
+  GitBranch,
+  Tag,
+  Cloud,
+  AlertTriangle,
+  ChevronRight,
+  Copy,
+  GitCompareArrows,
+  ArrowRightToLine,
+} from "lucide-react";
+import type { ReactNode } from "react";
 import type { GitRef, RealtimeAlert } from "./data";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "../ui/context-menu";
 
 export type RefDriftSummary = {
   ahead: number;
@@ -15,6 +32,8 @@ export function BranchSidebar({
   alerts,
   driftMap,
   driftBaseShortName,
+  onSetRefAsCompareBase,
+  onSetRefAsCompareTarget,
 }: {
   refs: GitRef[];
   selectedRef: string;
@@ -29,6 +48,8 @@ export function BranchSidebar({
   // the screen-reader text always says "of <something>" — the rendered halo
   // still shows raw numbers, the base label is just for context.
   driftBaseShortName?: string;
+  onSetRefAsCompareBase?: (refName: string) => void;
+  onSetRefAsCompareTarget?: (refName: string) => void;
 }) {
   const branches = refs.filter((ref) => ref.type === "branch");
   const tags = refs.filter((ref) => ref.type === "tag");
@@ -60,11 +81,14 @@ export function BranchSidebar({
               active={selectedRef === ref.shortName || selectedRef === ref.name}
               dot="var(--rs-accent)"
               name={ref.shortName}
+              fullName={ref.name}
               hint={ref.hash.slice(0, 7)}
               drift={driftMap?.get(ref.name) ?? null}
               driftScale={driftScale}
               baseLabel={baseLabel}
               onClick={() => onSelectRef(ref.name)}
+              onSetCompareBase={onSetRefAsCompareBase}
+              onSetCompareTarget={onSetRefAsCompareTarget}
             />
           ))
         ) : (
@@ -79,7 +103,10 @@ export function BranchSidebar({
               key={ref.name}
               active={selectedRef === ref.shortName || selectedRef === ref.name}
               name={ref.shortName}
+              fullName={ref.name}
               onClick={() => onSelectRef(ref.name)}
+              onSetCompareBase={onSetRefAsCompareBase}
+              onSetCompareTarget={onSetRefAsCompareTarget}
             />
           ))
         ) : (
@@ -93,12 +120,15 @@ export function BranchSidebar({
             <BranchRow
               key={ref.name}
               name={ref.shortName}
+              fullName={ref.name}
               muted
               active={selectedRef === ref.shortName || selectedRef === ref.name}
               drift={driftMap?.get(ref.name) ?? null}
               driftScale={driftScale}
               baseLabel={baseLabel}
               onClick={() => onSelectRef(ref.name)}
+              onSetCompareBase={onSetRefAsCompareBase}
+              onSetCompareTarget={onSetRefAsCompareTarget}
             />
           ))
         ) : (
@@ -449,6 +479,7 @@ function Section({
 
 function BranchRow({
   name,
+  fullName,
   hint,
   active,
   dot,
@@ -457,8 +488,11 @@ function BranchRow({
   driftScale,
   baseLabel,
   onClick,
+  onSetCompareBase,
+  onSetCompareTarget,
 }: {
   name: string;
+  fullName?: string;
   hint?: string;
   active?: boolean;
   dot?: string;
@@ -467,8 +501,10 @@ function BranchRow({
   driftScale?: number;
   baseLabel?: string;
   onClick?: () => void;
+  onSetCompareBase?: (refName: string) => void;
+  onSetCompareTarget?: (refName: string) => void;
 }) {
-  return (
+  const button = (
     <button
       className="flex items-center gap-2 mx-1 px-2 rounded-md text-left"
       style={{
@@ -521,6 +557,91 @@ function BranchRow({
         </span>
       ) : null}
     </button>
+  );
+
+  return (
+    <RefRowMenu
+      shortName={name}
+      fullName={fullName}
+      onSwitch={onClick}
+      onSetCompareBase={onSetCompareBase}
+      onSetCompareTarget={onSetCompareTarget}
+    >
+      {button}
+    </RefRowMenu>
+  );
+}
+
+/**
+ * Shared right-click menu for ref rows (branches / tags / remotes). Lives next
+ * to the row components rather than as a one-shot inline block so the same
+ * action set stays identical across all three sections — divergence here would
+ * be a confusing UX cost (different menus for visually-similar rows).
+ */
+function RefRowMenu({
+  shortName,
+  fullName,
+  onSwitch,
+  onSetCompareBase,
+  onSetCompareTarget,
+  children,
+}: {
+  shortName: string;
+  fullName?: string;
+  onSwitch?: () => void;
+  onSetCompareBase?: (refName: string) => void;
+  onSetCompareTarget?: (refName: string) => void;
+  children: ReactNode;
+}) {
+  // Without the canonical full name we can't safely drive copy / compare on
+  // the underlying ref, so the menu degrades to "no menu" rather than
+  // surfacing a half-broken one. Callers should always pass `fullName`; this
+  // is just a defensive escape hatch.
+  if (!fullName) return <>{children}</>;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          onSelect={() => void navigator.clipboard?.writeText(shortName)}
+        >
+          <Copy />
+          Copy ref name
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => void navigator.clipboard?.writeText(fullName)}
+        >
+          <Copy />
+          Copy full ref name
+          <span
+            className="ml-auto"
+            style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)" }}
+          >
+            {fullName}
+          </span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem disabled={!onSwitch} onSelect={() => onSwitch?.()}>
+          <ArrowRightToLine />
+          Switch to this ref
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          disabled={!onSetCompareBase}
+          onSelect={() => onSetCompareBase?.(fullName)}
+        >
+          <GitCompareArrows />
+          Set as compare base
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!onSetCompareTarget}
+          onSelect={() => onSetCompareTarget?.(fullName)}
+        >
+          <GitCompareArrows />
+          Set as compare target
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -631,14 +752,20 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
 
 function TagRow({
   name,
+  fullName,
   active,
   onClick,
+  onSetCompareBase,
+  onSetCompareTarget,
 }: {
   name: string;
+  fullName?: string;
   active?: boolean;
   onClick?: () => void;
+  onSetCompareBase?: (refName: string) => void;
+  onSetCompareTarget?: (refName: string) => void;
 }) {
-  return (
+  const button = (
     <button
       className="mx-1 px-2 flex items-center gap-2"
       style={{
@@ -664,5 +791,17 @@ function TagRow({
       <ChevronRight size={11} style={{ color: "var(--rs-git-merge)" }} />
       <span className="flex-1 truncate text-left">{name}</span>
     </button>
+  );
+
+  return (
+    <RefRowMenu
+      shortName={name}
+      fullName={fullName}
+      onSwitch={onClick}
+      onSetCompareBase={onSetCompareBase}
+      onSetCompareTarget={onSetCompareTarget}
+    >
+      {button}
+    </RefRowMenu>
   );
 }
