@@ -1,0 +1,450 @@
+/*
+ * Refscope Design System — Tailwind v4 @theme definition
+ * Observatory metaphor | DTCG v2025.10 aligned
+ *
+ * Usage: place in mock/src/styles/ and import before globals.css, OR
+ *        reference as the authoritative source to merge into theme.css.
+ *
+ * Color model: OKLCH
+ *   neutral hue ≈ 250 (cool blue-gray)
+ *   accent  hue ≈ 200 (cyan-teal, single accent)
+ *
+ * Structure:
+ *   1. CSS custom properties (:root / .dark)
+ *   2. @theme inline block (Tailwind v4 token registration)
+ */
+
+/* ─────────────────────────────────────────────
+   1. CSS Custom Properties
+   ─────────────────────────────────────────────
+   These are the "real" values. The @theme block
+   below aliases them into Tailwind utilities.
+   ───────────────────────────────────────────── */
+
+:root {
+  /* ── Neutral palette (cool gray, hue 250) ── */
+  --color-neutral-50:  oklch(0.985 0.006 250);
+  --color-neutral-100: oklch(0.958 0.008 250);
+  --color-neutral-200: oklch(0.920 0.010 250);
+  --color-neutral-300: oklch(0.860 0.010 250);
+  --color-neutral-400: oklch(0.760 0.010 250);
+  --color-neutral-500: oklch(0.620 0.010 250);
+  --color-neutral-600: oklch(0.480 0.010 250);
+  --color-neutral-700: oklch(0.360 0.010 250);
+  --color-neutral-800: oklch(0.250 0.008 250);
+  --color-neutral-900: oklch(0.165 0.008 250);
+  --color-neutral-950: oklch(0.108 0.006 250);
+
+  /* ── Accent (cyan-teal, hue 200 — single accent) ── */
+  --color-accent-300: oklch(0.820 0.110 200);
+  --color-accent-400: oklch(0.730 0.135 200);
+  --color-accent-500: oklch(0.630 0.155 200);
+  --color-accent-600: oklch(0.520 0.140 200);
+  --color-accent-700: oklch(0.410 0.120 200);
+
+  /* ── Semantic: warning (amber, hue 65-75) ── */
+  --color-warning-bg:     oklch(0.960 0.030 75);
+  --color-warning-fg:     oklch(0.420 0.100 65);
+  --color-warning-border: oklch(0.780 0.090 70);
+
+  /* ── Semantic: error (red, hue 15-20) ── */
+  --color-error-bg:     oklch(0.965 0.025 15);
+  --color-error-fg:     oklch(0.390 0.130 20);
+  --color-error-border: oklch(0.720 0.130 20);
+
+  /* ── Semantic: success-muted (green, hue 155) ── */
+  --color-success-bg:     oklch(0.960 0.020 155);
+  --color-success-fg:     oklch(0.380 0.090 155);
+  --color-success-border: oklch(0.740 0.075 155);
+
+  /* ── Semantic: info (neutral, no chroma emphasis) ── */
+  --color-info-bg:     oklch(0.955 0.008 250);
+  --color-info-fg:     oklch(0.380 0.010 250);
+  --color-info-border: oklch(0.780 0.010 250);
+
+  /* ── Semantic roles (light mode) ── */
+  --rs-bg-base:    var(--color-neutral-50);
+  --rs-bg-raised:  var(--color-neutral-100);
+  --rs-bg-sunken:  var(--color-neutral-200);
+  --rs-bg-overlay: var(--color-neutral-50);
+
+  --rs-fg-base:     var(--color-neutral-900);
+  --rs-fg-subtle:   var(--color-neutral-600);
+  --rs-fg-muted:    var(--color-neutral-400);
+  --rs-fg-on-accent: var(--color-neutral-950);
+
+  --rs-border-base:   var(--color-neutral-300);
+  --rs-border-subtle: var(--color-neutral-200);
+  --rs-border-strong: var(--color-neutral-500);
+  --rs-border-focus:  var(--color-accent-500);
+
+  --rs-surface-hover:    var(--color-neutral-100);
+  --rs-surface-active:   var(--color-neutral-200);
+  --rs-surface-selected: oklch(0.630 0.155 200 / 0.12);
+
+  /* ── Elevation / shadow ── */
+  --shadow-none:    none;
+  --shadow-subtle:  0 1px 2px oklch(0.108 0.006 250 / 0.08),
+                    0 0 0 1px oklch(0.860 0.010 250 / 0.6);
+  --shadow-overlay: 0 4px 16px oklch(0.108 0.006 250 / 0.16),
+                    0 1px 4px  oklch(0.108 0.006 250 / 0.10),
+                    0 0 0 1px  oklch(0.860 0.010 250 / 0.5);
+
+  /* ── Border radius ── */
+  --radius-none: 0px;
+  --radius-xs:   2px;
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  /* NOTE: 8px+ is forbidden in this design system */
+
+  /* ── Typography: font families ── */
+  --font-ui:   "Inter", "IBM Plex Sans", -apple-system, BlinkMacSystemFont,
+               "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular,
+               Menlo, Monaco, Consolas, monospace;
+
+  /* ── Typography: sizes ── */
+  --text-xs:      12px;
+  --text-sm:      13px;
+  --text-base:    14px;
+  --text-md:      15px;
+  --text-lg:      17px;
+  --text-mono-xs: 12px;
+
+  /* ── Typography: weights ── */
+  --font-weight-regular: 400;
+  --font-weight-medium:  500;
+  --font-weight-bold:    700;
+  /* NOTE: font-weight < 400 (light) is forbidden */
+
+  /* ── Typography: line heights ── */
+  --leading-tight:  1.25;
+  --leading-snug:   1.375;
+  --leading-normal: 1.5;
+
+  /* ── Typography: letter spacing ── */
+  --tracking-tight:  -0.01em;
+  --tracking-normal:  0em;
+  --tracking-wide:    0.04em;
+
+  /* ── Spacing (4px base grid) ── */
+  --spacing-0:  0px;
+  --spacing-1:  4px;
+  --spacing-2:  8px;
+  --spacing-3:  12px;
+  --spacing-4:  16px;
+  --spacing-6:  24px;
+  --spacing-8:  32px;
+  /* NOTE: 5px, 7px, 11px are forbidden */
+
+  --row-height-min: 28px;
+  --row-height-max: 32px;
+
+  /* ── Motion: durations ── */
+  --duration-instant:  0ms;
+  --duration-fast:     120ms;
+  --duration-normal:   180ms;
+  --duration-moderate: 240ms;
+  --duration-slow:     300ms;
+
+  /* ── Motion: easing ── */
+  --ease-standard:   cubic-bezier(0.2, 0.0, 0.0, 1.0);
+  --ease-decelerate: cubic-bezier(0.0, 0.0, 0.2, 1.0);
+  --ease-accelerate: cubic-bezier(0.4, 0.0, 1.0, 1.0);
+  --ease-spring:     cubic-bezier(0.34, 1.56, 0.64, 1.0);
+
+  /* ── Z-index ── */
+  --z-base:     0;
+  --z-raised:   10;
+  --z-dropdown: 100;
+  --z-sticky:   200;
+  --z-overlay:  300;
+  --z-modal:    400;
+  --z-toast:    500;
+  --z-tooltip:  600;
+
+  /* ── Focus ring ── */
+  --focus-ring-width:  2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color:  var(--color-accent-500);
+}
+
+/* ─────────────────────────────────────────────
+   Dark Mode overrides
+   ───────────────────────────────────────────── */
+
+.dark,
+[data-theme="dark"] {
+  /* Semantic roles — dark mode */
+  --rs-bg-base:    var(--color-neutral-950);
+  --rs-bg-raised:  oklch(0.145 0.007 250);  /* between 900 and 950 */
+  --rs-bg-sunken:  var(--color-neutral-900);
+  --rs-bg-overlay: oklch(0.145 0.007 250);
+
+  --rs-fg-base:     var(--color-neutral-50);
+  --rs-fg-subtle:   var(--color-neutral-400);
+  --rs-fg-muted:    var(--color-neutral-600);
+  --rs-fg-on-accent: var(--color-neutral-950);
+
+  --rs-border-base:   var(--color-neutral-800);
+  --rs-border-subtle: oklch(0.200 0.007 250);
+  --rs-border-strong: var(--color-neutral-600);
+  --rs-border-focus:  var(--color-accent-400);
+
+  --rs-surface-hover:    var(--color-neutral-900);
+  --rs-surface-active:   var(--color-neutral-800);
+  --rs-surface-selected: oklch(0.630 0.155 200 / 0.15);
+
+  /* Elevation — dark mode */
+  --shadow-subtle:  0 1px 2px oklch(0 0 0 / 0.30),
+                    0 0 0 1px oklch(0.250 0.008 250 / 0.8);
+  --shadow-overlay: 0 4px 16px oklch(0 0 0 / 0.50),
+                    0 1px 4px  oklch(0 0 0 / 0.30),
+                    0 0 0 1px  oklch(0.250 0.008 250 / 0.9);
+
+  /* Semantic colors — dark mode */
+  --color-warning-bg:     oklch(0.260 0.050 65);
+  --color-warning-fg:     oklch(0.820 0.100 70);
+  --color-warning-border: oklch(0.480 0.090 65);
+
+  --color-error-bg:     oklch(0.250 0.060 15);
+  --color-error-fg:     oklch(0.800 0.110 20);
+  --color-error-border: oklch(0.460 0.110 15);
+
+  --color-success-bg:     oklch(0.250 0.045 155);
+  --color-success-fg:     oklch(0.800 0.085 155);
+  --color-success-border: oklch(0.460 0.070 155);
+
+  --color-info-bg:     oklch(0.240 0.008 250);
+  --color-info-fg:     oklch(0.820 0.010 250);
+  --color-info-border: oklch(0.450 0.010 250);
+
+  /* Accent shift — use 400 as primary in dark (brighter on dark bg) */
+  --focus-ring-color: var(--color-accent-400);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --rs-bg-base:    var(--color-neutral-950);
+    --rs-bg-raised:  oklch(0.145 0.007 250);
+    --rs-bg-sunken:  var(--color-neutral-900);
+    --rs-bg-overlay: oklch(0.145 0.007 250);
+
+    --rs-fg-base:     var(--color-neutral-50);
+    --rs-fg-subtle:   var(--color-neutral-400);
+    --rs-fg-muted:    var(--color-neutral-600);
+    --rs-fg-on-accent: var(--color-neutral-950);
+
+    --rs-border-base:   var(--color-neutral-800);
+    --rs-border-subtle: oklch(0.200 0.007 250);
+    --rs-border-strong: var(--color-neutral-600);
+    --rs-border-focus:  var(--color-accent-400);
+
+    --rs-surface-hover:    var(--color-neutral-900);
+    --rs-surface-active:   var(--color-neutral-800);
+    --rs-surface-selected: oklch(0.630 0.155 200 / 0.15);
+
+    --shadow-subtle:  0 1px 2px oklch(0 0 0 / 0.30),
+                      0 0 0 1px oklch(0.250 0.008 250 / 0.8);
+    --shadow-overlay: 0 4px 16px oklch(0 0 0 / 0.50),
+                      0 1px 4px  oklch(0 0 0 / 0.30),
+                      0 0 0 1px  oklch(0.250 0.008 250 / 0.9);
+
+    --color-warning-bg:     oklch(0.260 0.050 65);
+    --color-warning-fg:     oklch(0.820 0.100 70);
+    --color-warning-border: oklch(0.480 0.090 65);
+
+    --color-error-bg:     oklch(0.250 0.060 15);
+    --color-error-fg:     oklch(0.800 0.110 20);
+    --color-error-border: oklch(0.460 0.110 15);
+
+    --color-success-bg:     oklch(0.250 0.045 155);
+    --color-success-fg:     oklch(0.800 0.085 155);
+    --color-success-border: oklch(0.460 0.070 155);
+
+    --color-info-bg:     oklch(0.240 0.008 250);
+    --color-info-fg:     oklch(0.820 0.010 250);
+    --color-info-border: oklch(0.450 0.010 250);
+
+    --focus-ring-color: var(--color-accent-400);
+  }
+}
+
+/* ─────────────────────────────────────────────
+   2. Tailwind v4 @theme registration
+   ─────────────────────────────────────────────
+   Registers all custom properties as Tailwind
+   design tokens, making them available as
+   utility classes (e.g. bg-rs-bg-base,
+   text-rs-fg-subtle, shadow-subtle, etc.)
+   ───────────────────────────────────────────── */
+
+@theme inline {
+  /* ── Neutral palette ── */
+  --color-neutral-50:  var(--color-neutral-50);
+  --color-neutral-100: var(--color-neutral-100);
+  --color-neutral-200: var(--color-neutral-200);
+  --color-neutral-300: var(--color-neutral-300);
+  --color-neutral-400: var(--color-neutral-400);
+  --color-neutral-500: var(--color-neutral-500);
+  --color-neutral-600: var(--color-neutral-600);
+  --color-neutral-700: var(--color-neutral-700);
+  --color-neutral-800: var(--color-neutral-800);
+  --color-neutral-900: var(--color-neutral-900);
+  --color-neutral-950: var(--color-neutral-950);
+
+  /* ── Accent ── */
+  --color-accent-300: var(--color-accent-300);
+  --color-accent-400: var(--color-accent-400);
+  --color-accent-500: var(--color-accent-500);
+  --color-accent-600: var(--color-accent-600);
+  --color-accent-700: var(--color-accent-700);
+
+  /* ── Semantic ── */
+  --color-warning-bg:     var(--color-warning-bg);
+  --color-warning-fg:     var(--color-warning-fg);
+  --color-warning-border: var(--color-warning-border);
+  --color-error-bg:       var(--color-error-bg);
+  --color-error-fg:       var(--color-error-fg);
+  --color-error-border:   var(--color-error-border);
+  --color-success-bg:     var(--color-success-bg);
+  --color-success-fg:     var(--color-success-fg);
+  --color-success-border: var(--color-success-border);
+  --color-info-bg:        var(--color-info-bg);
+  --color-info-fg:        var(--color-info-fg);
+  --color-info-border:    var(--color-info-border);
+
+  /* ── Semantic roles ── */
+  --color-rs-bg-base:    var(--rs-bg-base);
+  --color-rs-bg-raised:  var(--rs-bg-raised);
+  --color-rs-bg-sunken:  var(--rs-bg-sunken);
+  --color-rs-bg-overlay: var(--rs-bg-overlay);
+
+  --color-rs-fg-base:      var(--rs-fg-base);
+  --color-rs-fg-subtle:    var(--rs-fg-subtle);
+  --color-rs-fg-muted:     var(--rs-fg-muted);
+  --color-rs-fg-on-accent: var(--rs-fg-on-accent);
+
+  --color-rs-border-base:   var(--rs-border-base);
+  --color-rs-border-subtle: var(--rs-border-subtle);
+  --color-rs-border-strong: var(--rs-border-strong);
+  --color-rs-border-focus:  var(--rs-border-focus);
+
+  --color-rs-surface-hover:    var(--rs-surface-hover);
+  --color-rs-surface-active:   var(--rs-surface-active);
+  --color-rs-surface-selected: var(--rs-surface-selected);
+
+  /* ── Shadows ── */
+  --shadow-none:    var(--shadow-none);
+  --shadow-subtle:  var(--shadow-subtle);
+  --shadow-overlay: var(--shadow-overlay);
+
+  /* ── Border radius ── */
+  --radius-none: var(--radius-none);
+  --radius-xs:   var(--radius-xs);
+  --radius-sm:   var(--radius-sm);
+  --radius-md:   var(--radius-md);
+
+  /* ── Font families ── */
+  --font-ui:   var(--font-ui);
+  --font-mono: var(--font-mono);
+
+  /* ── Font sizes ── */
+  --text-xs:      var(--text-xs);
+  --text-sm:      var(--text-sm);
+  --text-base:    var(--text-base);
+  --text-md:      var(--text-md);
+  --text-lg:      var(--text-lg);
+  --text-mono-xs: var(--text-mono-xs);
+
+  /* ── Font weights ── */
+  --font-weight-regular: var(--font-weight-regular);
+  --font-weight-medium:  var(--font-weight-medium);
+  --font-weight-bold:    var(--font-weight-bold);
+
+  /* ── Line heights ── */
+  --leading-tight:  var(--leading-tight);
+  --leading-snug:   var(--leading-snug);
+  --leading-normal: var(--leading-normal);
+
+  /* ── Letter spacings ── */
+  --tracking-tight:  var(--tracking-tight);
+  --tracking-normal: var(--tracking-normal);
+  --tracking-wide:   var(--tracking-wide);
+
+  /* ── Spacing ── */
+  --spacing-0: var(--spacing-0);
+  --spacing-1: var(--spacing-1);
+  --spacing-2: var(--spacing-2);
+  --spacing-3: var(--spacing-3);
+  --spacing-4: var(--spacing-4);
+  --spacing-6: var(--spacing-6);
+  --spacing-8: var(--spacing-8);
+
+  /* ── Motion ── */
+  --duration-instant:  var(--duration-instant);
+  --duration-fast:     var(--duration-fast);
+  --duration-normal:   var(--duration-normal);
+  --duration-moderate: var(--duration-moderate);
+  --duration-slow:     var(--duration-slow);
+
+  --ease-standard:   var(--ease-standard);
+  --ease-decelerate: var(--ease-decelerate);
+  --ease-accelerate: var(--ease-accelerate);
+  --ease-spring:     var(--ease-spring);
+}
+
+/* ─────────────────────────────────────────────
+   3. Focus ring utility
+   ─────────────────────────────────────────────
+   Double-ring focus: 2px accent + 2px offset + outer neutral ring
+   ───────────────────────────────────────────── */
+
+@layer utilities {
+  .focus-ring {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+    box-shadow: 0 0 0 calc(var(--focus-ring-width) + var(--focus-ring-offset)) oklch(0.108 0.006 250 / 0.25);
+  }
+
+  .focus-ring-dark {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+    box-shadow: 0 0 0 calc(var(--focus-ring-width) + var(--focus-ring-offset)) oklch(0.985 0.006 250 / 0.20);
+  }
+
+  /* Dense row helper */
+  .row-dense {
+    min-height: var(--row-height-min);
+    max-height: var(--row-height-max);
+  }
+
+  /* Tabular mono for OIDs, timestamps */
+  .font-mono-tabular {
+    font-family: var(--font-mono);
+    font-size: var(--text-mono-xs);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "liga" 0, "calt" 0;  /* Ligatures OFF */
+  }
+
+  /* Accent pulse animation for live SSE updates */
+  @keyframes rs-pulse {
+    0%   { background-color: oklch(0.630 0.155 200 / 0); }
+    30%  { background-color: oklch(0.630 0.155 200 / 0.15); }
+    100% { background-color: oklch(0.630 0.155 200 / 0); }
+  }
+
+  .rs-pulse {
+    animation: rs-pulse var(--duration-slow) var(--ease-standard) 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rs-pulse {
+      animation: none;
+    }
+    * {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+    }
+  }
+}
