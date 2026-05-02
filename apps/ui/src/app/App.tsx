@@ -6,6 +6,8 @@ import { CommitTimeline } from "./components/refscope/CommitTimeline";
 import { DetailPanel } from "./components/refscope/DetailPanel";
 import { CommandPalette } from "./components/refscope/CommandPalette";
 import { FileHistoryView } from "./components/refscope/FileHistoryView";
+import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
+import { ActivityLens } from "./components/refscope/ActivityLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -123,6 +125,8 @@ function persistRecentFileHistoryPaths(paths: string[]): void {
 }
 
 export default function App() {
+  // Lens switcher state — 'live' is the default; other lenses are placeholders.
+  const [activeLens, setActiveLens] = useState<LensId>('live');
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [refs, setRefs] = useState<GitRef[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
@@ -1085,7 +1089,21 @@ export default function App() {
         workTreeAvailable={Boolean(selectedRepo)}
         onOpenFileHistory={openFileHistoryPrompt}
       />
+      <LensSwitcher activeLens={activeLens} onLensChange={setActiveLens} />
+      {activeLens === 'activity' && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-activity" role="tabpanel" aria-labelledby="lens-tab-activity">
+          <ActivityLens
+            repoId={selectedRepo || null}
+            commits={commits}
+            selectedCommitHash={selected || null}
+            onSelectCommit={(hash) => { setSelected(hash); }}
+          />
+        </div>
+      )}
+      {/* Live lens: render the full existing layout. Hidden (not unmounted) when inactive
+          so that SSE subscriptions, hooks, and resizable-panel refs stay alive. */}
       <ResizablePanelGroup
+        style={{ display: activeLens === 'live' ? undefined : 'none' }}
         direction="horizontal"
         className="flex flex-1 overflow-hidden"
         onLayout={(layout) => {

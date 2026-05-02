@@ -21,7 +21,9 @@ import {
   Cherry,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { useState } from "react";
 import type { GitRef, RealtimeAlert } from "./data";
+import { Badge } from "../ui/badge";
 import type {
   RepoOperation,
   RepoStateResponse,
@@ -452,6 +454,8 @@ function refColor(type: GitRef["type"]) {
 function AlertRow({ alert }: { alert: RealtimeAlert }) {
   const observedTime = formatObservedTime(alert.observedAt);
   const incidentNote = formatIncidentNote(alert, observedTime);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+
   return (
     <div
       className="px-2 py-2 mx-1 rounded-md"
@@ -466,6 +470,35 @@ function AlertRow({ alert }: { alert: RealtimeAlert }) {
         style={{ fontSize: 11, color: "var(--rs-warning)", fontWeight: 600 }}
       >
         <AlertTriangle size={11} aria-hidden /> History rewritten
+        {/* (C) confidence badge — only shown when confidence is present */}
+        {alert.confidence === 'exact' && (
+          <Badge
+            className="ml-1"
+            style={{
+              fontSize: 9,
+              padding: '1px 5px',
+              background: 'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-git-added) 30%)',
+              color: 'var(--rs-git-added)',
+              border: '1px solid color-mix(in oklab, var(--rs-border), var(--rs-git-added) 40%)',
+            }}
+          >
+            exact
+          </Badge>
+        )}
+        {alert.confidence === 'inferred' && (
+          <Badge
+            className="ml-1"
+            style={{
+              fontSize: 9,
+              padding: '1px 5px',
+              background: 'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 25%)',
+              color: 'var(--rs-warning)',
+              border: '1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 50%)',
+            }}
+          >
+            inferred
+          </Badge>
+        )}
       </div>
       <RewriteFlow previousHash={alert.previousHash} currentHash={alert.currentHash} />
       <dl
@@ -488,6 +521,48 @@ function AlertRow({ alert }: { alert: RealtimeAlert }) {
       >
         {alert.explanation}
       </div>
+      {/* (C) evidence expandable — only shown when evidence is present */}
+      {alert.evidence && (
+        <details
+          open={evidenceOpen}
+          onToggle={(event) => setEvidenceOpen((event.currentTarget as HTMLDetailsElement).open)}
+          style={{ marginTop: 6 }}
+        >
+          <summary
+            style={{
+              fontSize: 10,
+              color: 'var(--rs-text-muted)',
+              cursor: 'pointer',
+              userSelect: 'none',
+              listStyle: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            <span style={{ fontSize: 9 }}>{evidenceOpen ? '▼' : '▶'}</span>
+            Why this was flagged
+          </summary>
+          <div
+            className="mt-1 grid gap-0.5"
+            style={{
+              fontSize: 10,
+              fontFamily: 'var(--rs-mono)',
+              color: 'var(--rs-text-secondary)',
+              background: 'var(--rs-bg-canvas)',
+              border: '1px solid var(--rs-border)',
+              borderRadius: 'var(--rs-radius-sm)',
+              padding: '6px 8px',
+            }}
+          >
+            <div><span style={{ color: 'var(--rs-text-muted)' }}>method:</span> {alert.evidence.method}</div>
+            <div><span style={{ color: 'var(--rs-text-muted)' }}>observedAt:</span> {alert.evidence.observedAt}</div>
+            {alert.evidence.gitCommand && (
+              <div><span style={{ color: 'var(--rs-text-muted)' }}>gitCommand:</span> {alert.evidence.gitCommand}</div>
+            )}
+          </div>
+        </details>
+      )}
       <button
         className="rs-compact-button mt-2"
         type="button"
