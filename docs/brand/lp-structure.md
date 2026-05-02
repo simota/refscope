@@ -224,9 +224,9 @@ A11y: each `Copy` button has `aria-label="Copy command: <command>"`. On copy, a 
 Two short columns:
 
 **`Likely next`**
-- `Period summaries` `that aggregate observations across a window`
-- `Pinned refs` `for repositories with many branches`
-- `File history` `from a single path back through renames`
+- `Static export` `of the recorded observation log for offline reading`
+- `Multi-repository view` `with several observatories visible at once instead of one at a time`
+- `Reflog overlay` `so recoverable hashes stay reachable from the timeline after a rewrite`
 
 **`Not in scope`**
 - `Cryptographic signature verification` `(would invoke external GPG)`

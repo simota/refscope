@@ -44,9 +44,21 @@ Pin a tag if you want a specific revision: `npx -y github:simota/refscope#v0.0.1
 
 Full options and the CLI security model are in [`apps/cli/README.md`](apps/cli/README.md).
 
-## Building from source
+## What you see in the UI
 
-The sections below this are for working on Refscope itself — the API, the UI, the CLI, and the landing page.
+- **Three lenses over the same repository** — `Live` for the commit timeline, `Activity` for a per-file activity overview, `Stream` for an event-shaped feed. Each lens reuses the same refs, filters, and selected commit; switching is local.
+- **Working-tree changes** are surfaced as a first-class entry alongside committed history, and uncommitted edits feed into the Activity and Stream lenses too.
+- **File history with co-change** — right-click any file row to open its history view, complete with a hunk timeline, branch-drift halo, and a related-files (co-change) panel.
+- **Period summary** — labelled metric bars for commit count, additions, deletions, signed commits, merge commits, and live-update arrivals across a chosen window.
+- **Sidebar with the full ref surface** — branches, tags, remote-tracking refs, pinned refs, stashes, linked worktrees, submodules, and an in-progress banner for active rebases / merges / cherry-picks.
+- **Compare bar** — pin a base ref/commit and a target ref to see ahead/behind counts plus copyable `git log` / `diff --stat` / `diff` commands with revisions kept as separate tokens.
+- **Realtime updates with pause** — typed SSE events drive a calm timeline that never auto-scrolls; pause queues new observations until you resume. History rewrites are rendered as an event-driven alert list with the previous tip, current tip, observed time, and detection source kept separate from the interpretation.
+- **Command palette** (`Cmd/Ctrl+K`) — operates on the same live ref/commit state as the page, and exposes pause, copy current hash, clear filters, and ref switching.
+- **Read-only right-click menus and global keyboard shortcuts** for refs, commits, files, and the diff viewer.
+
+The sections below are for working on Refscope itself — the API, the UI, the CLI, and the landing page.
+
+## Building from source
 
 ### Setup
 
@@ -128,8 +140,8 @@ Numeric runtime settings such as `PORT`, `RTGV_GIT_TIMEOUT_MS`,
 `RTGV_DIFF_MAX_BYTES`, and `RTGV_REF_POLL_MS` must be decimal positive integer
 strings. Values using numeric coercion syntax such as `1e3` or `10.5` are
 rejected at startup. `RTGV_GIT_TIMEOUT_MS` must also fit Node.js timer bounds
-(`1` through `2147483647`), and `RTGV_DIFF_MAX_BYTES` is capped at `16777216`
-bytes so Git output remains bounded.
+(`1` through `2147483647`). `RTGV_DIFF_MAX_BYTES` defaults to `4000000`
+(4&nbsp;MB) and is capped at `16777216` bytes so Git output remains bounded.
 
 When overriding browser origins for CORS, provide comma-separated HTTP(S)
 origins only, or set the whole value to `*` for local unrestricted access:
