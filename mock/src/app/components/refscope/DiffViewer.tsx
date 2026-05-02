@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -41,6 +41,15 @@ import {
  * Stays UI-only: `truncated` and `maxBytes` come straight from the API
  * response (no client-side guesses) and the parser never throws.
  */
+
+// Above this many *change + context* lines a unified diff begins to dominate
+// React commit time on commodity hardware (~50 ms/1 000 rows in v18 dev mode).
+// Calibrated against the API's 4 MB diff cap: a 4 MB patch is typically
+// 30-60k lines, so a 2 000-line threshold catches everything that would
+// otherwise freeze the main thread on commit switch while keeping smaller
+// diffs in the more useful all-files view.
+const LARGE_DIFF_LINE_THRESHOLD = 2_000;
+
 export function DiffViewer({
   diff,
   truncated,
@@ -94,6 +103,11 @@ export function DiffViewer({
     return new Set();
   });
   const [copyStatus, setCopyStatus] = useState("");
+  // Set whenever the auto-switch to single-file view fired for the current
+  // diff. Used to surface a non-intrusive notice so the user knows why they
+  // are not seeing the full file list — and resets to false the moment the
+  // user manually flips back to "all".
+  const [autoSingleMode, setAutoSingleMode] = useState(false);
 
   // Fullscreen is controlled when the parent passes a value; otherwise the viewer
   // owns the state internally so usages without a parent override still work.
@@ -122,6 +136,20 @@ export function DiffViewer({
     setCollapsedKeys(
       parsed.files.length > 30 ? new Set(parsed.files.map((file) => fileKey(file))) : new Set(),
     );
+    // Auto-switch to single-file view for large diffs. Mounting tens of
+    // thousands of <DiffLineRow>s synchronously locks the main thread for
+    // multiple seconds; rapid commit navigation accumulates that cost across
+    // consecutive commits and produces a multi-second freeze even after the
+    // fetch-side debounce / abort. Single-file mode renders only the
+    // currently selected file's lines, capping the per-commit DOM cost.
+    let totalLines = 0;
+    for (const file of parsed.files) {
+      for (const hunk of file.hunks) totalLines += hunk.lines.length;
+      if (totalLines > LARGE_DIFF_LINE_THRESHOLD) break;
+    }
+    const isLarge = totalLines > LARGE_DIFF_LINE_THRESHOLD;
+    setAutoSingleMode(isLarge);
+    if (isLarge) setViewMode("single");
     // Resetting per parsed identity (which is per `diff` input) is intentional.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parsed]);
@@ -202,9 +230,15 @@ export function DiffViewer({
 
   useEffect(() => {
     if (!fullscreen) return;
-    listRef.current
-      ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
-      ?.scrollIntoView({ block: "nearest" });
+    // rAF defers the layout read out of the commit phase — the diff body in
+    // fullscreen can be tens of thousands of rows, so a sync scrollIntoView
+    // immediately after a re-render forces a full reflow.
+    const handle = requestAnimationFrame(() => {
+      listRef.current
+        ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
+        ?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(handle);
   }, [fullscreen, selectedIndex]);
 
   if (!diff && !truncated) {
@@ -303,7 +337,13 @@ export function DiffViewer({
         added={totals.added}
         deleted={totals.deleted}
         viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        onViewModeChange={(next) => {
+          // Manual toolbar switch clears the auto-single banner — once the
+          // user has chosen, we do not want to surprise them with that
+          // notice on the next commit even if the diff is still large.
+          setAutoSingleMode(false);
+          setViewMode(next);
+        }}
         wordWrap={wordWrap}
         onWordWrapChange={setWordWrap}
         showWhitespace={showWhitespace}
@@ -334,6 +374,22 @@ export function DiffViewer({
           }}
         >
           Diff was truncated at {Math.round(maxBytes / 1024)} KB. Showing partial output.
+        </div>
+      ) : null}
+      {autoSingleMode && viewMode === "single" ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="px-3 py-2"
+          style={{
+            fontSize: 11,
+            color: "var(--rs-text-secondary)",
+            background:
+              "color-mix(in oklab, var(--rs-bg-canvas), var(--rs-accent) 8%)",
+            borderBottom: "1px solid var(--rs-border)",
+          }}
+        >
+          Large diff — showing one file at a time for performance. Use the file list to navigate, or press <strong>All</strong> to render everything.
         </div>
       ) : null}
       <div
@@ -841,7 +897,11 @@ function FileBlock({
   );
 }
 
-function FileBody({
+// Memoized: receives only stable props (file from memoized parser output;
+// wordWrap/showWhitespace/language change only on user toggle or file switch).
+// Without this, every parent re-render (SSE notice, commit nav, etc.) walks
+// the entire hunk + line tree and re-tokenizes every line via Prism.
+const FileBody = memo(function FileBody({
   file,
   wordWrap,
   showWhitespace,
@@ -899,9 +959,9 @@ function FileBody({
       ))}
     </div>
   );
-}
+});
 
-function HunkBlock({
+const HunkBlock = memo(function HunkBlock({
   hunk,
   wordWrap,
   showWhitespace,
@@ -952,9 +1012,9 @@ function HunkBlock({
       ))}
     </>
   );
-}
+});
 
-function DiffLineRow({
+const DiffLineRow = memo(function DiffLineRow({
   line,
   wordWrap,
   showWhitespace,
@@ -1045,7 +1105,7 @@ function DiffLineRow({
       </span>
     </div>
   );
-}
+});
 
 function textOf(line: DiffLine): string {
   return line.text;

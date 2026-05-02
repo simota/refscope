@@ -110,6 +110,7 @@ export function DetailPanel({
         }}
       >
         <div
+          className="flex items-center gap-2"
           style={{
             fontSize: 10,
             letterSpacing: "0.08em",
@@ -117,7 +118,23 @@ export function DetailPanel({
             color: "var(--rs-text-muted)",
           }}
         >
-          COMMIT
+          <span>COMMIT</span>
+          {/* aria-busy lets assistive tech announce the in-flight state without
+              requiring a focus change. The text label keeps the signal visible
+              for sighted users during rapid keyboard navigation. */}
+          {loading ? (
+            <span
+              role="status"
+              aria-busy="true"
+              style={{
+                color: "var(--rs-text-secondary)",
+                letterSpacing: "0.04em",
+                fontWeight: 500,
+              }}
+            >
+              · Loading…
+            </span>
+          ) : null}
         </div>
         <div className="flex items-center gap-1">
           {copyStatus ? (

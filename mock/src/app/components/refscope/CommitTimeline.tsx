@@ -121,8 +121,16 @@ export function CommitTimeline({
   const listRef = useRef<HTMLUListElement>(null);
   useEffect(() => {
     if (!selected || !listRef.current) return;
-    const el = listRef.current.querySelector<HTMLElement>(`[data-hash="${selected}"]`);
-    el?.scrollIntoView({ block: "nearest" });
+    // Defer to the next frame so the layout read happens after React has
+    // committed and the browser has computed layout naturally — calling
+    // scrollIntoView synchronously here forces a sync reflow on top of a
+    // freshly mutated DOM, which dominates frame budget when a large diff
+    // is mounted in a sibling panel.
+    const handle = requestAnimationFrame(() => {
+      const el = listRef.current?.querySelector<HTMLElement>(`[data-hash="${selected}"]`);
+      el?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(handle);
   }, [selected]);
 
   return (
