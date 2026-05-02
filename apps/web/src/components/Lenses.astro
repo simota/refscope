@@ -1,0 +1,88 @@
+---
+const lenses = [
+  {
+    id: "live",
+    name: "Live",
+    summary: "The commit timeline as a single, calm column.",
+    body: "The default view. Refs, working-tree changes, and incoming commits read top to bottom. Live updates do not steal focus and do not auto-scroll the row you were reading.",
+  },
+  {
+    id: "activity",
+    name: "Activity",
+    summary: "Per-file activity rendered as a graph, not a feed.",
+    body: "Each node is a file; each ring is recency. Hot spots become visible without ranking. Right-click any node to open its file history; uncommitted edits feed into the graph alongside committed changes.",
+  },
+  {
+    id: "stream",
+    name: "Stream",
+    summary: "One row per file change, in reverse chronological order.",
+    body: "An event-shaped feed: status, path, additions, deletions, and the commit it belongs to. New commits arrive at the top; working-tree edits are interleaved as they happen. Right-click a row to open its file history.",
+  },
+];
+---
+<section id="lenses" class="rs-section" aria-labelledby="lenses-heading">
+  <div class="rs-container">
+    <p class="rs-eyebrow">Lenses</p>
+    <h2 id="lenses-heading">Three lenses over the same repository.</h2>
+    <p class="rs-lede">
+      Switch between Live, Activity, and Stream without losing the active ref, the selected commit, or any filters.
+      Each lens is a different way to read the same observed facts.
+    </p>
+
+    <div class="rs-grid-3 rs-lenses">
+      {lenses.map((l) => (
+        <article class="rs-lens rs-card">
+          <p class="rs-lens__tag" aria-hidden="true"><code>{l.id}</code></p>
+          <h3 class="rs-lens__name">{l.name}</h3>
+          <p class="rs-lens__summary">{l.summary}</p>
+          <p class="rs-lens__body">{l.body}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .rs-lenses { margin-top: var(--spacing-6); }
+  .rs-lens {
+    display: grid;
+    gap: var(--spacing-2);
+  }
+  .rs-lens__tag {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    color: var(--rs-fg-subtle);
+    margin: 0;
+  }
+  .rs-lens__tag code {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: var(--color-accent-500);
+    font-size: 1em;
+  }
+  [data-theme="dark"] .rs-lens__tag code,
+  .dark .rs-lens__tag code { color: var(--color-accent-400); }
+
+  .rs-lens__name {
+    font-size: var(--text-md);
+    font-weight: var(--font-weight-medium);
+    line-height: var(--leading-snug);
+    letter-spacing: var(--tracking-tight);
+    margin: 0;
+  }
+  .rs-lens__summary {
+    color: var(--rs-fg-base);
+    font-size: var(--text-base);
+    line-height: var(--leading-snug);
+    margin: 0;
+  }
+  .rs-lens__body {
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    margin: 0;
+  }
+</style>

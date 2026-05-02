@@ -2,7 +2,7 @@
 /**
  * Refscope LP — media capture script.
  *
- * Captures hero PNG + 5 demo scenes against the local UI.
+ * Captures hero PNG + demo scenes against the local UI.
  * Run after `make dev-self` is up (UI on 127.0.0.1:5173, API on 127.0.0.1:4175).
  *
  * Outputs to apps/web/public/media/.
@@ -18,7 +18,7 @@
  */
 
 import { chromium } from "playwright";
-import { mkdir, access } from "node:fs/promises";
+import { mkdir, access, copyFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -110,11 +110,27 @@ async function settle(page) {
   await page.waitForTimeout(500);
 }
 
+/**
+ * Write a `@2x` twin alongside `path` so srcset references that mention
+ * `path 1x, path@2x.png 2x` resolve. Playwright captures with a
+ * deviceScaleFactor of 2, so both files are pixel-identical here; the twin
+ * exists to satisfy the markup contract rather than to provide a higher
+ * physical resolution.
+ */
+async function writeRetinaTwin(path) {
+  const twin = path.replace(/\.png$/i, "@2x.png");
+  if (twin === path) return;
+  await copyFile(path, twin);
+  log(`wrote ${twin}`);
+}
+
 async function captureHero(page, theme) {
   await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
   await applyTheme(page, theme);
   await settle(page);
-  await captureFull(page, resolve(MEDIA_DIR, `hero-timeline-${theme}.png`));
+  const out = resolve(MEDIA_DIR, `hero-timeline-${theme}.png`);
+  await captureFull(page, out);
+  await writeRetinaTwin(out);
 }
 
 async function captureRewrite(page, theme) {
@@ -218,6 +234,84 @@ async function captureCvdTheme(page, theme) {
     warn("CVD toggle not found; capturing default theme");
   }
   await captureFull(page, resolve(MEDIA_DIR, `demo-08-cvd-theme-${theme}.png`));
+}
+
+async function clickLensTab(page, lensId) {
+  // The lens switcher renders a tab per lens with id `lens-tab-${id}`
+  // and label "Live" / "Activity" / "Stream". Try the id first, fall back
+  // to label-text and aria-controls so the capture survives small markup
+  // tweaks.
+  const candidates = [
+    `#lens-tab-${lensId}`,
+    `[aria-controls='lens-panel-${lensId}']`,
+    `button:has-text('${lensId.charAt(0).toUpperCase() + lensId.slice(1)}')`,
+  ];
+  for (const selector of candidates) {
+    const handle = await page.$(selector);
+    if (handle) {
+      await handle.click().catch(() => { /* ignore */ });
+      await page.waitForTimeout(400);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function captureActivityLens(page, theme) {
+  await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
+  await applyTheme(page, theme);
+  await settle(page);
+  const ok = await clickLensTab(page, "activity");
+  if (!ok) {
+    warn("activity lens tab not found; capturing default lens");
+  }
+  await captureFull(page, resolve(MEDIA_DIR, `demo-09-activity-lens-${theme}.png`));
+}
+
+async function captureStreamLens(page, theme) {
+  await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
+  await applyTheme(page, theme);
+  await settle(page);
+  const ok = await clickLensTab(page, "stream");
+  if (!ok) {
+    warn("stream lens tab not found; capturing default lens");
+  }
+  await captureFull(page, resolve(MEDIA_DIR, `demo-10-stream-lens-${theme}.png`));
+}
+
+async function captureFileHistory(page, theme) {
+  await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
+  await applyTheme(page, theme);
+  await settle(page);
+
+  // Open the file-history prompt via the top-bar button. The button is
+  // labelled "Open file history" (aria-label) and is always rendered, so
+  // this is the most reliable entry point.
+  const openBtn = await page.$("button[aria-label='Open file history']");
+  if (!openBtn) {
+    warn("file-history entry button not found; capturing default lens");
+    await captureFull(page, resolve(MEDIA_DIR, `demo-11-file-history-${theme}.png`));
+    return;
+  }
+  await openBtn.click().catch(() => { /* ignore */ });
+
+  // The prompt focuses its input on open. Type a path that is virtually
+  // certain to exist in any repository being observed (`README.md`).
+  const input = await page.waitForSelector("input[type='text'], input[type='search']", { timeout: 1500 }).catch(() => null);
+  if (!input) {
+    warn("file-history prompt input not found; capturing prompt-less fallback");
+    await captureFull(page, resolve(MEDIA_DIR, `demo-11-file-history-${theme}.png`));
+    return;
+  }
+  await input.fill("README.md");
+  await page.keyboard.press("Enter");
+
+  // Wait for the FileHistoryView to render. There is no stable test id, so
+  // settle on a network-idle pause and a small delay for the related-files
+  // panel to fetch.
+  await page.waitForTimeout(1200);
+  await settle(page);
+  await captureFull(page, resolve(MEDIA_DIR, `demo-11-file-history-${theme}.png`));
 }
 
 async function capturePalette(page, theme) {
@@ -337,6 +431,9 @@ async function main() {
       try { await captureCommitDetail(page, theme); } catch (e) { warn(`scene 06 ${theme}: ${e.message}`); }
       try { await capturePeriodSummary(page, theme); }catch (e) { warn(`scene 07 ${theme}: ${e.message}`); }
       try { await captureCvdTheme(page, theme); }     catch (e) { warn(`scene 08 ${theme}: ${e.message}`); }
+      try { await captureActivityLens(page, theme); } catch (e) { warn(`scene 09 ${theme}: ${e.message}`); }
+      try { await captureStreamLens(page, theme); }   catch (e) { warn(`scene 10 ${theme}: ${e.message}`); }
+      try { await captureFileHistory(page, theme); }  catch (e) { warn(`scene 11 ${theme}: ${e.message}`); }
 
       await ctx.close();
     }

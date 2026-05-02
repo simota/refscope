@@ -62,5 +62,29 @@
     "description": "Switch the status palette to the Wong scheme so red, orange, blue, and yellow stay distinguishable for protan, deutan, and tritan vision. Status text and shapes carry the same meaning in either palette.",
     "alt": "Top bar with the CVD toggle on; sidebar and timeline are rendered in the Wong color-blind safe palette.",
     "lengthSec": 6
+  },
+  {
+    "n": "09",
+    "slug": "activity-lens",
+    "title": "Activity lens, the same repository as a graph",
+    "description": "Switch from `Live` to `Activity`. Each node is a file; recency reads as a ring. Hot spots become visible without ranking. Uncommitted edits appear in the same graph alongside committed changes.",
+    "alt": "Activity lens showing the repository as a force-directed graph of file nodes, sized by recent change frequency, with the lens switcher set to Activity.",
+    "lengthSec": 7
+  },
+  {
+    "n": "10",
+    "slug": "stream-lens",
+    "title": "Stream lens, one row per file change",
+    "description": "Switch to `Stream`. Each row is a single file change — status, path, additions, deletions, and the commit it belongs to — in reverse chronological order. New commits arrive at the top; working-tree edits are interleaved as they happen.",
+    "alt": "Stream lens showing a vertical feed of file changes with status badges, path, and addition/deletion counts, with the lens switcher set to Stream.",
+    "lengthSec": 7
+  },
+  {
+    "n": "11",
+    "slug": "file-history",
+    "title": "File history, with related files alongside",
+    "description": "Right-click any file row, or open the path prompt from the top bar, to see one file's history: a hunk timeline, a branch-drift halo, and a related-files panel that surfaces co-change neighbours from the same commits.",
+    "alt": "File history view for a single path, showing the per-file timeline, branch drift halo, and a related-files (co-change) panel listing co-changing paths.",
+    "lengthSec": 8
   }
 ]
