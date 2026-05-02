@@ -12,11 +12,6 @@ apps/cli/src/static/*
 # Astro web app
 apps/web/.astro/
 apps/web/dist/
-apps/web/public/media/*.png
-apps/web/public/media/*.webp
-apps/web/public/media/*.webm
-apps/web/public/media/*.mp4
-apps/web/public/og-card.png
 
 # Local logs
 *.log
