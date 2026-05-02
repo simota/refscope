@@ -111,6 +111,7 @@ export function DiffViewer({
   const fullscreenToggleRef = useRef<HTMLButtonElement | null>(null);
   const exitFullscreenButtonRef = useRef<HTMLButtonElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
 
   // Reset transient state when the underlying commit changes. Fullscreen is
   // also closed on commit change — opening a new commit while still in
@@ -167,6 +168,44 @@ export function DiffViewer({
     if (!needle) return parsed.files;
     return parsed.files.filter((file) => file.displayPath.toLowerCase().includes(needle));
   }, [parsed.files, query]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      // Skip when the user is typing in an editable element.
+      const target = event.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      )
+        return;
+      // Skip when a modifier is held — avoids conflicting with global shortcuts.
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (filteredFiles.length === 0) return;
+      event.preventDefault();
+      setSelectedIndex((prev) => {
+        const next =
+          event.key === "ArrowDown"
+            ? Math.min(filteredFiles.length - 1, prev + 1)
+            : Math.max(0, prev - 1);
+        if (next !== prev && filteredFiles[next]) selectFile(next);
+        return next;
+      });
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // selectFile reads filteredFiles via closure; re-register when they change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fullscreen, filteredFiles]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    listRef.current
+      ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [fullscreen, selectedIndex]);
 
   if (!diff && !truncated) {
     return (
@@ -309,6 +348,7 @@ export function DiffViewer({
           collapsedKeys={collapsedKeys}
           onKeyDown={handleListKeyDown}
           listStyle={fileListStyle}
+          listRef={listRef}
           onOpenFileHistory={onOpenFileHistory}
           onFilterByPath={onFilterByPath}
         />
@@ -579,6 +619,7 @@ function FileList({
   collapsedKeys,
   onKeyDown,
   listStyle,
+  listRef,
   onOpenFileHistory,
   onFilterByPath,
 }: {
@@ -589,11 +630,13 @@ function FileList({
   collapsedKeys: Set<string>;
   onKeyDown: (event: React.KeyboardEvent<HTMLUListElement>) => void;
   listStyle?: React.CSSProperties;
+  listRef?: React.RefObject<HTMLUListElement | null>;
   onOpenFileHistory?: (path: string) => void;
   onFilterByPath?: (path: string) => void;
 }) {
   return (
     <ul
+      ref={listRef}
       role="listbox"
       aria-label="Changed files"
       tabIndex={0}
