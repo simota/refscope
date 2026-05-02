@@ -1,6 +1,6 @@
 {
   "name": "refscope",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "An observatory for Git refs and history. Local, read-only, allowlist-scoped.",
   "type": "module",
   "license": "MIT",
