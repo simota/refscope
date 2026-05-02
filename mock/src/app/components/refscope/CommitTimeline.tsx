@@ -8,6 +8,7 @@ import {
   GitCompareArrows,
   User,
 } from "lucide-react";
+import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import type { Commit, CompareResult, GitRef } from "./data";
 import type { WorkTreeResponse } from "../../api";
@@ -117,6 +118,13 @@ export function CommitTimeline({
         message: "No commits were returned for the selected ref.",
       };
 
+  const listRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    if (!selected || !listRef.current) return;
+    const el = listRef.current.querySelector<HTMLElement>(`[data-hash="${selected}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
+
   return (
     <main
       className="flex flex-col overflow-hidden"
@@ -158,7 +166,7 @@ export function CommitTimeline({
         {loading ? (
           <StateMessage title="Loading commits" message="Reading allowlisted repository history." />
         ) : commits.length ? (
-          <ul role="list" className="pb-6">
+          <ul role="list" className="pb-6" ref={listRef}>
             {workTree ? (
               <WorkTreeRow
                 workTree={workTree}
@@ -862,6 +870,7 @@ function CommitRow({
       role="listitem"
       aria-current={selected ? "true" : undefined}
       tabIndex={0}
+      data-hash={commit.hash}
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClick(); }}
       className="grid cursor-pointer items-stretch group"

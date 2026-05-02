@@ -898,19 +898,38 @@ export default function App() {
         category: "View",
         run: toggleLiveUpdates,
       },
-      {
-        combo: "j",
-        description: "Next commit",
-        category: "Navigation",
-        run: () => goToAdjacentCommit(1),
-      },
-      {
-        combo: "k",
-        description: "Previous commit",
-        category: "Navigation",
-        run: () => goToAdjacentCommit(-1),
-      },
     ];
+    // Commit navigation is suppressed while the diff overlay owns the keyboard;
+    // otherwise the same ArrowUp/Down used to move between files would also
+    // shift the selected commit, which closes fullscreen on commit change.
+    if (!diffFullscreen) {
+      list.push(
+        {
+          combo: "ArrowDown",
+          description: "Next commit",
+          category: "Navigation",
+          run: () => goToAdjacentCommit(1),
+        },
+        {
+          combo: "ArrowUp",
+          description: "Previous commit",
+          category: "Navigation",
+          run: () => goToAdjacentCommit(-1),
+        },
+        {
+          combo: "j",
+          description: "Next commit",
+          category: "Navigation",
+          run: () => goToAdjacentCommit(1),
+        },
+        {
+          combo: "k",
+          description: "Previous commit",
+          category: "Navigation",
+          run: () => goToAdjacentCommit(-1),
+        },
+      );
+    }
     if (diffFullscreenAvailable) {
       // Only register when a diff is actually visible — keeps the help dialog
       // honest about what's available right now.
@@ -934,6 +953,7 @@ export default function App() {
     toggleSummaryView,
     goToAdjacentCommit,
     diffFullscreenAvailable,
+    diffFullscreen,
   ]);
 
   // Suppress non-global shortcuts whenever a modal-like surface owns the
