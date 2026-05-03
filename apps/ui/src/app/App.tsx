@@ -26,11 +26,15 @@ import { useQuietMode } from "./hooks/useQuietMode";
 import { useLayoutPrefs } from "./hooks/useLayoutPrefs";
 import { useTimelinePrefs } from "./hooks/useTimelinePrefs";
 import { useColorVisionTheme } from "./hooks/useColorVisionTheme";
+import { useLastOpenedRepos } from "./hooks/useLastOpenedRepos";
 import {
   useKeyboardShortcuts,
   type ShortcutBinding,
 } from "./hooks/useKeyboardShortcuts";
 import { ShortcutHelp } from "./components/refscope/ShortcutHelp";
+import { FleetSurface } from "./components/refscope/FleetSurface";
+import { FleetOnboardingOverlay } from "./components/refscope/FleetOnboardingOverlay";
+import { AddRepoDialog } from "./components/refscope/AddRepoDialog";
 import type {
   Commit,
   CommitDetail,
@@ -41,7 +45,9 @@ import type {
 } from "./components/refscope/data";
 import {
   compareRefs,
+  deleteRepo,
   eventsUrl,
+  fetchFleetSnapshot,
   fetchRefDrift,
   fetchWorkTree,
   getCommit,
@@ -53,7 +59,9 @@ import {
   listStashes,
   listSubmodules,
   listWorktrees,
+  postRepo,
   type DiffPayload,
+  type FleetSnapshot,
   type RefDriftEntry,
   type RepoStateResponse,
   type SearchMode,
@@ -126,12 +134,142 @@ function persistRecentFileHistoryPaths(paths: string[]): void {
 }
 
 export default function App() {
+  // Fleet/Detail mode state — 'detail' is the default (preserves existing behavior).
+  // URL sync: ?fleet=1 ↔ mode='fleet' via replaceState (no pushState to avoid history pollution,
+  // per proposal §10.1). Mount reads URL to restore mode.
+  const [mode, setModeState] = useState<"fleet" | "detail">(() => {
+    if (typeof window === "undefined") return "detail";
+    return new URLSearchParams(window.location.search).get("fleet") === "1"
+      ? "fleet"
+      : "detail";
+  });
+
+  const setMode = useCallback((nextMode: "fleet" | "detail") => {
+    setModeState(nextMode);
+    const url = new URL(window.location.href);
+    if (nextMode === "fleet") {
+      url.searchParams.set("fleet", "1");
+    } else {
+      url.searchParams.delete("fleet");
+    }
+    window.history.replaceState(null, "", url.toString());
+  }, []);
+
+  // Fleet snapshot state — null until first poll completes.
+  const [fleetSnapshot, setFleetSnapshot] = useState<FleetSnapshot | null>(null);
+  const [fleetError, setFleetError] = useState<string | null>(null);
+  const fleetAbortRef = useRef<AbortController | null>(null);
+
+  // AddRepoDialog state — Step 7 will wire real API call.
+  const [addRepoDialogOpen, setAddRepoDialogOpen] = useState(false);
+
+  // Read excluded repo ids from localStorage so the server-side include filter
+  // only requests repos the user has not excluded (repo ids only, never paths).
+  const readFleetExcluded = useCallback((): string[] => {
+    try {
+      const raw = window.localStorage.getItem("refscope.fleet.excluded.v1");
+      if (!raw) return [];
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((v): v is string => typeof v === "string" && v.length > 0);
+    } catch {
+      return [];
+    }
+  }, []);
+
+  // Fleet polling: 30s setInterval, starts when mode='fleet', cleans up on mode switch/unmount.
+  useEffect(() => {
+    if (mode !== "fleet") return;
+
+    async function poll() {
+      // Cancel any in-flight request before starting a new one (race prevention).
+      fleetAbortRef.current?.abort();
+      const controller = new AbortController();
+      fleetAbortRef.current = controller;
+
+      const excluded = readFleetExcluded();
+      // We pass all repo ids except excluded ones to the include filter.
+      // If no repos are known yet, omit include= so the API returns all.
+      try {
+        const snapshot = await fetchFleetSnapshot({
+          window: "24h",
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) {
+          // Apply client-side exclude filter (server does not know about it).
+          const filtered: FleetSnapshot = {
+            ...snapshot,
+            repos: snapshot.repos.filter((r) => !excluded.includes(r.repoId)),
+          };
+          setFleetSnapshot(filtered);
+          setFleetError(null);
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") return;
+        if (!controller.signal.aborted) {
+          setFleetError(err instanceof Error ? err.message : String(err));
+        }
+      }
+    }
+
+    void poll();
+    const timer = setInterval(() => { void poll(); }, 30_000);
+
+    return () => {
+      clearInterval(timer);
+      fleetAbortRef.current?.abort();
+      fleetAbortRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  // Hoisted before `handleFleetSelectRepo` to avoid TDZ on `recordLastOpened`.
+  const { lastOpenedRepos, recordLastOpened, evictRepo } = useLastOpenedRepos();
+
+  // Handle Fleet row click: switch to detail mode for the selected repo.
+  const handleFleetSelectRepo = useCallback((id: string) => {
+    recordLastOpened(id);
+    setSelectedRepo(id);
+    setMode("detail");
+  }, [setMode, recordLastOpened]);
+
   // Lens switcher state — 'live' is the default; other lenses are placeholders.
   const [activeLens, setActiveLens] = useState<LensId>('live');
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [refs, setRefs] = useState<GitRef[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [selectedRepo, setSelectedRepo] = useState("");
+
+  // Hoisted after `repositories` / `selectedRepo` declarations to avoid TDZ on setters/values.
+  // Handle AddRepoDialog submit — calls POST /api/repos and updates state optimistically.
+  const handleAddRepo = useCallback(async (input: { id: string; path: string }) => {
+    const result = await postRepo(input);
+    if (result.ok) {
+      setRepositories((prev) => [...prev, result.repository]);
+      return { ok: true as const };
+    }
+    return { ok: false as const, error: result.error };
+  }, []);
+
+  // Handle FleetSurface remove — calls DELETE /api/repos/:id, evicts from last-opened,
+  // and switches away from the deleted repo if it was active.
+  const handleRemoveRepo = useCallback(async (repoId: string) => {
+    const result = await deleteRepo(repoId);
+    if (result.ok) {
+      setRepositories((prev) => prev.filter((r) => r.id !== repoId));
+      evictRepo(repoId);
+      if (selectedRepo === repoId) {
+        setSelectedRepo((prev) => {
+          // Pick the first remaining repo after eviction, or fall back to "".
+          const remaining = repositories.filter((r) => r.id !== repoId);
+          return remaining[0]?.id ?? (prev === repoId ? "" : prev);
+        });
+      }
+      return { ok: true as const };
+    }
+    return { ok: false as const, error: result.error };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evictRepo, selectedRepo, repositories]);
   const [selectedRef, setSelectedRef] = useState("HEAD");
   const [selected, setSelected] = useState("");
   const [detail, setDetail] = useState<CommitDetail | null>(null);
@@ -1066,9 +1204,45 @@ export default function App() {
         onRefreshWorkTree={handleRefreshWorkTree}
         workTreeAvailable={Boolean(selectedRepo)}
         onOpenFileHistory={openFileHistoryPrompt}
+        mode={mode}
+        onSetMode={setMode}
+        onAddRepo={() => setAddRepoDialogOpen(true)}
       />
-      <LensSwitcher activeLens={activeLens} onLensChange={setActiveLens} />
-      {activeLens === 'pulse' && (
+      <LensSwitcher
+        activeLens={activeLens}
+        onLensChange={setActiveLens}
+        hidden={mode === "fleet"}
+      />
+      {/* Fleet mode: FleetSurface + onboarding overlay */}
+      {mode === "fleet" && (
+        <div style={{ position: "relative", flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <FleetOnboardingOverlay isQuiet={isQuiet} />
+          <FleetSurface
+            snapshot={fleetSnapshot}
+            error={fleetError}
+            isCvdSafe={isCvdSafe}
+            isQuiet={isQuiet}
+            onSelectRepo={handleFleetSelectRepo}
+            lastOpenedRepos={lastOpenedRepos}
+            repoOrigins={Object.fromEntries(
+              repositories
+                .filter((r) => r.origin !== undefined)
+                .map((r) => [r.id, r.origin as "env" | "ui"]),
+            )}
+            onRemoveRepo={handleRemoveRepo}
+          />
+        </div>
+      )}
+
+      <AddRepoDialog
+        open={addRepoDialogOpen}
+        onOpenChange={setAddRepoDialogOpen}
+        onSubmit={handleAddRepo}
+      />
+
+      {/* Detail mode: existing lens layout. Hidden (display:none) in Fleet mode so
+          SSE subscriptions, hooks, and resizable-panel refs stay alive. */}
+      {activeLens === 'pulse' && mode === "detail" && (
         <div className="flex-1 overflow-hidden" id="lens-panel-pulse" role="tabpanel" aria-labelledby="lens-tab-pulse">
           <PulseLens
             repoId={selectedRepo || null}
@@ -1080,7 +1254,7 @@ export default function App() {
           />
         </div>
       )}
-      {activeLens === 'stream' && (
+      {activeLens === 'stream' && mode === "detail" && (
         <div className="flex-1 overflow-hidden" id="lens-panel-stream" role="tabpanel" aria-labelledby="lens-tab-stream">
           <FileStreamLens
             repoId={selectedRepo || null}
@@ -1095,7 +1269,7 @@ export default function App() {
       {/* Live lens: render the full existing layout. Hidden (not unmounted) when inactive
           so that SSE subscriptions, hooks, and resizable-panel refs stay alive. */}
       <ResizablePanelGroup
-        style={{ display: activeLens === 'live' ? undefined : 'none' }}
+        style={{ display: (activeLens === 'live' && mode === "detail") ? undefined : 'none' }}
         direction="horizontal"
         className="flex flex-1 overflow-hidden"
         onLayout={(layout) => {
@@ -1285,6 +1459,14 @@ export default function App() {
         onRefreshWorkTree={handleRefreshWorkTree}
         onOpenFileHistory={openFileHistoryPrompt}
         onShowShortcuts={() => setHelpOpen(true)}
+        mode={mode}
+        onSetMode={setMode}
+        repos={repositories.map((r) => r.id)}
+        onSetSelectedRepo={(id) => {
+          recordLastOpened(id);
+          setSelectedRepo(id);
+        }}
+        lastOpenedRepos={lastOpenedRepos}
       />
       <FileHistoryPrompt
         open={fileHistoryPromptOpen}

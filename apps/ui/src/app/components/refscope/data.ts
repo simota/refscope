@@ -41,6 +41,8 @@ export type ChangedFile = {
 export type Repository = {
   id: string;
   name: string;
+  /** "env" = loaded from RTGV_REPOS env var; "ui" = added at runtime via UI. */
+  origin?: "env" | "ui";
 };
 
 export type GitRef = {

@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   Eye,
   RefreshCw,
+  FolderPlus,
 } from "lucide-react";
 import {
   Tooltip,
@@ -58,6 +59,9 @@ export function TopBar({
   onRefreshWorkTree,
   workTreeAvailable,
   onOpenFileHistory,
+  mode,
+  onSetMode,
+  onAddRepo,
 }: {
   repositories: Repository[];
   selectedRepo: string;
@@ -98,6 +102,12 @@ export function TopBar({
   // prompt owned by App.tsx. The button sits next to the path filter input
   // so the cluster reads as "find by path → see history of that path".
   onOpenFileHistory: () => void;
+  /** Current view mode. Controls which segmented-control button is active. */
+  mode: "fleet" | "detail";
+  /** Callback to switch view mode. */
+  onSetMode: (mode: "fleet" | "detail") => void;
+  /** Opens the Add repository dialog. Visible only in Fleet mode. */
+  onAddRepo: () => void;
 }) {
   // In quiet mode, route the live indicator color to the muted token so chroma drops
   // without sacrificing the WCAG-validated text-on-panel contrast pairing.
@@ -143,6 +153,47 @@ export function TopBar({
           RefScope
         </span>
       </div>
+
+      {/* Mode segmented control — inserted between logo and Repo select.
+          Tooltip wording is Quill v1.2 mandatory (§6.8):
+            en: "Fleet: your repos, one user, one machine"
+            ja: "Fleet：あなたのリポジトリ専用、1 人・1 台" (JSDoc only; en default for v1 per §6.9 language note) */}
+      <ModeSegmentedControl
+        mode={mode}
+        selectedRepoId={selectedRepo}
+        onSetMode={onSetMode}
+      />
+
+      {/* Add repository button — visible only in Fleet mode (charter v2 §3 解禁済) */}
+      {mode === "fleet" && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="rs-compact-button"
+              onClick={onAddRepo}
+              aria-label="Add repository to fleet"
+              style={{ display: "flex", alignItems: "center", gap: 4 }}
+            >
+              <FolderPlus size={11} aria-hidden />
+              <span>Add repository</span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent
+            side="bottom"
+            style={{
+              background: "var(--rs-bg-elevated)",
+              color: "var(--rs-text-primary)",
+              border: "1px solid var(--rs-border)",
+              fontSize: 11,
+              fontFamily: "var(--rs-mono)",
+              zIndex: "var(--rs-z-overlay)",
+            }}
+          >
+            Add a repository to your fleet
+          </TooltipContent>
+        </Tooltip>
+      )}
 
       <Separator />
 
@@ -505,6 +556,113 @@ function LivePulse({
 function Separator() {
   return (
     <div style={{ width: 1, height: 20, background: "var(--rs-border)" }} aria-hidden />
+  );
+}
+
+/**
+ * Two-button segmented control for Fleet / Detail mode toggle.
+ *
+ * Tooltip wording (Quill v1.2 §6.8, mandatory — do not paraphrase):
+ *   en: "Fleet: your repos, one user, one machine"
+ *   ja: "Fleet：あなたのリポジトリ専用、1 人・1 台"
+ *
+ * Single-language MVP (en default) per proposal §6.9 language note.
+ * Japanese string is stored here as JSDoc reference for future i18n.
+ */
+function ModeSegmentedControl({
+  mode,
+  selectedRepoId,
+  onSetMode,
+}: {
+  mode: "fleet" | "detail";
+  selectedRepoId: string;
+  onSetMode: (mode: "fleet" | "detail") => void;
+}) {
+  // Truncate repo ID to 12 chars max for the Detail label.
+  const repoLabel = selectedRepoId
+    ? selectedRepoId.length > 12
+      ? selectedRepoId.slice(0, 12)
+      : selectedRepoId
+    : "—";
+
+  const activeStyle = {
+    color: "var(--rs-accent)",
+    borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
+    background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 15%)",
+    fontWeight: 600,
+  };
+  const inactiveStyle = {
+    color: "var(--rs-text-secondary)",
+    borderColor: "transparent",
+    background: "transparent",
+    fontWeight: 400,
+  };
+
+  return (
+    <div
+      role="group"
+      aria-label="View mode"
+      className="flex items-center"
+      style={{
+        height: 26,
+        border: "1px solid var(--rs-border)",
+        borderRadius: "var(--rs-radius-sm)",
+        overflow: "hidden",
+        background: "var(--rs-bg-canvas)",
+        flexShrink: 0,
+      }}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-pressed={mode === "fleet"}
+            aria-label="Switch to Fleet mode"
+            onClick={() => onSetMode("fleet")}
+            style={{
+              height: 26,
+              padding: "0 10px",
+              fontSize: 12,
+              cursor: "pointer",
+              borderRight: "1px solid var(--rs-border)",
+              transition: "background 80ms ease-out, color 80ms ease-out",
+              ...(mode === "fleet" ? activeStyle : inactiveStyle),
+            }}
+          >
+            Fleet
+          </button>
+        </TooltipTrigger>
+        <TooltipContent
+          side="bottom"
+          style={{
+            background: "var(--rs-bg-elevated)",
+            color: "var(--rs-text-primary)",
+            border: "1px solid var(--rs-border)",
+            fontSize: 11,
+            fontFamily: "var(--rs-mono)",
+            zIndex: "var(--rs-z-overlay)",
+          }}
+        >
+          Fleet: your repos, one user, one machine
+        </TooltipContent>
+      </Tooltip>
+      <button
+        type="button"
+        aria-pressed={mode === "detail"}
+        aria-label="Switch to Detail mode"
+        onClick={() => onSetMode("detail")}
+        style={{
+          height: 26,
+          padding: "0 10px",
+          fontSize: 12,
+          cursor: "pointer",
+          transition: "background 80ms ease-out, color 80ms ease-out",
+          ...(mode === "detail" ? activeStyle : inactiveStyle),
+        }}
+      >
+        Detail · {repoLabel}
+      </button>
+    </div>
   );
 }
 

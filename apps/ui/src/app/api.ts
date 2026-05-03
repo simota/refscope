@@ -10,6 +10,56 @@ import type {
 export const API_BASE_URL = import.meta.env.VITE_RTGV_API_BASE_URL ?? "http://127.0.0.1:4175";
 const API_RECOVERY_COMMAND = "make dev-self";
 
+// ---------------------------------------------------------------------------
+// Repo management — POST /api/repos + DELETE /api/repos/:id
+// ---------------------------------------------------------------------------
+
+/**
+ * Add a repository to the fleet at runtime.
+ *
+ * Returns a Result-pattern value so callers can surface inline errors without
+ * throwing. HTTP 400/403/409 → `{ ok: false, error }` with the server literal.
+ */
+export async function postRepo(
+  input: { id: string; path: string },
+): Promise<{ ok: true; repository: Repository } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/repos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (res.status === 200) {
+      const body = (await res.json()) as { repository: Repository };
+      return { ok: true, repository: body.repository };
+    }
+    const errorBody = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
+    return { ok: false, error: errorBody.error ?? `HTTP ${res.status}` };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Remove a runtime-added repository from the fleet.
+ *
+ * 204 → `{ ok: true }`. HTTP 400/403/404 → `{ ok: false, error }` passthrough.
+ */
+export async function deleteRepo(
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/repos/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (res.status === 204) return { ok: true };
+    const errorBody = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
+    return { ok: false, error: errorBody.error ?? `HTTP ${res.status}` };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 type CommitResponse = {
   hash: string;
   shortHash?: string;
@@ -422,6 +472,74 @@ export async function fetchCommitsSummary(
   return getJson<CommitsSummary>(
     `/api/repos/${encodeURIComponent(repoId)}/commits/summary?${search}`,
     signal,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Fleet snapshot fetch
+// ---------------------------------------------------------------------------
+
+/**
+ * One repo entry in a fleet snapshot.
+ * Type transcribed from apps/api/schemas/fleet-response.schema.json (version=1).
+ * No new dependency; shape is manually kept in sync with the schema.
+ */
+export type FleetRepoEntry = {
+  repoId: string;
+  headShortSha: string | null;
+  commits24h: number | null;
+  refMove1h: boolean | null;
+  worktreeDirty: boolean | null;
+  lastEventAt: string | null;
+  status: "ok" | "timeout" | "git_error" | "missing" | "unauthorized";
+};
+
+export type FleetSnapshot = {
+  version: 1;
+  snapshotAt: string;
+  window: "1h" | "6h" | "24h" | "7d";
+  repos: FleetRepoEntry[];
+  estimatedCost: {
+    subscribedRepoCount: number;
+    snapshotIntervalMs: number;
+    gitCallsPerMin: number;
+  };
+  notes: {
+    untrackedExcluded: boolean;
+    sseAvailable: boolean;
+  };
+};
+
+/**
+ * Fetch a fleet snapshot from GET /api/fleet/snapshot.
+ *
+ * AbortController support: pass `signal` to cancel an in-flight request when
+ * a new poll cycle starts before the previous response has arrived, preventing
+ * race conditions.
+ *
+ * Error handling: HTTP error or network failure throws a typed Error. The
+ * caller (App.tsx polling loop) catches and maps to the `fleetError` state.
+ *
+ * @param params.include - Repo ids to include (excluded list already removed by caller).
+ * @param params.window  - Observation window (default "24h").
+ * @param params.signal  - AbortSignal for in-flight cancellation.
+ */
+export async function fetchFleetSnapshot(params: {
+  include?: string[];
+  window?: "1h" | "6h" | "24h" | "7d";
+  signal?: AbortSignal;
+}): Promise<FleetSnapshot> {
+  const search = new URLSearchParams();
+  if (params.include && params.include.length > 0) {
+    search.set("include", params.include.join(","));
+  }
+  if (params.window) {
+    search.set("window", params.window);
+  }
+  const suffix = search.toString();
+  return getJson<FleetSnapshot>(
+    `/api/fleet/snapshot${suffix ? `?${suffix}` : ""}`,
+    params.signal,
   );
 }
 

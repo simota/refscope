@@ -3,10 +3,12 @@ import {
   CalendarRange,
   Eye,
   FileSearch,
+  FolderOpen,
   GitBranch,
   Hash,
   History,
   Keyboard,
+  Layers,
   Maximize2,
   Moon,
   PanelLeftClose,
@@ -19,6 +21,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { SearchMode } from "../../api";
 import type { Commit, GitRef } from "./data";
+import type { LastOpenedEntry } from "../../hooks/useLastOpenedRepos";
 
 type PaletteCommand = {
   icon: LucideIcon;
@@ -61,6 +64,11 @@ export function CommandPalette({
   onRefreshWorkTree,
   onOpenFileHistory,
   onShowShortcuts,
+  mode,
+  onSetMode,
+  repos,
+  onSetSelectedRepo,
+  lastOpenedRepos,
 }: {
   open: boolean;
   onClose: () => void;
@@ -103,6 +111,16 @@ export function CommandPalette({
   // Opens the keyboard-shortcut help dialog. Surfaced here so users who reach
   // for the palette can still find the shortcut list without knowing the `?` key.
   onShowShortcuts: () => void;
+  /** Current view mode — used to show context-sensitive mode-switch commands. */
+  mode: "fleet" | "detail";
+  /** Callback to switch view mode. */
+  onSetMode: (mode: "fleet" | "detail") => void;
+  /** All repo ids from RTGV_REPOS — used to build jump-to-repo commands. */
+  repos: string[];
+  /** Callback to switch the active repo in Detail mode. */
+  onSetSelectedRepo: (id: string) => void;
+  /** Last opened entries (newest first) — used to sort jump commands. */
+  lastOpenedRepos: LastOpenedEntry[];
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -304,8 +322,58 @@ export function CommandPalette({
         : []),
     ];
 
+    // Jump-to-repo commands (Magi D4 O2).
+    // One command per repo in RTGV_REPOS. Sorted by most recently opened first;
+    // repos with no recorded open appear at the end in original declaration order.
+    const openedIdsSorted = lastOpenedRepos.map((e) => e.repoId);
+    const openedSet = new Set(openedIdsSorted);
+    const reposSorted = [
+      ...openedIdsSorted.filter((id) => repos.includes(id)),
+      ...repos.filter((id) => !openedSet.has(id)),
+    ];
+    const repoJumpCommands: PaletteCommand[] = reposSorted.map((repoId) => ({
+      icon: FolderOpen,
+      label: `Detail: ${repoId} を開く`,
+      hint: `Open ${repoId} in Detail mode`,
+      run: () => {
+        onSetMode("detail");
+        onSetSelectedRepo(repoId);
+        onClose();
+      },
+    }));
+
+    // Mode-switch commands (Magi D1 採択前提条件 #3).
+    // "Fleet モードに切替" is always available; "Detail モードに切替" only appears in Fleet mode.
+    const modeCommands: PaletteCommand[] = [
+      {
+        icon: Layers,
+        label: "Fleet モードに切替",
+        // Tooltip supplement per Magi D1 採択前提条件 #3: "(複数 repo 観測 mode)"
+        hint: "複数 repo 観測 mode",
+        run: () => {
+          onSetMode("fleet");
+          onClose();
+        },
+      },
+      ...(mode === "fleet"
+        ? [
+            {
+              icon: Layers,
+              label: "Detail モードに切替",
+              hint: "1 repo 詳細",
+              run: () => {
+                onSetMode("detail");
+                onClose();
+              },
+            } satisfies PaletteCommand,
+          ]
+        : []),
+    ];
+
     return [
       ...refCommands,
+      ...repoJumpCommands,
+      ...modeCommands,
       sidebarCommand,
       summaryCommand,
       quietCommand,
@@ -324,7 +392,9 @@ export function CommandPalette({
     diffFullscreen,
     isCvdSafe,
     isQuiet,
+    lastOpenedRepos,
     livePaused,
+    mode,
     onAuthorChange,
     onClose,
     onOpenFileHistory,
@@ -332,6 +402,8 @@ export function CommandPalette({
     onSearchChange,
     onSearchPatternChange,
     onSelectRef,
+    onSetMode,
+    onSetSelectedRepo,
     onToggleColorVision,
     onToggleDiffFullscreen,
     onToggleLiveUpdates,
@@ -344,6 +416,7 @@ export function CommandPalette({
     path,
     quietMode,
     refs,
+    repos,
     search,
     searchMode,
     searchPattern,

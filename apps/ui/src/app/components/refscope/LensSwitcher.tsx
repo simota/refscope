@@ -9,10 +9,14 @@ const LENSES: Array<{ id: LensId; label: string; labelJa: string }> = [
 export function LensSwitcher({
   activeLens,
   onLensChange,
+  hidden,
 }: {
   activeLens: LensId;
   onLensChange: (lens: LensId) => void;
+  /** When true, the switcher is not rendered (Fleet mode hides it). */
+  hidden?: boolean;
 }) {
+  if (hidden) return null;
   return (
     <div
       role="tablist"
