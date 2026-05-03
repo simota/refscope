@@ -517,6 +517,20 @@ function WorkTreePanel({
         >
           Untracked files are not shown in this view.
         </div>
+      ) : (workTree.untracked?.summary.fileCount ?? 0) > 0 ? (
+        <div
+          className="px-4 py-2"
+          style={{
+            borderTop: "1px solid var(--rs-border)",
+            background: "var(--rs-bg-panel)",
+            fontSize: 11,
+            color: "var(--rs-text-muted)",
+            fontFamily: "var(--rs-mono)",
+          }}
+        >
+          {workTree.untracked!.summary.fileCount} untracked file
+          {workTree.untracked!.summary.fileCount === 1 ? "" : "s"} (visible in Pulse / Stream).
+        </div>
       ) : null}
     </PanelShell>
   );

@@ -13,7 +13,7 @@ export type WorkTreeFile = {
   status: string;
   added: number;
   deleted: number;
-  section: 'staged' | 'unstaged';
+  section: 'staged' | 'unstaged' | 'untracked';
 };
 
 function lineCounts(file: DiffFile): { added: number; deleted: number } {
@@ -76,5 +76,25 @@ export function extractWorkTreeFiles(
       });
     }
   }
+
+  // Untracked files are not in the diff text — the API surfaces them as a
+  // separate `{ files: [...] }` list. They join the same return shape so
+  // downstream consumers (Pulse particles, Stream rows, sidebar counts)
+  // need no special-casing beyond reading `section === 'untracked'`.
+  if (workTree.untracked) {
+    for (const file of workTree.untracked.files) {
+      const idx = file.path.lastIndexOf('/');
+      out.push({
+        path: file.path,
+        basename: idx === -1 ? file.path : file.path.slice(idx + 1),
+        parentDir: idx === -1 ? '' : file.path.slice(0, idx),
+        status: file.status,
+        added: file.added,
+        deleted: 0,
+        section: 'untracked',
+      });
+    }
+  }
+
   return out;
 }

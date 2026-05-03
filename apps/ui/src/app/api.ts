@@ -324,9 +324,9 @@ export async function fetchRelatedFiles(
  * `git diff --cached` output; the UI feeds each side's `diff` straight into
  * `parseUnifiedDiff` (same parser used for committed diffs and file history).
  *
- * `notes.untrackedExcluded` is a boundary marker: refscope's gitRunner
- * allowlist does not include `status` or `ls-files`, so this view only
- * observes tracked changes. The UI renders that fact as an in-panel notice.
+ * `notes.untrackedExcluded` records whether the API surfaced untracked
+ * files. It is `false` when an `untracked` section is present and `true`
+ * only on builds that haven't yet enabled the `ls-files`-backed listing.
  */
 export type WorkTreeSection = {
   diff: string;
@@ -334,9 +334,22 @@ export type WorkTreeSection = {
   truncated: boolean;
 };
 
+export type WorkTreeUntrackedFile = {
+  path: string;
+  status: "A";
+  added: number;
+  deleted: 0;
+};
+
+export type WorkTreeUntrackedSection = {
+  files: WorkTreeUntrackedFile[];
+  summary: { fileCount: number; added: number; deleted: 0 };
+};
+
 export type WorkTreeResponse = {
   staged: WorkTreeSection;
   unstaged: WorkTreeSection;
+  untracked?: WorkTreeUntrackedSection;
   snapshotAt: string;
   notes: { untrackedExcluded: boolean };
 };

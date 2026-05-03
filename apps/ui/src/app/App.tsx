@@ -708,7 +708,8 @@ export default function App() {
   const workTreeHasChanges = Boolean(
     workTree &&
       (workTree.staged.summary.fileCount > 0 ||
-        workTree.unstaged.summary.fileCount > 0),
+        workTree.unstaged.summary.fileCount > 0 ||
+        (workTree.untracked?.summary.fileCount ?? 0) > 0),
   );
 
   // Drilldown intentionally routes group keys back through the existing search /
