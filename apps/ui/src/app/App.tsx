@@ -236,20 +236,13 @@ export default function App() {
       handle.expand();
     }
   }, [sidebarCollapsed]);
-  const isQuietRef = useRef(isQuiet);
-  const quietPendingCountRef = useRef(0);
-  const previousIsQuietRef = useRef(isQuiet);
-  // `effectivePaused` unions the manual pause and the quiet-mode auto pause; the SSE handler
-  // only needs to know "are updates frozen?", but the UI keeps both sources visible separately.
-  const effectivePaused = livePaused || isQuiet;
+  // Quiet mode controls motion only; SSE application must not gate on isQuiet,
+  // or OS prefers-reduced-motion silently freezes ref/commit updates.
+  const effectivePaused = livePaused;
 
   useEffect(() => {
     livePausedRef.current = livePaused;
   }, [livePaused]);
-
-  useEffect(() => {
-    isQuietRef.current = isQuiet;
-  }, [isQuiet]);
 
   useEffect(() => {
     selectedRefRef.current = selectedRef;
@@ -782,16 +775,11 @@ export default function App() {
   }
 
   function handleRealtimeEvent(notice: string, applyEvent: () => void) {
-    if (livePausedRef.current || isQuietRef.current) {
+    if (livePausedRef.current) {
       pendingRealtimeEventsRef.current.push(applyEvent);
-      if (isQuietRef.current && !livePausedRef.current) {
-        quietPendingCountRef.current += 1;
-      }
       setPendingUpdates((count) => {
         const nextCount = count + 1;
-        if (livePausedRef.current) {
-          setLiveAnnouncement(`Live updates paused. ${nextCount} updates pending.`);
-        }
+        setLiveAnnouncement(`Live updates paused. ${nextCount} updates pending.`);
         return nextCount;
       });
       return;
@@ -837,34 +825,10 @@ export default function App() {
     }
     setLivePaused(false);
     setLiveAnnouncement("Live updates resumed.");
-    // Stay paused if quiet mode is still asking us to be silent; the events will flush on quiet exit.
-    if (!isQuietRef.current && pendingUpdates > 0) {
+    if (pendingUpdates > 0) {
       flushPendingRealtimeEvents();
     }
   }
-
-  useEffect(() => {
-    const wasQuiet = previousIsQuietRef.current;
-    previousIsQuietRef.current = isQuiet;
-    if (!wasQuiet || isQuiet) return;
-    const missedDuringQuiet = quietPendingCountRef.current;
-    quietPendingCountRef.current = 0;
-    if (livePausedRef.current) {
-      // Manual pause is still on; do not flush, just announce.
-      if (missedDuringQuiet > 0) {
-        setLiveAnnouncement(
-          `Resumed live updates. ${missedDuringQuiet} events were observed while quiet.`,
-        );
-      }
-      return;
-    }
-    flushPendingRealtimeEvents();
-    if (missedDuringQuiet > 0) {
-      setLiveAnnouncement(
-        `Resumed live updates. ${missedDuringQuiet} events were observed while quiet.`,
-      );
-    }
-  }, [isQuiet, flushPendingRealtimeEvents]);
 
   // Diff fullscreen only makes sense when there's actually a diff rendered.
   // Mirrors the gating used in CommandPalette so the shortcut behaves identically
@@ -1033,7 +997,6 @@ export default function App() {
           setPendingUpdates(0);
           setLiveAnnouncement("");
           pendingRealtimeEventsRef.current = [];
-          quietPendingCountRef.current = 0;
           setRealtimeAlerts([]);
           setCompareBase("");
           setCompareTarget("");
