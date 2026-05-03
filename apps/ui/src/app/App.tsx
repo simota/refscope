@@ -7,7 +7,7 @@ import { DetailPanel } from "./components/refscope/DetailPanel";
 import { CommandPalette } from "./components/refscope/CommandPalette";
 import { FileHistoryView } from "./components/refscope/FileHistoryView";
 import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
-import { ActivityLens } from "./components/refscope/ActivityLens";
+import { PulseLens } from "./components/refscope/PulseLens";
 import { FileStreamLens } from "./components/refscope/FileStreamLens";
 import {
   FileHistoryPrompt,
@@ -1091,9 +1091,9 @@ export default function App() {
         onOpenFileHistory={openFileHistoryPrompt}
       />
       <LensSwitcher activeLens={activeLens} onLensChange={setActiveLens} />
-      {activeLens === 'activity' && (
-        <div className="flex-1 overflow-hidden" id="lens-panel-activity" role="tabpanel" aria-labelledby="lens-tab-activity">
-          <ActivityLens
+      {activeLens === 'pulse' && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-pulse" role="tabpanel" aria-labelledby="lens-tab-pulse">
+          <PulseLens
             repoId={selectedRepo || null}
             commits={commits}
             selectedCommitHash={selected || null}
