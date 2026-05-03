@@ -343,6 +343,13 @@ export type WorkTreeUntrackedFile = {
 
 export type WorkTreeUntrackedSection = {
   files: WorkTreeUntrackedFile[];
+  /**
+   * Synthesized unified diff covering every untracked path. The API stitches
+   * `--- /dev/null / +++ b/<path>` headers + the file content (or a
+   * `Binary files … differ` marker) so the UI can render untracked changes
+   * with the same DiffViewer used for staged/unstaged sides.
+   */
+  diff: string;
   summary: { fileCount: number; added: number; deleted: 0 };
 };
 

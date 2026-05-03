@@ -344,6 +344,75 @@ test("getWorkTreeChanges reports added: 0 for binary untracked files", async () 
   }
 });
 
+test("getWorkTreeChanges synthesizes a unified diff for untracked text files", async () => {
+  const repoPath = createTempPath("rtgv-worktree-untracked-diff-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
+    fs.writeFileSync(path.join(repoPath, "hello.txt"), "alpha\nbeta\n");
+    fs.writeFileSync(path.join(repoPath, "no-newline.txt"), "tail");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+
+    const result = await service.getWorkTreeChanges({
+      id: "demo",
+      name: "demo",
+      path: repoPath,
+    });
+
+    assert.equal(result.status, 200);
+    const diff = result.body.untracked.diff;
+    // Each file gets `diff --git` + `new file mode` + `--- /dev/null` + body.
+    // We assert the literal pieces so a parser regression in the UI's
+    // parseUnifiedDiff would still pass a smoke test against this output.
+    assert.ok(diff.includes("diff --git a/hello.txt b/hello.txt"));
+    assert.ok(diff.includes("new file mode 100644"));
+    assert.ok(diff.includes("--- /dev/null"));
+    assert.ok(diff.includes("+++ b/hello.txt"));
+    assert.ok(diff.includes("@@ -0,0 +1,2 @@"));
+    assert.ok(diff.includes("+alpha"));
+    assert.ok(diff.includes("+beta"));
+    // Files without a trailing newline must surface Git's conventional marker
+    // so parseUnifiedDiff matches the standard hunk shape.
+    assert.ok(diff.includes("+++ b/no-newline.txt"));
+    assert.ok(diff.includes("+tail"));
+    assert.ok(diff.includes("\\ No newline at end of file"));
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getWorkTreeChanges emits binary marker for binary untracked files in diff", async () => {
+  const repoPath = createTempPath("rtgv-worktree-untracked-binary-diff-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
+    fs.writeFileSync(path.join(repoPath, "blob.bin"), Buffer.from([0x00, 0x01, 0x02, 0x00]));
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+
+    const result = await service.getWorkTreeChanges({
+      id: "demo",
+      name: "demo",
+      path: repoPath,
+    });
+
+    const diff = result.body.untracked.diff;
+    assert.ok(diff.includes("diff --git a/blob.bin b/blob.bin"));
+    assert.ok(diff.includes("Binary files /dev/null and b/blob.bin differ"));
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 function git(cwd, ...args) {
   const result = spawnSync("git", args, {
     cwd,

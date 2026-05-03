@@ -508,7 +508,19 @@ function WorkTreePanel({
         {effectiveTab === "untracked" ? (
           untrackedFiles === 0 ? (
             <Empty>No untracked files.</Empty>
+          ) : workTree.untracked!.diff ? (
+            <DiffViewer
+              diff={workTree.untracked!.diff}
+              truncated={false}
+              maxBytes={0}
+              commitHash={`worktree:untracked`}
+              onOpenFileHistory={onOpenFileHistory}
+              onFilterByPath={onFilterByPath}
+            />
           ) : (
+            // Defensive: a non-empty file list with an empty synthetic diff
+            // shouldn't happen (the API always emits at least the `diff --git`
+            // headers), but fall back to the path-only list if it does.
             <UntrackedFileList
               files={workTree.untracked!.files}
               onFilterByPath={onFilterByPath}
@@ -532,9 +544,12 @@ function WorkTreePanel({
               truncated={section.truncated}
               maxBytes={0}
               // Sentinel `commitHash`: the viewer uses this prop as a reset
-              // key. Encoding the side keeps fullscreen / filter state from
-              // bleeding across tabs and across snapshots.
-              commitHash={`worktree:${effectiveTab}:${workTree.snapshotAt}`}
+              // key. Tab is encoded so switching tabs resets fullscreen /
+              // collapse / query state. snapshotAt is intentionally NOT in
+              // the sentinel — the worktree polls every few seconds, and
+              // including it would dismiss fullscreen and re-collapse files
+              // on every tick.
+              commitHash={`worktree:${effectiveTab}`}
               onOpenFileHistory={onOpenFileHistory}
               onFilterByPath={onFilterByPath}
             />

@@ -699,8 +699,8 @@ export function createGitService(config) {
           }),
         ]);
 
-      const untrackedFiles = describeUntrackedFiles(repo.path, untrackedRaw.stdout);
-      const untrackedAdded = untrackedFiles.reduce((sum, file) => sum + file.added, 0);
+      const untracked = describeUntrackedFiles(repo.path, untrackedRaw.stdout);
+      const untrackedAdded = untracked.files.reduce((sum, file) => sum + file.added, 0);
 
       return {
         status: 200,
@@ -722,9 +722,16 @@ export function createGitService(config) {
             truncated: false,
           },
           untracked: {
-            files: untrackedFiles,
+            files: untracked.files,
+            // Synthesized unified diff: `git diff` won't see untracked paths,
+            // and `--no-index` is rejected by the runner allowlist. We read
+            // each file (capped by UNTRACKED_READ_BYTE_CAP, NUL-byte
+            // heuristic for binary) and stitch a `--- /dev/null / +++ b/path`
+            // patch so the UI's existing DiffViewer can render the new-file
+            // contents alongside staged/unstaged tabs.
+            diff: untracked.diff,
             summary: {
-              fileCount: untrackedFiles.length,
+              fileCount: untracked.files.length,
               added: untrackedAdded,
               deleted: 0,
             },
@@ -1057,55 +1064,83 @@ export function workTreeUntrackedArgs() {
 const UNTRACKED_READ_BYTE_CAP = 1_048_576;
 
 /**
- * Resolve untracked file paths to `{ path, status, added, deleted }` records.
- * `added` is the number of newlines in the file (treating final-newline as
- * the line terminator, matching how `git diff --numstat` counts new files).
+ * Resolve the untracked listing (NUL-separated stdout) into:
+ *   - `files`: `[{ path, status: "A", added, deleted: 0 }]` records (line
+ *     count matches `git diff --numstat` for new files).
+ *   - `diff`: a synthesized unified-diff payload covering every untracked
+ *     path so the UI can render their contents in the same DiffViewer used
+ *     for staged/unstaged sides. `--no-index` is rejected by the runner
+ *     allowlist, so we cannot ask Git to produce this; we stitch it from
+ *     direct file reads instead.
+ *
  * Files that fail to read, exceed `UNTRACKED_READ_BYTE_CAP`, or contain a
- * NUL byte (binary heuristic) report `added: 0` rather than crashing the
- * whole response.
+ * NUL byte (binary heuristic) report `added: 0` and emit a `Binary files …
+ * differ` marker in place of a hunk — same shape Git would produce.
  */
 function describeUntrackedFiles(repoPath, stdout) {
-  if (!stdout) return [];
-  const out = [];
+  if (!stdout) return { files: [], diff: "" };
+  const files = [];
+  let diff = "";
   for (const rel of stdout.split("\u0000")) {
     if (!rel) continue;
-    out.push({
-      path: rel,
-      status: "A",
-      added: countAddedLines(repoPath, rel),
-      deleted: 0,
-    });
+    const { added, patch } = readUntrackedEntry(repoPath, rel);
+    files.push({ path: rel, status: "A", added, deleted: 0 });
+    diff += patch;
   }
-  return out;
+  return { files, diff };
 }
 
-function countAddedLines(repoPath, relPath) {
+function readUntrackedEntry(repoPath, relPath) {
   const fullPath = path.join(repoPath, relPath);
+  const headers = `diff --git a/${relPath} b/${relPath}\nnew file mode 100644\n`;
+  const headersOnly = `${headers}--- /dev/null\n+++ b/${relPath}\n`;
+  const binaryPatch = `${headersOnly}Binary files /dev/null and b/${relPath} differ\n`;
+
   let stat;
   try {
     stat = fs.statSync(fullPath);
   } catch {
-    return 0;
+    return { added: 0, patch: binaryPatch };
   }
-  if (!stat.isFile() || stat.size === 0 || stat.size > UNTRACKED_READ_BYTE_CAP) {
-    return 0;
+  if (!stat.isFile()) {
+    // Symlinks, sockets, etc. — surface the headers so the file still
+    // appears in the listing, but emit no hunk.
+    return { added: 0, patch: headersOnly };
+  }
+  if (stat.size === 0) {
+    return { added: 0, patch: headersOnly };
+  }
+  if (stat.size > UNTRACKED_READ_BYTE_CAP) {
+    return { added: 0, patch: binaryPatch };
   }
   let buf;
   try {
     buf = fs.readFileSync(fullPath);
   } catch {
-    return 0;
+    return { added: 0, patch: binaryPatch };
   }
   // Cheap binary heuristic: bail if the file contains a NUL byte. Avoids
   // spending a line count on lockfile blobs, images that slipped through, etc.
-  if (buf.includes(0)) return 0;
-  let count = 0;
-  for (let i = 0; i < buf.length; i += 1) {
-    if (buf[i] === 0x0a) count += 1;
+  if (buf.includes(0)) {
+    return { added: 0, patch: binaryPatch };
   }
-  // Files without a trailing newline still represent one logical line.
-  if (buf[buf.length - 1] !== 0x0a) count += 1;
-  return count;
+  // Text path. Count lines and stitch the `+`-prefixed body in one pass.
+  const text = buf.toString("utf8");
+  const endsWithNewline = text.endsWith("\n");
+  const body = endsWithNewline ? text.slice(0, -1) : text;
+  const lines = body.length === 0 ? [] : body.split("\n");
+  const added = lines.length;
+  if (added === 0) {
+    return { added: 0, patch: headersOnly };
+  }
+  let hunk = `--- /dev/null\n+++ b/${relPath}\n@@ -0,0 +1,${added} @@\n`;
+  for (const line of lines) {
+    hunk += `+${line}\n`;
+  }
+  if (!endsWithNewline) {
+    hunk += "\\ No newline at end of file\n";
+  }
+  return { added, patch: headers + hunk };
 }
 
 export function compareRefSnapshots(previousSnapshot, currentSnapshot) {

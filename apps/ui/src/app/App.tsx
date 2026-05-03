@@ -484,7 +484,9 @@ export default function App() {
     fetchWorkTree(repoId, controller.signal)
       .then((response) => {
         if (controller.signal.aborted) return;
-        setWorkTree(response);
+        setWorkTree((prev) =>
+          prev && isWorkTreeContentEqual(prev, response) ? prev : response,
+        );
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
@@ -1310,6 +1312,30 @@ export default function App() {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected error";
+}
+
+/**
+ * Compare two worktree responses for content equivalence (ignores `snapshotAt`).
+ * Used to suppress redundant `setWorkTree` calls during the 2.5s polling loop:
+ * without this, every tick produces a new object reference even when nothing
+ * changed, which re-parses the diff inside `DiffViewer` and resets transient
+ * state (collapse, search query, fullscreen).
+ */
+function isWorkTreeContentEqual(
+  prev: WorkTreeResponse,
+  next: WorkTreeResponse,
+): boolean {
+  if (prev.staged.diff !== next.staged.diff) return false;
+  if (prev.unstaged.diff !== next.unstaged.diff) return false;
+  if (prev.notes.untrackedExcluded !== next.notes.untrackedExcluded) return false;
+  const prevUntracked = prev.untracked?.files ?? [];
+  const nextUntracked = next.untracked?.files ?? [];
+  if (prevUntracked.length !== nextUntracked.length) return false;
+  for (let i = 0; i < prevUntracked.length; i += 1) {
+    if (prevUntracked[i].path !== nextUntracked[i].path) return false;
+    if (prevUntracked[i].added !== nextUntracked[i].added) return false;
+  }
+  return true;
 }
 
 function activeFilters(
