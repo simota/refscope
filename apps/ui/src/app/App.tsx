@@ -519,8 +519,19 @@ export default function App() {
     refreshWorkTree(selectedRepo);
     const onFocus = () => scheduleWorkTreeRefresh(selectedRepo);
     window.addEventListener("focus", onFocus);
+    // Working-tree changes (notably new untracked files) don't surface as
+    // ref-snapshot SSE events, so without polling the Live view only updates
+    // on focus or manual refresh. A 2.5s tick is loose enough to absorb the
+    // 5-call cost of the worktree endpoint while keeping "Live" actually live.
+    // Skip when the tab is hidden or live updates are paused.
+    const poll = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (livePausedRef.current) return;
+      refreshWorkTree(selectedRepo);
+    }, 2500);
     return () => {
       window.removeEventListener("focus", onFocus);
+      window.clearInterval(poll);
       workTreeAbortRef.current?.abort();
       if (workTreeDebounceRef.current) {
         clearTimeout(workTreeDebounceRef.current);
