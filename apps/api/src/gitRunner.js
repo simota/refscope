@@ -7,6 +7,7 @@ const ALLOWED_GIT_COMMANDS = new Set([
   "diff",
   "for-each-ref",
   "log",
+  "ls-files",
   "merge-base",
   "rev-list",
   "rev-parse",

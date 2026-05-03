@@ -656,43 +656,51 @@ export function createGitService(config) {
     },
 
     async getWorkTreeChanges(repo) {
-      // Working tree changes: HEAD -> index ("staged") and index -> worktree
-      // ("unstaged"). Each side is sourced literally from `git diff` — the
-      // staged side adds `--cached`. We fan out four `runGit` calls so
-      // numstat (summary aggregation) and the raw patch (UI parses verbatim
-      // through `parseUnifiedDiff`) are read in parallel.
+      // Working tree changes: HEAD -> index ("staged"), index -> worktree
+      // ("unstaged"), and untracked files (paths reported by
+      // `ls-files --others --exclude-standard`). Each tracked side is sourced
+      // literally from `git diff` — the staged side adds `--cached`. We fan
+      // out the runs in parallel so numstat (summary aggregation), raw patch
+      // (UI parses through `parseUnifiedDiff`), and the untracked listing
+      // are all read concurrently.
       //
       // Boundary discipline:
       // - The patch text is preserved exactly as Git emits it. We never
       //   re-judge renames, never synthesize hunks, never normalize line
       //   endings.
-      // - Untracked files are deliberately excluded. `git status` and
-      //   `ls-files` are *not* on the gitRunner allowlist, and we won't sneak
-      //   them in here. We surface that boundary explicitly in
-      //   `notes.untrackedExcluded` so the UI can render an honest disclaimer
-      //   and the API client can detect the limit.
+      // - Untracked files are surfaced as paths only; line counts come from
+      //   reading the file with a hard size cap so a forgotten huge artifact
+      //   can't blow up the response. Binary or unreadable files report
+      //   `added: 0`. We never alter the index or write to the repo.
       // - `truncated` mirrors `getDiff`: the runner emits GitCommandError on
       //   `diffMaxBytes` overflow, which bubbles to http.js as a 504. The
       //   field stays in the payload so the UI's contract stays uniform with
       //   other truncation-aware endpoints, but is always `false` on success.
-      const [stagedNumstat, stagedPatch, unstagedNumstat, unstagedPatch] = await Promise.all([
-        runGit(repo, workTreeNumstatArgs({ staged: true }), {
-          timeoutMs: config.gitTimeoutMs,
-          maxBytes: config.diffMaxBytes,
-        }),
-        runGit(repo, workTreePatchArgs({ staged: true }), {
-          timeoutMs: config.gitTimeoutMs,
-          maxBytes: config.diffMaxBytes,
-        }),
-        runGit(repo, workTreeNumstatArgs({ staged: false }), {
-          timeoutMs: config.gitTimeoutMs,
-          maxBytes: config.diffMaxBytes,
-        }),
-        runGit(repo, workTreePatchArgs({ staged: false }), {
-          timeoutMs: config.gitTimeoutMs,
-          maxBytes: config.diffMaxBytes,
-        }),
-      ]);
+      const [stagedNumstat, stagedPatch, unstagedNumstat, unstagedPatch, untrackedRaw] =
+        await Promise.all([
+          runGit(repo, workTreeNumstatArgs({ staged: true }), {
+            timeoutMs: config.gitTimeoutMs,
+            maxBytes: config.diffMaxBytes,
+          }),
+          runGit(repo, workTreePatchArgs({ staged: true }), {
+            timeoutMs: config.gitTimeoutMs,
+            maxBytes: config.diffMaxBytes,
+          }),
+          runGit(repo, workTreeNumstatArgs({ staged: false }), {
+            timeoutMs: config.gitTimeoutMs,
+            maxBytes: config.diffMaxBytes,
+          }),
+          runGit(repo, workTreePatchArgs({ staged: false }), {
+            timeoutMs: config.gitTimeoutMs,
+            maxBytes: config.diffMaxBytes,
+          }),
+          runGit(repo, workTreeUntrackedArgs(), {
+            timeoutMs: config.gitTimeoutMs,
+          }),
+        ]);
+
+      const untrackedFiles = describeUntrackedFiles(repo.path, untrackedRaw.stdout);
+      const untrackedAdded = untrackedFiles.reduce((sum, file) => sum + file.added, 0);
 
       return {
         status: 200,
@@ -713,13 +721,17 @@ export function createGitService(config) {
             summary: parseNumstatSummary(unstagedNumstat.stdout.split("\n")),
             truncated: false,
           },
+          untracked: {
+            files: untrackedFiles,
+            summary: {
+              fileCount: untrackedFiles.length,
+              added: untrackedAdded,
+              deleted: 0,
+            },
+          },
           snapshotAt: new Date().toISOString(),
           notes: {
-            // Boundary marker: the gitRunner allowlist does not include
-            // `status` or `ls-files`, so we cannot surface untracked files
-            // without expanding the allowlist. We choose to not. UI must
-            // surface this caveat to the user.
-            untrackedExcluded: true,
+            untrackedExcluded: false,
           },
         },
       };
@@ -1026,6 +1038,74 @@ export function workTreePatchArgs({ staged }) {
     "--find-renames",
     "--end-of-options",
   ];
+}
+
+/**
+ * `git ls-files --others --exclude-standard -z` lists untracked paths that
+ * are not gitignored. `-z` is mandatory: filenames may contain newlines and
+ * the only safe separator is NUL. The runner's argument-array `spawn`
+ * already prevents shell interpretation; this just keeps the parser
+ * unambiguous.
+ */
+export function workTreeUntrackedArgs() {
+  return ["ls-files", "--others", "--exclude-standard", "-z"];
+}
+
+// Hard cap for reading an untracked file to count its line additions. 1 MiB
+// covers ordinary source files; anything larger is reported with `added: 0`
+// to keep the worktree response bounded.
+const UNTRACKED_READ_BYTE_CAP = 1_048_576;
+
+/**
+ * Resolve untracked file paths to `{ path, status, added, deleted }` records.
+ * `added` is the number of newlines in the file (treating final-newline as
+ * the line terminator, matching how `git diff --numstat` counts new files).
+ * Files that fail to read, exceed `UNTRACKED_READ_BYTE_CAP`, or contain a
+ * NUL byte (binary heuristic) report `added: 0` rather than crashing the
+ * whole response.
+ */
+function describeUntrackedFiles(repoPath, stdout) {
+  if (!stdout) return [];
+  const out = [];
+  for (const rel of stdout.split("\u0000")) {
+    if (!rel) continue;
+    out.push({
+      path: rel,
+      status: "A",
+      added: countAddedLines(repoPath, rel),
+      deleted: 0,
+    });
+  }
+  return out;
+}
+
+function countAddedLines(repoPath, relPath) {
+  const fullPath = path.join(repoPath, relPath);
+  let stat;
+  try {
+    stat = fs.statSync(fullPath);
+  } catch {
+    return 0;
+  }
+  if (!stat.isFile() || stat.size === 0 || stat.size > UNTRACKED_READ_BYTE_CAP) {
+    return 0;
+  }
+  let buf;
+  try {
+    buf = fs.readFileSync(fullPath);
+  } catch {
+    return 0;
+  }
+  // Cheap binary heuristic: bail if the file contains a NUL byte. Avoids
+  // spending a line count on lockfile blobs, images that slipped through, etc.
+  if (buf.includes(0)) return 0;
+  let count = 0;
+  for (let i = 0; i < buf.length; i += 1) {
+    if (buf[i] === 0x0a) count += 1;
+  }
+  // Files without a trailing newline still represent one logical line.
+  if (buf[buf.length - 1] !== 0x0a) count += 1;
+  return count;
 }
 
 export function compareRefSnapshots(previousSnapshot, currentSnapshot) {

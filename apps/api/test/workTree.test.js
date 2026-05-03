@@ -79,7 +79,13 @@ test("getWorkTreeChanges returns zero summaries on a clean working tree", async 
     });
     assert.equal(result.body.staged.truncated, false);
     assert.equal(result.body.unstaged.truncated, false);
-    assert.equal(result.body.notes.untrackedExcluded, true);
+    assert.deepEqual(result.body.untracked.files, []);
+    assert.deepEqual(result.body.untracked.summary, {
+      fileCount: 0,
+      added: 0,
+      deleted: 0,
+    });
+    assert.equal(result.body.notes.untrackedExcluded, false);
     assert.match(result.body.snapshotAt, /^\d{4}-\d{2}-\d{2}T/);
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
@@ -226,16 +232,19 @@ test("getWorkTreeChanges surfaces Git's literal rename similarity in the staged 
   }
 });
 
-test("getWorkTreeChanges does not surface untracked files in either patch", async () => {
+test("getWorkTreeChanges surfaces untracked files in a dedicated section", async () => {
   const repoPath = createTempPath("rtgv-worktree-untracked-");
   try {
     initRepo(repoPath, "Alice", "alice@example.test");
     writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
-    // Drop a brand-new untracked file — Git's `diff` (without --cached and
-    // without `--no-index`, which the runner blocks) does not report new
-    // untracked content. This locks in the MVP boundary: refscope only
-    // observes tracked changes.
-    fs.writeFileSync(path.join(repoPath, "untracked.txt"), "this should not appear\n");
+    // Drop two untracked files — `git diff` (with or without `--cached`)
+    // does not see them, so they ride a separate `body.untracked.files`
+    // list sourced from `git ls-files --others --exclude-standard`. The
+    // line count for each file mirrors what Git would emit as `+N` once
+    // the file was eventually committed.
+    fs.writeFileSync(path.join(repoPath, "untracked.txt"), "alpha\nbeta\ngamma\n");
+    fs.mkdirSync(path.join(repoPath, "src"), { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "src/new.js"), "console.log('hi');\n");
 
     const service = createGitService({
       repositories: new Map(),
@@ -250,11 +259,86 @@ test("getWorkTreeChanges does not surface untracked files in either patch", asyn
     });
 
     assert.equal(result.status, 200);
+    // Tracked sides are still empty — untracked is its own lane.
     assert.equal(result.body.staged.summary.fileCount, 0);
     assert.equal(result.body.unstaged.summary.fileCount, 0);
     assert.ok(!result.body.staged.diff.includes("untracked.txt"));
     assert.ok(!result.body.unstaged.diff.includes("untracked.txt"));
-    assert.equal(result.body.notes.untrackedExcluded, true);
+    // Untracked lane reports both files with their line counts.
+    const byPath = new Map(
+      result.body.untracked.files.map((file) => [file.path, file]),
+    );
+    assert.deepEqual(byPath.get("untracked.txt"), {
+      path: "untracked.txt",
+      status: "A",
+      added: 3,
+      deleted: 0,
+    });
+    assert.deepEqual(byPath.get("src/new.js"), {
+      path: "src/new.js",
+      status: "A",
+      added: 1,
+      deleted: 0,
+    });
+    assert.deepEqual(result.body.untracked.summary, {
+      fileCount: 2,
+      added: 4,
+      deleted: 0,
+    });
+    assert.equal(result.body.notes.untrackedExcluded, false);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getWorkTreeChanges respects .gitignore for untracked listing", async () => {
+  const repoPath = createTempPath("rtgv-worktree-untracked-ignore-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, ".gitignore", "ignored.log\n", "chore: ignore");
+    fs.writeFileSync(path.join(repoPath, "ignored.log"), "noise\n");
+    fs.writeFileSync(path.join(repoPath, "kept.txt"), "value\n");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+
+    const result = await service.getWorkTreeChanges({
+      id: "demo",
+      name: "demo",
+      path: repoPath,
+    });
+
+    const paths = result.body.untracked.files.map((file) => file.path);
+    assert.deepEqual(paths, ["kept.txt"]);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getWorkTreeChanges reports added: 0 for binary untracked files", async () => {
+  const repoPath = createTempPath("rtgv-worktree-untracked-binary-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
+    fs.writeFileSync(path.join(repoPath, "blob.bin"), Buffer.from([0x00, 0x01, 0x02, 0x00]));
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+
+    const result = await service.getWorkTreeChanges({
+      id: "demo",
+      name: "demo",
+      path: repoPath,
+    });
+
+    const file = result.body.untracked.files.find((f) => f.path === "blob.bin");
+    assert.equal(file.added, 0);
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }
