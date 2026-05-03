@@ -39,7 +39,7 @@ const BURST_MS = 600;
 const CHANGE_BURST_MS = 700;
 // 変更検知バーストのピーク倍率 (1 + N)。1.2 (旧) → 2.5 で 3.5x まで膨らむ。
 const CHANGE_BURST_SCALE = 2.5;
-const RECENT_CHANGES_MAX = 8;
+const RECENT_CHANGES_MAX = 30;
 const RECENCY_FADE_MS = 30 * 60 * 1000; // 30 分以上で明度低下
 const TAU = Math.PI * 2;
 const MAX_SPARKS = 360;
