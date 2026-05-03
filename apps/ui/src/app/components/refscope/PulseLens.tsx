@@ -452,7 +452,9 @@ function useCanvasParticleField({
           popUntil: 0,
           wasHighlighted: false,
           burstUntil: 0,
-          lastFiredHash: '',
+          // 新規 untracked は通常の "初回観測 = stamp のみ" を抜けて、次の
+          // 描画フレームで lastFiredHash !== fp となり大爆発する sentinel。
+          lastFiredHash: stat.isNewFile && stat.isWorkingTree ? '__FRESH_UNTRACKED__' : '',
           truncatedName: truncateName(stat.basename),
         })),
       );
@@ -995,6 +997,13 @@ export function PulseLens({
 
   const processedHashesRef = useRef<Set<string>>(new Set());
 
+  // Map<untracked-path, first-observed-timestamp>. Lets us classify "this
+  // untracked file just appeared" vs "this one has been hanging around since
+  // mount" so only the former triggers the new-file shockwave + change burst.
+  // Mutating refs inside useMemo is fine — refs are not React state and don't
+  // drive renders; the next render simply reads the updated map.
+  const untrackedFirstSeenRef = useRef<Map<string, number>>(new Map());
+
   // ---- Right-click context menu ----------------------------------------
   const [menuState, setMenuState] = useState<{ x: number; y: number; path: string } | null>(null);
 
@@ -1105,19 +1114,56 @@ export function PulseLens({
   // ---- Merge working-tree changes into rendering ------------------------
   const mergedStats = useMemo<Map<string, FileStat>>(() => {
     const wtFiles = extractWorkTreeFiles(workTree);
-    if (wtFiles.length === 0) return statistics;
+    if (wtFiles.length === 0) {
+      // Worktree is clean / unavailable — drop the first-seen ledger so a
+      // future re-appearance gets a fresh burst.
+      untrackedFirstSeenRef.current.clear();
+      return statistics;
+    }
 
-    const wtByPath = new Map<string, { added: number; deleted: number; status: string }>();
+    type WtAgg = {
+      added: number;
+      deleted: number;
+      status: string;
+      isUntracked: boolean;
+    };
+    const wtByPath = new Map<string, WtAgg>();
     for (const f of wtFiles) {
       const ex = wtByPath.get(f.path);
+      const fileIsUntracked = f.section === 'untracked';
       if (ex) {
         wtByPath.set(f.path, {
           added: ex.added + f.added,
           deleted: ex.deleted + f.deleted,
           status: ex.status,
+          isUntracked: ex.isUntracked || fileIsUntracked,
         });
       } else {
-        wtByPath.set(f.path, { added: f.added, deleted: f.deleted, status: f.status });
+        wtByPath.set(f.path, {
+          added: f.added,
+          deleted: f.deleted,
+          status: f.status,
+          isUntracked: fileIsUntracked,
+        });
+      }
+    }
+
+    // Reconcile the first-seen ledger:
+    // - Stamp a timestamp the first time we observe an untracked path.
+    // - Drop entries for paths no longer untracked (file was committed,
+    //   removed, or otherwise left the working tree).
+    const t = Date.now();
+    const currentUntracked = new Set<string>();
+    for (const [path, agg] of wtByPath) {
+      if (!agg.isUntracked) continue;
+      currentUntracked.add(path);
+      if (!untrackedFirstSeenRef.current.has(path)) {
+        untrackedFirstSeenRef.current.set(path, t);
+      }
+    }
+    for (const path of [...untrackedFirstSeenRef.current.keys()]) {
+      if (!currentUntracked.has(path)) {
+        untrackedFirstSeenRef.current.delete(path);
       }
     }
 
@@ -1126,6 +1172,15 @@ export function PulseLens({
 
     for (const [path, agg] of wtByPath) {
       const existing = merged.get(path);
+      // Treat an untracked path as "fresh" within NEW_FILE_MS of first sight.
+      // After that window the shockwave + burst stop firing, but the particle
+      // remains on screen as an ordinary working-tree file.
+      const firstSeen = agg.isUntracked
+        ? untrackedFirstSeenRef.current.get(path)
+        : undefined;
+      const isFreshUntracked =
+        firstSeen !== undefined && t - firstSeen < NEW_FILE_MS;
+
       if (existing) {
         merged.set(path, {
           ...existing,
@@ -1155,9 +1210,9 @@ export function PulseLens({
           lastSeenSubject: 'Working tree (uncommitted)',
           lastSeenTime: snapshot,
           lastStatus: agg.status,
-          highlightedUntil: 0,
-          isNewFile: false,
-          appearedAt: 0,
+          highlightedUntil: isFreshUntracked ? t + HIGHLIGHT_MS : 0,
+          isNewFile: isFreshUntracked,
+          appearedAt: firstSeen ?? 0,
           isWorkingTree: true,
         });
       }
