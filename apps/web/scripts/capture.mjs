@@ -238,7 +238,7 @@ async function captureCvdTheme(page, theme) {
 
 async function clickLensTab(page, lensId) {
   // The lens switcher renders a tab per lens with id `lens-tab-${id}`
-  // and label "Live" / "Activity" / "Stream". Try the id first, fall back
+  // and label "Live" / "Pulse" / "Stream". Try the id first, fall back
   // to label-text and aria-controls so the capture survives small markup
   // tweaks.
   const candidates = [
@@ -257,15 +257,15 @@ async function clickLensTab(page, lensId) {
   return false;
 }
 
-async function captureActivityLens(page, theme) {
+async function capturePulseLens(page, theme) {
   await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
   await applyTheme(page, theme);
   await settle(page);
-  const ok = await clickLensTab(page, "activity");
+  const ok = await clickLensTab(page, "pulse");
   if (!ok) {
-    warn("activity lens tab not found; capturing default lens");
+    warn("pulse lens tab not found; capturing default lens");
   }
-  await captureFull(page, resolve(MEDIA_DIR, `demo-09-activity-lens-${theme}.png`));
+  await captureFull(page, resolve(MEDIA_DIR, `demo-09-pulse-lens-${theme}.png`));
 }
 
 async function captureStreamLens(page, theme) {
@@ -431,7 +431,7 @@ async function main() {
       try { await captureCommitDetail(page, theme); } catch (e) { warn(`scene 06 ${theme}: ${e.message}`); }
       try { await capturePeriodSummary(page, theme); }catch (e) { warn(`scene 07 ${theme}: ${e.message}`); }
       try { await captureCvdTheme(page, theme); }     catch (e) { warn(`scene 08 ${theme}: ${e.message}`); }
-      try { await captureActivityLens(page, theme); } catch (e) { warn(`scene 09 ${theme}: ${e.message}`); }
+      try { await capturePulseLens(page, theme); }     catch (e) { warn(`scene 09 ${theme}: ${e.message}`); }
       try { await captureStreamLens(page, theme); }   catch (e) { warn(`scene 10 ${theme}: ${e.message}`); }
       try { await captureFileHistory(page, theme); }  catch (e) { warn(`scene 11 ${theme}: ${e.message}`); }
 

@@ -7,10 +7,10 @@ const lenses = [
     body: "The default view. Refs, working-tree changes, and incoming commits read top to bottom. Live updates do not steal focus and do not auto-scroll the row you were reading.",
   },
   {
-    id: "activity",
-    name: "Activity",
-    summary: "Per-file activity rendered as a graph, not a feed.",
-    body: "Each node is a file; each ring is recency. Hot spots become visible without ranking. Right-click any node to open its file history; uncommitted edits feed into the graph alongside committed changes.",
+    id: "pulse",
+    name: "Pulse",
+    summary: "A canvas of file-change particles, drifting and bursting in real time.",
+    body: "Each particle is a file, colored by its kind and sized by how often it changes. When a file's contents shift, that particle bursts with sparks and a brief flash. Idle, the field breathes; busy, it pops like popcorn. Right-click any particle to open its file history; uncommitted edits surface alongside committed changes.",
   },
   {
     id: "stream",
@@ -25,7 +25,7 @@ const lenses = [
     <p class="rs-eyebrow">Lenses</p>
     <h2 id="lenses-heading">Three lenses over the same repository.</h2>
     <p class="rs-lede">
-      Switch between Live, Activity, and Stream without losing the active ref, the selected commit, or any filters.
+      Switch between Live, Pulse, and Stream without losing the active ref, the selected commit, or any filters.
       Each lens is a different way to read the same observed facts.
     </p>
 

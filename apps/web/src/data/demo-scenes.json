@@ -65,10 +65,10 @@
   },
   {
     "n": "09",
-    "slug": "activity-lens",
-    "title": "Activity lens, the same repository as a graph",
-    "description": "Switch from `Live` to `Activity`. Each node is a file; recency reads as a ring. Hot spots become visible without ranking. Uncommitted edits appear in the same graph alongside committed changes.",
-    "alt": "Activity lens showing the repository as a force-directed graph of file nodes, sized by recent change frequency, with the lens switcher set to Activity.",
+    "slug": "pulse-lens",
+    "title": "Pulse lens, the codebase as a particle field",
+    "description": "Switch from `Live` to `Pulse`. Each particle is a file, colored by its kind and sized by how often it changes. When a file shifts, that particle bursts with sparks and a brief flash; idle, the field breathes. Uncommitted edits drift in the same field alongside committed changes.",
+    "alt": "Pulse lens showing the repository as a canvas of drifting particles colored by file type, with the lens switcher set to Pulse.",
     "lengthSec": 7
   },
   {

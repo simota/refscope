@@ -46,8 +46,8 @@ Full options and the CLI security model are in [`apps/cli/README.md`](apps/cli/R
 
 ## What you see in the UI
 
-- **Three lenses over the same repository** — `Live` for the commit timeline, `Activity` for a per-file activity overview, `Stream` for an event-shaped feed. Each lens reuses the same refs, filters, and selected commit; switching is local.
-- **Working-tree changes** are surfaced as a first-class entry alongside committed history, and uncommitted edits feed into the Activity and Stream lenses too.
+- **Three lenses over the same repository** — `Live` for the commit timeline, `Pulse` for a canvas of file-change particles that burst when a file changes, `Stream` for an event-shaped feed. Each lens reuses the same refs, filters, and selected commit; switching is local.
+- **Working-tree changes** are surfaced as a first-class entry alongside committed history, and uncommitted edits feed into the Pulse and Stream lenses too.
 - **File history with co-change** — right-click any file row to open its history view, complete with a hunk timeline, branch-drift halo, and a related-files (co-change) panel.
 - **Period summary** — labelled metric bars for commit count, additions, deletions, signed commits, merge commits, and live-update arrivals across a chosen window.
 - **Sidebar with the full ref surface** — branches, tags, remote-tracking refs, pinned refs, stashes, linked worktrees, submodules, and an in-progress banner for active rebases / merges / cherry-picks.
