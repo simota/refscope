@@ -13,12 +13,21 @@ import {
   Eye,
   RefreshCw,
   FolderPlus,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "../ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "../ui/dropdown-menu";
 import type { SearchMode } from "../../api";
 import type { GitRef, Repository } from "./data";
 
@@ -158,11 +167,7 @@ export function TopBar({
           Tooltip wording is Quill v1.2 mandatory (§6.8):
             en: "Fleet: your repos, one user, one machine"
             ja: "Fleet：あなたのリポジトリ専用、1 人・1 台" (JSDoc only; en default for v1 per §6.9 language note) */}
-      <ModeSegmentedControl
-        mode={mode}
-        selectedRepoId={selectedRepo}
-        onSetMode={onSetMode}
-      />
+      <ModeSegmentedControl mode={mode} onSetMode={onSetMode} />
 
       {/* Add repository button — visible only in Fleet mode (charter v2 §3 解禁済) */}
       {mode === "fleet" && (
@@ -387,97 +392,17 @@ export function TopBar({
               : status.toUpperCase()}
         </div>
         <Separator />
-        <button
-          type="button"
-          className="rs-compact-button"
-          onClick={onToggleSidebar}
-          aria-pressed={sidebarCollapsed}
-          aria-label={sidebarCollapsed ? "Show branch sidebar" : "Hide branch sidebar"}
-          title={sidebarCollapsed ? "Show branch sidebar" : "Hide branch sidebar"}
-          style={
-            sidebarCollapsed
-              ? {
-                  color: "var(--rs-text-primary)",
-                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
-                  background: "var(--rs-bg-elevated)",
-                }
-              : undefined
-          }
-        >
-          {sidebarCollapsed ? (
-            <PanelLeftOpen size={11} aria-hidden style={{ marginRight: 4 }} />
-          ) : (
-            <PanelLeftClose size={11} aria-hidden style={{ marginRight: 4 }} />
-          )}
-          {sidebarCollapsed ? "Show" : "Hide"}
-        </button>
-        <Separator />
-        <button
-          type="button"
-          className="rs-compact-button"
-          onClick={onToggleSummaryView}
-          aria-pressed={summaryViewOpen}
-          aria-label="Toggle period summary"
-          title="Period summary view"
-          style={
-            summaryViewOpen
-              ? {
-                  color: "var(--rs-text-primary)",
-                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
-                  background: "var(--rs-bg-elevated)",
-                }
-              : undefined
-          }
-        >
-          <CalendarRange size={11} aria-hidden />
-          <span className="hidden 2xl:inline" style={{ marginLeft: 4 }}>
-            {summaryViewOpen ? "Summary on" : "Summary"}
-          </span>
-        </button>
-        <button
-          type="button"
-          className="rs-compact-button"
-          onClick={onToggleQuietMode}
-          aria-pressed={isQuiet}
-          aria-label="Quiet mode"
-          title={quietReason}
-          style={
-            isQuiet
-              ? {
-                  color: "var(--rs-text-primary)",
-                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
-                  background: "var(--rs-bg-elevated)",
-                }
-              : undefined
-          }
-        >
-          <Moon size={11} aria-hidden />
-          <span className="hidden 2xl:inline" style={{ marginLeft: 4 }}>
-            {isQuiet ? "Quiet on" : "Quiet"}
-          </span>
-        </button>
-        <button
-          type="button"
-          className="rs-compact-button"
-          onClick={onToggleColorVision}
-          aria-pressed={isCvdSafe}
-          aria-label={isCvdSafe ? "CVD-safe theme on — click to switch to default" : "CVD-safe theme off — click to enable color-blind safe palette"}
-          title={isCvdSafe ? "CVD-safe theme (Wong palette) — on" : "CVD-safe theme — off"}
-          style={
-            isCvdSafe
-              ? {
-                  color: "var(--rs-text-primary)",
-                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
-                  background: "var(--rs-bg-elevated)",
-                }
-              : undefined
-          }
-        >
-          <Eye size={11} aria-hidden />
-          <span className="hidden 2xl:inline" style={{ marginLeft: 4 }}>
-            {isCvdSafe ? "CVD on" : "CVD"}
-          </span>
-        </button>
+        <ViewOptionsMenu
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={onToggleSidebar}
+          summaryViewOpen={summaryViewOpen}
+          onToggleSummaryView={onToggleSummaryView}
+          isQuiet={isQuiet}
+          quietReason={quietReason}
+          onToggleQuietMode={onToggleQuietMode}
+          isCvdSafe={isCvdSafe}
+          onToggleColorVision={onToggleColorVision}
+        />
         <Separator />
         <button
           type="button"
@@ -560,6 +485,163 @@ function Separator() {
 }
 
 /**
+ * View options dropdown — collapses 4 toggles (Hide/Summary/Quiet/CVD) that
+ * used to take ~280px of TopBar width into a single trigger. The trigger
+ * adopts the accent border whenever any non-default option is active so
+ * the user sees at-a-glance that something is on.
+ */
+function ViewOptionsMenu({
+  sidebarCollapsed,
+  onToggleSidebar,
+  summaryViewOpen,
+  onToggleSummaryView,
+  isQuiet,
+  quietReason,
+  onToggleQuietMode,
+  isCvdSafe,
+  onToggleColorVision,
+}: {
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+  summaryViewOpen: boolean;
+  onToggleSummaryView: () => void;
+  isQuiet: boolean;
+  quietReason: string;
+  onToggleQuietMode: () => void;
+  isCvdSafe: boolean;
+  onToggleColorVision: () => void;
+}) {
+  const sidebarVisible = !sidebarCollapsed;
+  // Sidebar default = visible, others default = off. Count any deviation.
+  const activeCount =
+    (sidebarVisible ? 0 : 1) +
+    (summaryViewOpen ? 1 : 0) +
+    (isQuiet ? 1 : 0) +
+    (isCvdSafe ? 1 : 0);
+  const triggerActive = activeCount > 0;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="rs-compact-button"
+          aria-label="View options"
+          title={
+            triggerActive
+              ? `${activeCount} view option${activeCount === 1 ? "" : "s"} active`
+              : "View options"
+          }
+          style={
+            triggerActive
+              ? {
+                  color: "var(--rs-text-primary)",
+                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
+                  background: "var(--rs-bg-elevated)",
+                }
+              : undefined
+          }
+        >
+          <SlidersHorizontal size={11} aria-hidden style={{ marginRight: 4 }} />
+          View
+          {triggerActive ? (
+            <span
+              aria-hidden
+              style={{
+                marginLeft: 4,
+                padding: "0 5px",
+                borderRadius: 999,
+                fontSize: 10,
+                fontWeight: 600,
+                color: "var(--rs-accent)",
+                background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 25%)",
+              }}
+            >
+              {activeCount}
+            </span>
+          ) : null}
+          <ChevronDown size={11} aria-hidden style={{ marginLeft: 4 }} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        sideOffset={6}
+        style={{
+          background: "var(--rs-bg-elevated)",
+          color: "var(--rs-text-primary)",
+          border: "1px solid var(--rs-border)",
+          fontFamily: "var(--rs-mono)",
+          zIndex: "var(--rs-z-overlay)" as unknown as number,
+          minWidth: 220,
+        }}
+      >
+        <DropdownMenuLabel
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: "0.6px",
+            textTransform: "uppercase",
+            color: "var(--rs-text-secondary)",
+          }}
+        >
+          View
+        </DropdownMenuLabel>
+        <DropdownMenuCheckboxItem
+          checked={sidebarVisible}
+          onCheckedChange={onToggleSidebar}
+          style={{ fontSize: 12 }}
+        >
+          {sidebarVisible ? (
+            <PanelLeftClose size={12} aria-hidden />
+          ) : (
+            <PanelLeftOpen size={12} aria-hidden />
+          )}
+          Branch sidebar
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={summaryViewOpen}
+          onCheckedChange={onToggleSummaryView}
+          style={{ fontSize: 12 }}
+        >
+          <CalendarRange size={12} aria-hidden />
+          Period summary
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: "0.6px",
+            textTransform: "uppercase",
+            color: "var(--rs-text-secondary)",
+          }}
+        >
+          Accessibility
+        </DropdownMenuLabel>
+        <DropdownMenuCheckboxItem
+          checked={isQuiet}
+          onCheckedChange={onToggleQuietMode}
+          title={quietReason}
+          style={{ fontSize: 12 }}
+        >
+          <Moon size={12} aria-hidden />
+          Quiet mode
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={isCvdSafe}
+          onCheckedChange={onToggleColorVision}
+          title={isCvdSafe ? "CVD-safe theme (Wong palette) — on" : "CVD-safe theme — off"}
+          style={{ fontSize: 12 }}
+        >
+          <Eye size={12} aria-hidden />
+          CVD-safe theme
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
  * Two-button segmented control for Fleet / Detail mode toggle.
  *
  * Tooltip wording (Quill v1.2 §6.8, mandatory — do not paraphrase):
@@ -571,20 +653,11 @@ function Separator() {
  */
 function ModeSegmentedControl({
   mode,
-  selectedRepoId,
   onSetMode,
 }: {
   mode: "fleet" | "detail";
-  selectedRepoId: string;
   onSetMode: (mode: "fleet" | "detail") => void;
 }) {
-  // Truncate repo ID to 12 chars max for the Detail label.
-  const repoLabel = selectedRepoId
-    ? selectedRepoId.length > 12
-      ? selectedRepoId.slice(0, 12)
-      : selectedRepoId
-    : "—";
-
   const activeStyle = {
     color: "var(--rs-accent)",
     borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
@@ -660,7 +733,7 @@ function ModeSegmentedControl({
           ...(mode === "detail" ? activeStyle : inactiveStyle),
         }}
       >
-        Detail · {repoLabel}
+        Detail
       </button>
     </div>
   );
