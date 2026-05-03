@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { GitCommandError, runGit } from "./gitRunner.js";
+import { addRepository as configAddRepository, removeRepository as configRemoveRepository } from "./config.js";
 import {
   isValidGitRef,
   isValidObjectId,
@@ -127,11 +128,41 @@ export function createGitService(config) {
       return Array.from(config.repositories.values()).map((repo) => ({
         id: repo.id,
         name: repo.name,
+        origin: repo.origin,
       }));
     },
 
     getRepository(repoId) {
       return config.repositories.get(repoId);
+    },
+
+    /**
+     * Add a repository to the runtime allowlist and persist it.
+     * Delegates to config.addRepository which enforces capacity and dedup rules.
+     *
+     * @param {string} id - Pre-validated repository identifier
+     * @param {string} normalizedPath - Absolute canonical Git working-tree root
+     * @returns {{ id: string, name: string, path: string, origin: "ui", addedAt: string }}
+     */
+    addRepository(id, normalizedPath) {
+      const entry = configAddRepository(id, normalizedPath);
+      return {
+        id: entry.id,
+        name: entry.name,
+        path: entry.path,
+        origin: entry.origin,
+        addedAt: new Date().toISOString(),
+      };
+    },
+
+    /**
+     * Remove a user-managed repository from the runtime allowlist and persist the change.
+     * Throws if the repository is env-origin or does not exist.
+     *
+     * @param {string} id - Repository identifier to remove
+     */
+    removeRepository(id) {
+      configRemoveRepository(id);
     },
 
     async listRefs(repo) {
@@ -2213,3 +2244,106 @@ function topPathSegment(filePath) {
   const slashIndex = filePath.indexOf("/");
   return slashIndex === -1 ? filePath : filePath.slice(0, slashIndex);
 }
+
+// ─── Fleet observation surface helpers ──────────────────────────────────────
+//
+// These three functions are the only git call sites for the fleet snapshot
+// endpoint (GET /api/fleet/snapshot). They reuse existing allowlisted commands
+// (rev-parse, log, diff) — the gitRunner allowlist is not changed.
+//
+// All three accept a raw `repoPath` string so they can be called by
+// fleetService.js without constructing a full repo object; internally they
+// wrap the path in the `{ path }` shape that runGit expects.
+
+/**
+ * Return the short SHA of HEAD for the given repo path.
+ *
+ * Uses `git rev-parse --short HEAD` — already allowlisted. The runner default
+ * 7-character short form matches Git's own default; the exact length may vary
+ * if the repo needs more characters to avoid ambiguity.
+ *
+ * @param {string} repoPath - Absolute canonical path to the git working tree.
+ * @returns {Promise<string|null>} Short SHA string, or null on error.
+ */
+export async function getHeadShortSha(repoPath) {
+  const { stdout } = await runGit(
+    { path: repoPath },
+    ["rev-parse", "--short", "HEAD"],
+    { timeoutMs: FLEET_GIT_TIMEOUT_MS, maxBytes: 64 },
+  );
+  return stdout.trim() || null;
+}
+
+/**
+ * Return the number of commits reachable from HEAD since the given ISO 8601
+ * timestamp. Counts newlines in `git log --format=%H --since=<sinceISO> HEAD`
+ * output — each non-empty line is one commit hash.
+ *
+ * `--format=%H` is the shortest safe format that avoids any derived text.
+ * `--no-show-signature` prevents GPG/SSH verification calls.
+ *
+ * @param {string} repoPath  - Absolute canonical path to the git working tree.
+ * @param {string} sinceISO  - ISO 8601 UTC timestamp (validated by fleetService).
+ * @returns {Promise<number>} Commit count (>= 0).
+ */
+export async function getCommits24hCount(repoPath, sinceISO) {
+  const { stdout } = await runGit(
+    { path: repoPath },
+    [
+      "log",
+      `--since=${sinceISO}`,
+      "--format=%H",
+      "--no-show-signature",
+      "--end-of-options",
+      "HEAD",
+      "--",
+    ],
+    { timeoutMs: FLEET_GIT_TIMEOUT_MS, maxBytes: 4 * 1024 * 1024 },
+  );
+  // Count non-empty lines — each line is one full commit SHA.
+  return stdout.split("\n").filter(Boolean).length;
+}
+
+/**
+ * Return true if the working tree has uncommitted changes (tracked files only).
+ *
+ * Uses `git diff --quiet HEAD` — exit code 1 means changes exist, 0 means
+ * clean. Untracked files are excluded (proposal §4.1.5; notes.untrackedExcluded
+ * is set to true in the snapshot response to surface this limitation).
+ *
+ * Delegates to the existing getWorkTreeChanges helper to reuse the diff args
+ * that are already hardened (--no-ext-diff, --no-textconv, --no-color, etc.).
+ * Specifically calls `workTreeNumstatArgs({ staged: false })` and checks
+ * whether any file rows appear, keeping the call surface minimal.
+ *
+ * @param {string} repoPath - Absolute canonical path to the git working tree.
+ * @returns {Promise<boolean>} true if tracked files differ from HEAD.
+ */
+export async function getWorktreeDirtyBoolean(repoPath) {
+  const repo = { path: repoPath };
+  // diff HEAD (unstaged): exit 0 = clean, exit 1 = dirty (GitCommandError).
+  // We use --quiet so git exits 1 immediately on first change; no output needed.
+  try {
+    await runGit(
+      repo,
+      ["diff", "--quiet", "--no-ext-diff", "--end-of-options", "HEAD", "--"],
+      { timeoutMs: FLEET_GIT_TIMEOUT_MS, maxBytes: 64 },
+    );
+    return false;
+  } catch (err) {
+    if (err && err.name === "GitCommandError" && err.exitCode === 1 && !err.timedOut) {
+      // exit 1 = dirty working tree
+      return true;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Default git call timeout for fleet helpers (ms).
+ * Kept shorter than the global gitTimeoutMs so the per-repo 5s fleet timeout
+ * in fleetService.js is the binding limit, not the git runner.
+ *
+ * @type {number}
+ */
+const FLEET_GIT_TIMEOUT_MS = 4000;

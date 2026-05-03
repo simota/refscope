@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://refscope.local/schemas/fleet-response.schema.json",
+  "title": "Fleet Snapshot Response",
+  "description": "Shape of the GET /api/fleet/snapshot response. version=1. All fields are observed Git facts; no derived analysis is included.",
+  "type": "object",
+  "required": ["version", "snapshotAt", "window", "repos", "estimatedCost", "notes"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Schema version. Breaking changes require a new endpoint path and a deprecation window."
+    },
+    "snapshotAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp at which the snapshot was collected."
+    },
+    "window": {
+      "enum": ["1h", "6h", "24h", "7d"],
+      "description": "Observation window passed as the ?window query parameter (default: 24h)."
+    },
+    "repos": {
+      "type": "array",
+      "description": "One entry per repo in the allowlist (or per include= filter). Order matches RTGV_REPOS declaration order.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repoId",
+          "headShortSha",
+          "commits24h",
+          "refMove1h",
+          "worktreeDirty",
+          "lastEventAt",
+          "status"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "description": "The RTGV_REPOS key (allowlist ID) for this repository."
+          },
+          "headShortSha": {
+            "type": ["string", "null"],
+            "pattern": "^[a-f0-9]{7,40}$",
+            "description": "Short SHA of HEAD (git rev-parse --short HEAD). Null when status != ok."
+          },
+          "commits24h": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Number of commits in the last 24 hours (git log --since). Null when status != ok."
+          },
+          "refMove1h": {
+            "type": ["boolean", "null"],
+            "description": "True if any ref changed objectname within the last 1 hour, as observed via SSE events. Null when status != ok."
+          },
+          "worktreeDirty": {
+            "type": ["boolean", "null"],
+            "description": "True if the working tree has uncommitted changes (git diff --quiet HEAD). Null when status != ok."
+          },
+          "lastEventAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "ISO 8601 UTC timestamp of the most recent ref or commit event observed. Null when no event has been observed."
+          },
+          "status": {
+            "enum": ["ok", "timeout", "git_error", "missing", "unauthorized"],
+            "description": "Observed result status for this repo. ok = all facts collected. timeout = git command exceeded RTGV_GIT_TIMEOUT_MS. git_error = git exited non-zero. missing = repo path no longer exists. unauthorized = access denied."
+          }
+        }
+      }
+    },
+    "estimatedCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subscribedRepoCount", "snapshotIntervalMs", "gitCallsPerMin"],
+      "description": "Literal cost figures for the user to predict load on their machine. No adjectives.",
+      "properties": {
+        "subscribedRepoCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of repos included in this snapshot (after include= filter)."
+        },
+        "snapshotIntervalMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Polling interval in milliseconds at which the UI refreshes this snapshot."
+        },
+        "gitCallsPerMin": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Estimated git invocations per minute across all subscribed repos."
+        }
+      }
+    },
+    "notes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["untrackedExcluded", "sseAvailable"],
+      "description": "Informational flags about snapshot collection behavior.",
+      "properties": {
+        "untrackedExcluded": {
+          "type": "boolean",
+          "description": "True if untracked files were not considered when computing worktreeDirty (git diff only, no ls-files)."
+        },
+        "sseAvailable": {
+          "type": "boolean",
+          "description": "True if the fleet SSE endpoint is available for live ref-event push."
+        }
+      }
+    }
+  }
+}
