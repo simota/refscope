@@ -1,0 +1,19 @@
+# CODEOWNERS — Refscope repository
+#
+# Ownership is enforced via GitHub PR review requirements.
+# This is a single-user repository; @simota is the sole owner.
+# For Fleet charter files, multiple-reviewer policy is a social contract:
+# the §6 amendment process requires ≥2 CODEOWNERS reviewers before merge.
+# In a single-user setup this means explicit self-review via the PR checklist
+# in .github/pull_request_template.md and the Layer 2 grep gate (make verify).
+
+# Default owner for all files
+* @simota
+
+# Fleet charter — supersede only via fleet-charter-v2.md, multiple reviewers recommended
+# Any in-place edit to fleet-charter.md must qualify as a §6.1 non-substantive correction.
+# Any substantive change requires a new fleet-charter-vN.md file (see §6 amendment process).
+/docs/fleet-charter.md @simota
+/docs/fleet-charter-v*.md @simota
+/apps/api/schemas/fleet-*.schema.json @simota
+/scripts/ci/forbid-derived-words.sh @simota

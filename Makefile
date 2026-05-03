@@ -91,6 +91,7 @@ test-api:
 	$(PNPM) --filter @realtime-git-viewer/api test
 
 verify:
+	bash scripts/ci/forbid-derived-words.sh
 	bash scripts/orbit/full-implementation/verify.sh
 
 audit:
