@@ -20,8 +20,6 @@ import {
 } from 'react';
 import {
   forceSimulation,
-  forceCollide,
-  forceManyBody,
   type Simulation,
 } from 'd3-force';
 import { getCommit, type WorkTreeResponse } from '../../api';
@@ -435,6 +433,7 @@ function useCanvasParticleField({
     function buildNodes(gs: typeof groups): ParticleNode[] {
       const canvasW = canvas!.clientWidth;
       const canvasH = canvas!.clientHeight;
+      const MARGIN = 50;
 
       return gs.flatMap((g) =>
         g.files.map((stat) => ({
@@ -448,7 +447,7 @@ function useCanvasParticleField({
           popUntil: 0,
           wasHighlighted: false,
           burstUntil: 0,
-          lastFiredHash: '',  // 空文字列 = 初回観測未済
+          lastFiredHash: '',
           truncatedName: truncateName(stat.basename),
         })),
       );
@@ -520,19 +519,16 @@ function useCanvasParticleField({
           n.popUntil = prev.popUntil;
           n.wasHighlighted = prev.wasHighlighted;
           n.burstUntil = prev.burstUntil;
-          n.lastFiredHash = prev.lastFiredHash;  // 既存パスは前回 stamp を引き継ぐ
-          // stat が更新された場合もラベルを再計算
+          n.lastFiredHash = prev.lastFiredHash;
           n.truncatedName = truncateName(n.stat.basename);
         }
         return n;
       });
 
+      // velocity integrator のみ — forceCollide/forceManyBody による集団圧力を排除。
+      // 粒子間の重なり解消は draw ループ内の manual elastic collision が単独で担う。
       sim = forceSimulation(nodes)
-        .force(
-          'collide',
-          forceCollide<ParticleNode>((d) => radiusForCount(d.stat.commitCount) + 1).strength(0.85),
-        )
-        .force('charge', forceManyBody<ParticleNode>().strength(-1))
+        .velocityDecay(0.02)
         .alphaTarget(0.05)
         .alphaDecay(0)
         .stop();
@@ -566,16 +562,76 @@ function useCanvasParticleField({
       const w = canvas.width / dpr;
       const h = canvas.height / dpr;
 
-      // 自由ドリフト + 画面端ラップ
+      // 粒子同士の弾性衝突 (O(n²), 200粒子 = ~40k checks/frame で 60fps OK)
       if (!reducedMotion) {
+        const len = nodes.length;
+        for (let i = 0; i < len; i++) {
+          const a = nodes[i];
+          const ra = radiusForCount(a.stat.commitCount);
+          for (let j = i + 1; j < len; j++) {
+            const b = nodes[j];
+            const rb = radiusForCount(b.stat.commitCount);
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const minDist = ra + rb + 2;
+            const dist2 = dx * dx + dy * dy;
+            if (dist2 >= minDist * minDist || dist2 < 0.0001) continue;
+            const dist = Math.sqrt(dist2);
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const vRelN = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+            if (vRelN >= 0) continue; // 既に離れる方向なので無視
+            // 等質量弾性衝突: 法線方向の速度を交換
+            const restitution = 0.95;
+            const impulse = vRelN * (1 + restitution) * 0.5;
+            a.vx += impulse * nx;
+            a.vy += impulse * ny;
+            b.vx -= impulse * nx;
+            b.vy -= impulse * ny;
+            // めり込み解消
+            const overlap = (minDist - dist) * 0.5;
+            a.x -= nx * overlap;
+            a.y -= ny * overlap;
+            b.x += nx * overlap;
+            b.y += ny * overlap;
+          }
+        }
+      }
+
+      // ランダムドリフト + 壁バウンス
+      if (!reducedMotion) {
+        const BOUNCE_MARGIN = 30;
+        const BOUNCE_DAMPING = 0.85;
+        // 集団圧力がなくなったので穏やかな最低反発速度で十分
+        const MIN_BOUNCE_V = 1.0;
+
         for (const node of nodes) {
-          node.vx += (Math.random() - 0.5) * 0.06;
-          node.vy += (Math.random() - 0.5) * 0.06;
-          const r = radiusForCount(node.stat.commitCount);
-          if (node.x < -r)   node.x = w + r;
-          if (node.x > w + r) node.x = -r;
-          if (node.y < -r)   node.y = h + r;
-          if (node.y > h + r) node.y = -r;
+          // 集団圧力なし → ドリフト入力を少し戻して拡散を促進
+          node.vx += (Math.random() - 0.5) * 0.05;
+          node.vy += (Math.random() - 0.5) * 0.05;
+
+          if (node.x < BOUNCE_MARGIN) {
+            node.x = BOUNCE_MARGIN;
+            node.vx = Math.max(Math.abs(node.vx) * BOUNCE_DAMPING, MIN_BOUNCE_V);
+          } else if (node.x > w - BOUNCE_MARGIN) {
+            node.x = w - BOUNCE_MARGIN;
+            node.vx = -Math.max(Math.abs(node.vx) * BOUNCE_DAMPING, MIN_BOUNCE_V);
+          }
+          if (node.y < BOUNCE_MARGIN) {
+            node.y = BOUNCE_MARGIN;
+            node.vy = Math.max(Math.abs(node.vy) * BOUNCE_DAMPING, MIN_BOUNCE_V);
+          } else if (node.y > h - BOUNCE_MARGIN) {
+            node.y = h - BOUNCE_MARGIN;
+            node.vy = -Math.max(Math.abs(node.vy) * BOUNCE_DAMPING, MIN_BOUNCE_V);
+          }
+        }
+
+        const MAX_V = 2.0;
+        for (const node of nodes) {
+          if (node.vx > MAX_V) node.vx = MAX_V;
+          else if (node.vx < -MAX_V) node.vx = -MAX_V;
+          if (node.vy > MAX_V) node.vy = MAX_V;
+          else if (node.vy < -MAX_V) node.vy = -MAX_V;
         }
       }
 
