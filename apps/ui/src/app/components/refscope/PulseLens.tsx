@@ -34,10 +34,15 @@ const MAX_COMMITS = 30;
 const HIGHLIGHT_MS = 4000;
 const NEW_FILE_MS = 3500;
 const BURST_MS = 600;
+// 既存ファイルの変更検知時の "大爆発" 持続時間。スケール曲線とリング寿命が共有する。
+// 200 (旧) は控えめすぎて気づかれにくかったので、新規ファイルの shockwave と同等まで延ばす。
+const CHANGE_BURST_MS = 700;
+// 変更検知バーストのピーク倍率 (1 + N)。1.2 (旧) → 2.5 で 3.5x まで膨らむ。
+const CHANGE_BURST_SCALE = 2.5;
 const RECENT_CHANGES_MAX = 8;
 const RECENCY_FADE_MS = 30 * 60 * 1000; // 30 分以上で明度低下
 const TAU = Math.PI * 2;
-const MAX_SPARKS = 180;
+const MAX_SPARKS = 360;
 
 // ---------------------------------------------------------------------------
 // File-kind classification
@@ -474,26 +479,44 @@ function useCanvasParticleField({
     }
 
     function spawnFireworks(px: number, py: number, color: string) {
-      const count = 20 + Math.floor(Math.random() * 13); // 20-32
-      for (let i = 0; i < count; i++) {
-        const angle = (i / count) * TAU + (Math.random() - 0.5) * 0.4;
-        const speed = 5 + Math.random() * 8;
+      // 二重シェル: 内側 = 速い細い火花、外側 = 遅い太い火花。同心円的に
+      // 弾けて見えるよう速度差を付け、視覚的に "大きく" 弾けた感を出す。
+      const inner = 28 + Math.floor(Math.random() * 10); // 28-37
+      for (let i = 0; i < inner; i++) {
+        const angle = (i / inner) * TAU + (Math.random() - 0.5) * 0.4;
+        const speed = 8 + Math.random() * 6; // 8-14
         sparks.push({
           x: px,
           y: py,
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed,
           life: 1,
-          decay: 0.011,
+          decay: 0.012,
           color,
-          size: 2 + Math.random() * 2.5,
+          size: 2 + Math.random() * 2,
+        });
+      }
+      const outer = 18 + Math.floor(Math.random() * 8); // 18-25
+      for (let i = 0; i < outer; i++) {
+        const angle = (i / outer) * TAU + (Math.random() - 0.5) * 0.6;
+        const speed = 14 + Math.random() * 10; // 14-24 — 外殻ほど速く、遠くまで飛ぶ
+        sparks.push({
+          x: px,
+          y: py,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1,
+          decay: 0.008, // 寿命を伸ばして残光を強く
+          color,
+          size: 3 + Math.random() * 3,
         });
       }
       // hard cap — oldest を drop
       if (sparks.length > MAX_SPARKS) {
         sparks.splice(0, sparks.length - MAX_SPARKS);
       }
-      flashes.push({ x: px, y: py, color, until: Date.now() + 100 });
+      // 中央フラッシュも長め (100ms → 180ms) にして "ドン" の余韻を残す
+      flashes.push({ x: px, y: py, color, until: Date.now() + 180 });
     }
 
     function rebuildSim() {
@@ -645,9 +668,9 @@ function useCanvasParticleField({
             // 初回観測 — stamp のみ、爆発しない
             node.lastFiredHash = fp;
           } else if (node.lastFiredHash !== fp) {
-            // 変更を検知 — 大爆発
+            // 変更を検知 — 大爆発: スケールバースト + 二重シェル花火 + 中央フラッシュ
             spawnFireworks(node.x, node.y, colorForKind(node.stat.kind));
-            node.burstUntil = nowMs + 200;
+            node.burstUntil = nowMs + CHANGE_BURST_MS;
             node.lastFiredHash = fp;
           }
           node.wasHighlighted = isHighlighted;  // ラベル強調用に維持
@@ -730,8 +753,9 @@ function useCanvasParticleField({
           const isBurst = nowMs < node.burstUntil;
           const isPop = nowMs < node.popUntil;
           if (isBurst) {
-            const tBurst = 1 - (node.burstUntil - nowMs) / 200;
-            const burstScale = 1 + 1.2 * Math.pow(Math.sin(tBurst * Math.PI), 2);
+            const tBurst = 1 - (node.burstUntil - nowMs) / CHANGE_BURST_MS;
+            // sin² の山に小さなジッターを加えて "弾けた" 印象を強調
+            const burstScale = 1 + CHANGE_BURST_SCALE * Math.pow(Math.sin(tBurst * Math.PI), 2);
             const popScale = isPop
               ? 1 + 0.6 * Math.pow(Math.sin((1 - (node.popUntil - nowMs) / 250) * Math.PI), 2)
               : 1;
@@ -770,6 +794,27 @@ function useCanvasParticleField({
           ctx.arc(x, y, burstR, 0, TAU);
           ctx.strokeStyle = `rgba(${r},${g},${b},${burstAlpha})`;
           ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
+        // --- Change-detected shockwave (二重リング) ---
+        // 既存ファイルが変わったときの "弾けた" 感を視覚化。新規ファイル
+        // shockwave とは別レイヤーで、内側速い・外側遅いの 2 リング。
+        if (!reducedMotion && nowMs < node.burstUntil) {
+          const tBurst = 1 - (node.burstUntil - nowMs) / CHANGE_BURST_MS;
+          const innerR = baseRadius * (1 + tBurst * 6);
+          const innerAlpha = (1 - tBurst) * 0.85;
+          ctx.beginPath();
+          ctx.arc(x, y, innerR, 0, TAU);
+          ctx.strokeStyle = `rgba(${r},${g},${b},${innerAlpha})`;
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+          const outerR = baseRadius * (1 + tBurst * 11);
+          const outerAlpha = (1 - tBurst) * 0.5;
+          ctx.beginPath();
+          ctx.arc(x, y, outerR, 0, TAU);
+          ctx.strokeStyle = `rgba(${r},${g},${b},${outerAlpha})`;
+          ctx.lineWidth = 1.5;
           ctx.stroke();
         }
 
