@@ -1,7 +1,13 @@
 import { GitCommandError } from "./gitRunner.js";
-import { isValidRepoId } from "./validation.js";
+import {
+  isValidRepoId,
+  parseFleetIncludeQuery,
+  parseFleetWindowQuery,
+  parsePostBodyJson,
+  validateRepoAddInput,
+} from "./validation.js";
 
-export function createRequestHandler(config, gitService) {
+export function createRequestHandler(config, gitService, fleetService) {
   return async function handleRequest(req, res) {
     setSecurityHeaders(res);
     setCorsHeaders(req, res, config.allowedOrigins);
@@ -10,6 +16,22 @@ export function createRequestHandler(config, gitService) {
       res.writeHead(204);
       res.end();
       return;
+    }
+
+    // POST /api/repos — add a repository to the allowlist at runtime
+    if (req.method === "POST" && (new URL(req.url ?? "/", "http://localhost")).pathname === "/api/repos") {
+      await handlePostRepos(req, res, config, gitService);
+      return;
+    }
+
+    // DELETE /api/repos/:id — remove a user-managed repository from the allowlist
+    if (req.method === "DELETE") {
+      const parsedUrl = new URL(req.url ?? "/", "http://localhost");
+      const deleteParts = decodePathParts(parsedUrl.pathname);
+      if (deleteParts && deleteParts[0] === "api" && deleteParts[1] === "repos" && deleteParts.length === 3) {
+        await handleDeleteRepo(req, res, config, gitService, deleteParts[2]);
+        return;
+      }
     }
 
     try {
@@ -33,6 +55,25 @@ export function createRequestHandler(config, gitService) {
 
       if (route.name === "repos") {
         sendJson(res, 200, { repositories: gitService.listRepositories() });
+        return;
+      }
+
+      if (route.name === "fleetSnapshot") {
+        const includeResult = parseFleetIncludeQuery(url.searchParams.get("include"));
+        if (!includeResult.ok) {
+          sendJson(res, 400, { error: includeResult.error });
+          return;
+        }
+        const windowResult = parseFleetWindowQuery(url.searchParams.get("window"));
+        if (!windowResult.ok) {
+          sendJson(res, 400, { error: windowResult.error });
+          return;
+        }
+        const snapshot = await fleetService.getFleetSnapshot({
+          include: includeResult.value,
+          window: windowResult.value,
+        });
+        sendJson(res, 200, snapshot);
         return;
       }
 
@@ -132,6 +173,14 @@ function matchRoute(method, pathname) {
   if (!parts) {
     return { name: "badRequest", error: "Invalid request path", params: {} };
   }
+
+  // Fleet snapshot endpoint: GET /api/fleet/snapshot
+  // Discriminated on parts[1] === 'fleet' so it never collides with the
+  // /api/repos/:repoId family (parts[1] === 'repos').
+  if (parts[0] === "api" && parts[1] === "fleet" && parts[2] === "snapshot" && parts.length === 3) {
+    return { name: "fleetSnapshot", params: {} };
+  }
+
   if (parts[0] !== "api" || parts[1] !== "repos" || !parts[2]) return null;
 
   const repoId = parts[2];
@@ -303,7 +352,180 @@ function setCorsHeaders(req, res, allowedOrigins) {
   if (allowedOrigins === "*" || allowedOrigins.has(origin)) {
     res.setHeader("access-control-allow-origin", origin);
     res.setHeader("vary", "Origin");
-    res.setHeader("access-control-allow-methods", "GET, OPTIONS");
+    res.setHeader("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
     res.setHeader("access-control-allow-headers", "content-type");
+  }
+}
+
+/**
+ * Read and buffer the request body up to maxBytes.
+ * Returns a Promise<Buffer>.
+ * Rejects with an error if the body exceeds maxBytes or a read error occurs.
+ *
+ * @param {import("node:http").IncomingMessage} req
+ * @param {number} maxBytes
+ * @returns {Promise<Buffer>}
+ */
+function readRequestBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let totalSize = 0;
+    let aborted = false;
+
+    req.on("data", (chunk) => {
+      if (aborted) return;
+      totalSize += chunk.length;
+      if (totalSize > maxBytes) {
+        aborted = true;
+        reject(new Error("Request body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      if (!aborted) {
+        resolve(Buffer.concat(chunks));
+      }
+    });
+
+    req.on("error", (err) => {
+      if (!aborted) {
+        aborted = true;
+        reject(err);
+      }
+    });
+  });
+}
+
+/**
+ * Check that the request Origin header is present and matches the allowlist.
+ * Used for POST/DELETE only (CSRF guard).
+ *
+ * @param {import("node:http").IncomingMessage} req
+ * @param {Set<string> | "*"} allowedOrigins
+ * @returns {{ ok: true } | { ok: false, error: string }}
+ */
+function requireSafeOrigin(req, allowedOrigins) {
+  const origin = req.headers.origin;
+  if (!origin) {
+    return { ok: false, error: "Missing Origin header" };
+  }
+  if (allowedOrigins !== "*" && !allowedOrigins.has(origin)) {
+    return { ok: false, error: "Origin not allowed" };
+  }
+  return { ok: true };
+}
+
+/**
+ * Handle POST /api/repos — add a repository to the runtime allowlist.
+ *
+ * Flow: requireSafeOrigin → readRequestBody → parsePostBodyJson →
+ *       validateRepoAddInput → gitService.addRepository → 200
+ *
+ * @param {import("node:http").IncomingMessage} req
+ * @param {import("node:http").ServerResponse} res
+ * @param {object} config
+ * @param {object} gitService
+ */
+async function handlePostRepos(req, res, config, gitService) {
+  try {
+    const originCheck = requireSafeOrigin(req, config.allowedOrigins);
+    if (!originCheck.ok) {
+      sendJson(res, 403, { error: originCheck.error });
+      return;
+    }
+
+    let bodyBuffer;
+    try {
+      bodyBuffer = await readRequestBody(req, 4096);
+    } catch {
+      sendJson(res, 400, { error: "Request body too large" });
+      return;
+    }
+
+    const parseResult = parsePostBodyJson(bodyBuffer, { id: "string", path: "string" });
+    if (!parseResult.ok) {
+      sendJson(res, 400, { error: parseResult.error });
+      return;
+    }
+
+    const { id, path } = parseResult.value;
+    const validateResult = validateRepoAddInput({ id, path });
+    if (!validateResult.ok) {
+      sendJson(res, 400, { error: validateResult.error });
+      return;
+    }
+
+    const { id: validId, normalizedPath } = validateResult.value;
+
+    let entry;
+    try {
+      entry = gitService.addRepository(validId, normalizedPath);
+    } catch (err) {
+      const msg = err.message ?? "";
+      if (msg.includes("already exists")) {
+        sendJson(res, 409, { error: "Repository id already exists" });
+      } else if (msg.includes("already registered")) {
+        // Extract the conflicting id from the error message
+        const match = msg.match(/already registered as ([^:]+)/);
+        const conflictId = match ? match[1].trim() : "another id";
+        sendJson(res, 409, { error: `Repository path already registered as ${conflictId}` });
+      } else if (msg.includes("maximum") || msg.includes("allowlist is at")) {
+        sendJson(res, 400, { error: "Repository allowlist full (max 32)" });
+      } else {
+        handleError(res, err);
+      }
+      return;
+    }
+
+    sendJson(res, 200, { repository: entry });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+/**
+ * Handle DELETE /api/repos/:id — remove a user-managed repository from the allowlist.
+ *
+ * Flow: requireSafeOrigin → isValidRepoId → gitService.removeRepository → 204
+ *
+ * @param {import("node:http").IncomingMessage} req
+ * @param {import("node:http").ServerResponse} res
+ * @param {object} config
+ * @param {object} gitService
+ * @param {string} id
+ */
+async function handleDeleteRepo(req, res, config, gitService, id) {
+  try {
+    const originCheck = requireSafeOrigin(req, config.allowedOrigins);
+    if (!originCheck.ok) {
+      sendJson(res, 403, { error: originCheck.error });
+      return;
+    }
+
+    if (!isValidRepoId(id)) {
+      sendJson(res, 400, { error: "Invalid repository id" });
+      return;
+    }
+
+    try {
+      gitService.removeRepository(id);
+    } catch (err) {
+      const msg = err.message ?? "";
+      if (msg.includes("env-origin")) {
+        sendJson(res, 400, { error: "Cannot remove repository defined via RTGV_REPOS env var" });
+      } else if (msg.includes("not found") || msg.includes("Repository not found")) {
+        sendJson(res, 404, { error: "Repository not found" });
+      } else {
+        handleError(res, err);
+      }
+      return;
+    }
+
+    res.writeHead(204);
+    res.end();
+  } catch (error) {
+    handleError(res, error);
   }
 }
