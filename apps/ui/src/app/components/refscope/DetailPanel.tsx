@@ -7,7 +7,11 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import type { Commit, CommitDetail } from "./data";
-import type { DiffPayload, WorkTreeResponse } from "../../api";
+import type {
+  DiffPayload,
+  WorkTreeResponse,
+  WorkTreeUntrackedFile,
+} from "../../api";
 import { DiffViewer } from "./DiffViewer";
 import {
   ContextMenu,
@@ -374,6 +378,8 @@ export function DetailPanel({
  *   that includes the active tab so switching tabs resets transient viewer
  *   state (collapse, query) the same way switching commits does.
  */
+type WorkTreeTab = "staged" | "unstaged" | "untracked";
+
 function WorkTreePanel({
   workTree,
   onOpenFileHistory,
@@ -383,7 +389,7 @@ function WorkTreePanel({
   onOpenFileHistory: (path: string) => void;
   onFilterByPath?: (path: string) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<"staged" | "unstaged">("staged");
+  const [activeTab, setActiveTab] = useState<WorkTreeTab>("staged");
 
   if (!workTree) {
     return (
@@ -395,15 +401,26 @@ function WorkTreePanel({
 
   const stagedFiles = workTree.staged.summary.fileCount;
   const unstagedFiles = workTree.unstaged.summary.fileCount;
+  const untrackedFiles = workTree.untracked?.summary.fileCount ?? 0;
+  const untrackedAvailable = !workTree.notes.untrackedExcluded && Boolean(workTree.untracked);
   // Default the active tab to whichever side has changes. Recomputed on each
   // render so the user lands on a useful tab when the underlying state
   // changes — e.g. they refreshed and only the unstaged side has content now.
-  const effectiveTab: "staged" | "unstaged" =
-    stagedFiles === 0 && unstagedFiles > 0
-      ? "unstaged"
-      : activeTab;
-  const section = effectiveTab === "staged" ? workTree.staged : workTree.unstaged;
-  const filesInTab = section.summary.fileCount;
+  const tabHasContent = (tab: WorkTreeTab) =>
+    tab === "staged"
+      ? stagedFiles > 0
+      : tab === "unstaged"
+      ? unstagedFiles > 0
+      : untrackedAvailable && untrackedFiles > 0;
+  const effectiveTab: WorkTreeTab = tabHasContent(activeTab)
+    ? activeTab
+    : stagedFiles > 0
+    ? "staged"
+    : unstagedFiles > 0
+    ? "unstaged"
+    : untrackedAvailable && untrackedFiles > 0
+    ? "untracked"
+    : activeTab;
 
   return (
     <PanelShell>
@@ -459,6 +476,15 @@ function WorkTreePanel({
           label="Unstaged"
           onSelect={() => setActiveTab("unstaged")}
         />
+        {untrackedAvailable ? (
+          <WorkTreeTabButton
+            tabValue="untracked"
+            active={effectiveTab === "untracked"}
+            fileCount={untrackedFiles}
+            label="Untracked"
+            onSelect={() => setActiveTab("untracked")}
+          />
+        ) : null}
         <div className="flex-1" />
         <span
           style={{
@@ -467,7 +493,9 @@ function WorkTreePanel({
             fontFamily: "var(--rs-mono)",
           }}
         >
-          +{section.summary.added} −{section.summary.deleted}
+          {effectiveTab === "untracked"
+            ? `+${workTree.untracked?.summary.added ?? 0}`
+            : `+${(effectiveTab === "staged" ? workTree.staged : workTree.unstaged).summary.added} −${(effectiveTab === "staged" ? workTree.staged : workTree.unstaged).summary.deleted}`}
         </span>
       </div>
 
@@ -477,31 +505,47 @@ function WorkTreePanel({
         role="tabpanel"
         aria-label={`${effectiveTab} changes`}
       >
-        {filesInTab === 0 ? (
-          <Empty>
-            {effectiveTab === "staged"
-              ? "No staged changes."
-              : "No unstaged changes."}
-          </Empty>
-        ) : section.diff || section.truncated ? (
-          <DiffViewer
-            diff={section.diff}
-            truncated={section.truncated}
-            maxBytes={0}
-            // Sentinel `commitHash`: the viewer uses this prop as a reset
-            // key. Encoding the side keeps fullscreen / filter state from
-            // bleeding across tabs and across snapshots.
-            commitHash={`worktree:${effectiveTab}:${workTree.snapshotAt}`}
-            onOpenFileHistory={onOpenFileHistory}
-            onFilterByPath={onFilterByPath}
-          />
-        ) : (
-          <Empty>
-            {effectiveTab === "staged"
-              ? "No staged changes."
-              : "No unstaged changes."}
-          </Empty>
-        )}
+        {effectiveTab === "untracked" ? (
+          untrackedFiles === 0 ? (
+            <Empty>No untracked files.</Empty>
+          ) : (
+            <UntrackedFileList
+              files={workTree.untracked!.files}
+              onFilterByPath={onFilterByPath}
+            />
+          )
+        ) : (() => {
+          const section = effectiveTab === "staged" ? workTree.staged : workTree.unstaged;
+          const filesInTab = section.summary.fileCount;
+          if (filesInTab === 0) {
+            return (
+              <Empty>
+                {effectiveTab === "staged"
+                  ? "No staged changes."
+                  : "No unstaged changes."}
+              </Empty>
+            );
+          }
+          return section.diff || section.truncated ? (
+            <DiffViewer
+              diff={section.diff}
+              truncated={section.truncated}
+              maxBytes={0}
+              // Sentinel `commitHash`: the viewer uses this prop as a reset
+              // key. Encoding the side keeps fullscreen / filter state from
+              // bleeding across tabs and across snapshots.
+              commitHash={`worktree:${effectiveTab}:${workTree.snapshotAt}`}
+              onOpenFileHistory={onOpenFileHistory}
+              onFilterByPath={onFilterByPath}
+            />
+          ) : (
+            <Empty>
+              {effectiveTab === "staged"
+                ? "No staged changes."
+                : "No unstaged changes."}
+            </Empty>
+          );
+        })()}
       </div>
 
       {workTree.notes.untrackedExcluded ? (
@@ -517,22 +561,62 @@ function WorkTreePanel({
         >
           Untracked files are not shown in this view.
         </div>
-      ) : (workTree.untracked?.summary.fileCount ?? 0) > 0 ? (
-        <div
-          className="px-4 py-2"
-          style={{
-            borderTop: "1px solid var(--rs-border)",
-            background: "var(--rs-bg-panel)",
-            fontSize: 11,
-            color: "var(--rs-text-muted)",
-            fontFamily: "var(--rs-mono)",
-          }}
-        >
-          {workTree.untracked!.summary.fileCount} untracked file
-          {workTree.untracked!.summary.fileCount === 1 ? "" : "s"} (visible in Pulse / Stream).
-        </div>
       ) : null}
     </PanelShell>
+  );
+}
+
+function UntrackedFileList({
+  files,
+  onFilterByPath,
+}: {
+  files: WorkTreeUntrackedFile[];
+  onFilterByPath?: (path: string) => void;
+}) {
+  return (
+    <div role="list" aria-label="Untracked files">
+      {files.map((f) => (
+        <ContextMenu key={f.path}>
+          <ContextMenuTrigger asChild>
+            <div
+              role="listitem"
+              className="px-4 py-1.5 flex items-center gap-2"
+              style={{
+                fontSize: 12,
+                fontFamily: "var(--rs-mono)",
+                borderBottom:
+                  "1px solid color-mix(in oklab, var(--rs-border), transparent 60%)",
+              }}
+            >
+              <FileBadge status="A" />
+              <span
+                className="flex-1 truncate"
+                style={{ color: "var(--rs-text-primary)" }}
+                title={f.path}
+              >
+                {f.path}
+              </span>
+              <span style={{ color: "var(--rs-git-added)" }}>+{f.added}</span>
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem
+              onSelect={() => void navigator.clipboard?.writeText(f.path)}
+            >
+              <Copy />
+              Copy path
+            </ContextMenuItem>
+            <ContextMenuItem
+              disabled={!onFilterByPath}
+              onSelect={() => onFilterByPath?.(f.path)}
+            >
+              <FileSearch />
+              Filter by this path
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      ))}
+    </div>
   );
 }
 
@@ -543,7 +627,7 @@ function WorkTreeTabButton({
   label,
   onSelect,
 }: {
-  tabValue: "staged" | "unstaged";
+  tabValue: WorkTreeTab;
   active: boolean;
   fileCount: number;
   label: string;
