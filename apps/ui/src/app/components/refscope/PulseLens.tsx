@@ -1315,15 +1315,21 @@ export function PulseLens({
       {/* Body: canvas stage (left) + sidebar (right) */}
       <div className="rs-pulse-body">
         <div className="rs-pulse-stage" role="region" aria-label="Codebase pulse field">
-          {groups.length === 0 ? (
-            <div className="rs-pulse-stage__empty">Loading file activity…</div>
-          ) : (
-            <canvas
-              ref={canvasRef}
-              className="rs-pulse-canvas"
-              aria-label={`Particle field — ${summary.files} files`}
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: 'pointer' }}
-            />
+          {/* canvas は常時マウント。条件付きマウントだと useCanvasParticleField の
+              useEffect が deps 変化を観測できず resizeCanvas/draw が一度も走らない */}
+          <canvas
+            ref={canvasRef}
+            className="rs-pulse-canvas"
+            aria-label={`Particle field — ${summary.files} files`}
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: 'pointer' }}
+          />
+          {groups.length === 0 && (
+            <div
+              className="rs-pulse-stage__empty"
+              style={{ position: 'absolute', inset: 0 }}
+            >
+              Loading file activity…
+            </div>
           )}
         </div>
 
