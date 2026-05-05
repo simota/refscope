@@ -16,6 +16,11 @@ import {
   type DiffLine,
   type ParsedDiff,
 } from "../../lib/parseUnifiedDiff";
+import {
+  detectLanguage,
+  flattenTokens,
+  tokenizeLine,
+} from "../../lib/syntaxHighlight";
 
 type ParsedEntry = {
   entry: FileHistoryEntry;
@@ -135,6 +140,11 @@ export function FileHistoryView({
       parsed: parseUnifiedDiff(entry.patch),
     }));
   }, [data]);
+
+  // The overlay always targets a single file, so its language is stable for
+  // the overlay's lifetime — detect once here and prop-drill into every commit
+  // card rather than re-detecting per row.
+  const language = useMemo(() => detectLanguage(filePath), [filePath]);
 
   // Date grouping for the sidebar. Buckets preserve insertion order, which is
   // newest-first because the API returns entries in `git log` order. Empty
@@ -359,6 +369,7 @@ export function FileHistoryView({
                   parsed={parsed}
                   active={entry.hash === activeHash}
                   registerRef={registerArticle}
+                  language={language}
                 />
               ))
             : null}
@@ -1026,11 +1037,13 @@ function CommitCard({
   parsed,
   active,
   registerRef,
+  language,
 }: {
   entry: FileHistoryEntry;
   parsed: ParsedDiff;
   active: boolean;
   registerRef: (hash: string, el: HTMLElement | null) => void;
+  language: string | null;
 }) {
   const file = parsed.files[0] ?? null;
 
@@ -1090,7 +1103,7 @@ function CommitCard({
           {file ? <FileBanner file={file} /> : null}
         </div>
       </header>
-      <FileBody parsed={parsed} />
+      <FileBody parsed={parsed} language={language} />
     </article>
   );
 }
@@ -1129,7 +1142,7 @@ function FileBanner({ file }: { file: DiffFile }) {
   return null;
 }
 
-function FileBody({ parsed }: { parsed: ParsedDiff }) {
+function FileBody({ parsed, language }: { parsed: ParsedDiff; language: string | null }) {
   const file = parsed.files[0];
   if (!file) {
     return (
@@ -1165,7 +1178,10 @@ function FileBody({ parsed }: { parsed: ParsedDiff }) {
   }
   const counts = countFileChanges(file);
   return (
+    // `rs-prism` scopes the global Prism token color rules (defined in App.tsx)
+    // to this subtree so highlighted spans pick up the theme's syntax colors.
     <div
+      className="rs-prism"
       style={{
         background: "var(--rs-bg-canvas)",
         fontFamily: "var(--rs-mono)",
@@ -1189,14 +1205,14 @@ function FileBody({ parsed }: { parsed: ParsedDiff }) {
       </div>
       <div role="grid" aria-label="Diff lines">
         {file.hunks.map((hunk, index) => (
-          <HunkBlock key={index} hunk={hunk} />
+          <HunkBlock key={index} hunk={hunk} language={language} />
         ))}
       </div>
     </div>
   );
 }
 
-function HunkBlock({ hunk }: { hunk: DiffHunk }) {
+function HunkBlock({ hunk, language }: { hunk: DiffHunk; language: string | null }) {
   const [collapsed, setCollapsed] = useState(false);
   return (
     <>
@@ -1244,13 +1260,13 @@ function HunkBlock({ hunk }: { hunk: DiffHunk }) {
       {collapsed
         ? null
         : hunk.lines.map((line, lineIndex) => (
-            <DiffLineRow key={lineIndex} line={line} />
+            <DiffLineRow key={lineIndex} line={line} language={language} />
           ))}
     </>
   );
 }
 
-function DiffLineRow({ line }: { line: DiffLine }) {
+function DiffLineRow({ line, language }: { line: DiffLine; language: string | null }) {
   const sigil = sigilFor(line);
   const oldNo = line.kind === "context" || line.kind === "del" ? line.oldLineNo : "";
   const newNo = line.kind === "context" || line.kind === "add" ? line.newLineNo : "";
@@ -1311,9 +1327,33 @@ function DiffLineRow({ line }: { line: DiffLine }) {
         >
           {sigil}
         </span>
-        <span style={{ whiteSpace: "pre", flexShrink: 0 }}>{line.text}</span>
+        <span style={{ whiteSpace: "pre", flexShrink: 0 }}>
+          {renderHighlighted(line.text, language, line.kind)}
+        </span>
       </span>
     </div>
+  );
+}
+
+function renderHighlighted(
+  text: string,
+  language: string | null,
+  kind: DiffLine["kind"],
+) {
+  // `no-newline` lines are diff metadata (`\ No newline at end of file`), not
+  // source — never tokenize. Same fallback as DiffViewer's renderLineContent.
+  if (kind === "no-newline" || !language) return text;
+  const tokens = tokenizeLine(text, language);
+  if (!tokens) return text;
+  const runs = flattenTokens(tokens);
+  return runs.map((run, index) =>
+    run.className ? (
+      <span key={index} className={run.className}>
+        {run.text}
+      </span>
+    ) : (
+      <span key={index}>{run.text}</span>
+    ),
   );
 }
 
