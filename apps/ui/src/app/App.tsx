@@ -13,6 +13,7 @@ import { HotspotLens } from "./components/refscope/HotspotLens";
 import { RiskTrendLens } from "./components/refscope/RiskTrendLens";
 import { RiskHeatmapLens } from "./components/refscope/RiskHeatmapLens";
 import { CoChangeLens } from "./components/refscope/CoChangeLens";
+import { DriftLens } from "./components/refscope/DriftLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -1329,6 +1330,15 @@ export default function App() {
             selectedRef={selectedRef}
             selectedFilePath={fileHistoryPath}
             onOpenFileHistory={submitFileHistoryPath}
+          />
+        </div>
+      )}
+      {activeLens === 'drift' && mode === "detail" && selectedRepo && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-drift" role="tabpanel" aria-labelledby="lens-tab-drift">
+          <DriftLens
+            repoId={selectedRepo}
+            refs={refs}
+            onSelectRef={(ref) => { setSelectedRef(ref); }}
           />
         </div>
       )}
