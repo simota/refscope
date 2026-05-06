@@ -10,6 +10,7 @@ import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
 import { PulseLens } from "./components/refscope/PulseLens";
 import { FileStreamLens } from "./components/refscope/FileStreamLens";
 import { HotspotLens } from "./components/refscope/HotspotLens";
+import { RiskTrendLens } from "./components/refscope/RiskTrendLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -1300,6 +1301,14 @@ export default function App() {
             repoId={selectedRepo}
             selectedRef={selectedRef}
             onOpenFileHistory={submitFileHistoryPath}
+          />
+        </div>
+      )}
+      {activeLens === 'risk-trend' && mode === "detail" && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-risk-trend" role="tabpanel" aria-labelledby="lens-tab-risk-trend">
+          <RiskTrendLens
+            commits={commits}
+            onSelectCommit={(hash) => { setSelected(hash); }}
           />
         </div>
       )}
