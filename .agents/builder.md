@@ -172,3 +172,19 @@ Last fix-up I let `ref` collide with React's reserved prop name. This time the U
 - `pnpm build:mock` (vite build): PASS
 - `make verify`: 8/8 PASS
 - Live curl of `/api/repos/viewer/files/related?path=apps/api/src/gitRunner.js` returns expected co-change rows; target itself absent; 400 / 404 envelopes match spec
+
+## 2026-05-07 — Digest Lens 実装
+
+### Task scope
+最後の Lens「Digest Lens」追加。直近 24h / 7d の活動を 2×2 グリッドダッシュボードで要約。
+
+### Domain decisions
+- Ref Activity は API に専用エンドポイントなし → `listRefs()` の `updatedAt` を UI 側フィルタで近似 (deleted=0 固定)
+- `listCommits` は `since` パラメータ非対応 → `limit=200` で取得後 UI 側で `authorDate >= since` フィルタ
+- `fetchFileHotspot` の `since` パラメータ対応済みを確認 → そのまま使用
+- `fetchCommitsSummary` の `groupBy: "author"` で Contributors 集計
+
+### Verification
+- `pnpm build:ui`: PASS
+- `pnpm build:api`: PASS
+- API 変更なし、新規 npm パッケージなし、新規 CSS 変数なし

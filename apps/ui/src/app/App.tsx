@@ -15,6 +15,7 @@ import { RiskHeatmapLens } from "./components/refscope/RiskHeatmapLens";
 import { CoChangeLens } from "./components/refscope/CoChangeLens";
 import { DriftLens } from "./components/refscope/DriftLens";
 import { OutboxLens } from "./components/refscope/OutboxLens";
+import { DigestLens } from "./components/refscope/DigestLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -1353,6 +1354,19 @@ export default function App() {
               setActiveLens('live');
             }}
             onOpenWorktree={() => { setActiveLens('live'); }}
+          />
+        </div>
+      )}
+      {activeLens === 'digest' && mode === "detail" && selectedRepo && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-digest" role="tabpanel" aria-labelledby="lens-tab-digest">
+          <DigestLens
+            repoId={selectedRepo}
+            onSelectCommit={(hash) => {
+              setSelected(hash);
+              setActiveLens('live');
+            }}
+            onOpenFileHistory={submitFileHistoryPath}
+            setActiveLens={setActiveLens}
           />
         </div>
       )}
