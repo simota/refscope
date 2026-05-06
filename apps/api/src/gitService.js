@@ -68,7 +68,106 @@ const CONVENTIONAL_COMMIT_PREFIX_PATTERN = /^([a-z][a-z0-9-]*)(?:\([^)]*\))?:\s/
 const COMMIT_FIELD_SEPARATOR = "\u0000";
 const COMMIT_RECORD_SEPARATOR = "\u001e";
 
+// ---------------------------------------------------------------------------
+// Risky Diff Detector — Hotspot cache (TTL 60 s) + scoring
+// ---------------------------------------------------------------------------
+
+/** TTL for the per-repo hotspot cache (milliseconds). */
+const HOTSPOT_CACHE_TTL_MS = 60_000;
+
+/**
+ * Compute a risk score for a set of file diffs using hotspot churn data.
+ *
+ * Pure function — no I/O, testable in isolation.
+ *
+ * @param {Array<{ path: string; added: number; deleted: number }>} fileDiffs
+ * @param {Map<string, { churn: number }>} hotspotCache  path → { churn }
+ * @param {{ binaryAlpha?: number; massDeleteBeta?: number }} [opts]
+ * @returns {number} Integer risk score ≥ 0
+ */
+export function scoreDiff(fileDiffs, hotspotCache, { binaryAlpha = 20, massDeleteBeta = 15 } = {}) {
+  if (!fileDiffs || fileDiffs.length === 0) return 0;
+
+  let score = 0;
+
+  for (const file of fileDiffs) {
+    const isBinary = file.added === -1 || file.deleted === -1;
+    if (isBinary) {
+      score += binaryAlpha;
+      continue;
+    }
+
+    const hunkSize = (file.added ?? 0) + (file.deleted ?? 0);
+    const churnEntry = hotspotCache.get(file.path);
+    const churn = churnEntry?.churn ?? 0;
+
+    // hotspotWeight: log-scale churn (adds a point per doubling, avoids extreme outliers)
+    const hotspotWeight = churn > 0 ? Math.log2(churn + 1) : 0;
+    score += hotspotWeight * hunkSize;
+
+    // mass-delete penalty: ≥ 100 deleted lines in a single file
+    if ((file.deleted ?? 0) >= 100) {
+      score += massDeleteBeta;
+    }
+  }
+
+  return Math.round(score);
+}
+
 export function createGitService(config) {
+  // Hotspot cache: key = repoId, value = { files: Map<path, { churn }>, ts }
+  /** @type {Map<string, { files: Map<string, { churn: number }>; ts: number }>} */
+  const _hotspotCache = new Map();
+
+  /**
+   * Refresh the hotspot churn cache for a repo (fire-and-forget safe).
+   * Uses the last 200 commits, no LOC fetching needed.
+   *
+   * @param {{ id: string; name: string; path: string }} repo
+   * @returns {Promise<void>}
+   */
+  async function refreshHotspotCache(repo) {
+    const logArgs = [
+      "-z",
+      "--no-show-signature",
+      "--name-only",
+      "--format=%H%x1f%aI",
+      "--max-count=200",
+      "--end-of-options",
+      "HEAD",
+      "--",
+    ];
+    const { stdout } = await runGit(repo, ["log", ...logArgs], {
+      timeoutMs: config.gitTimeoutMs,
+    });
+
+    /** @type {Map<string, { churn: number }>} */
+    const files = new Map();
+    /** @type {Set<string> | null} */
+    let currentCommitPaths = null;
+
+    for (let raw of stdout.split("\x00")) {
+      const record = raw.startsWith("\n") ? raw.slice(1) : raw;
+      if (!record) continue;
+      if (record.includes("\x1f")) {
+        // Header record — start new commit
+        currentCommitPaths = new Set();
+      } else {
+        if (currentCommitPaths !== null && !currentCommitPaths.has(record)) {
+          currentCommitPaths.add(record);
+          const existing = files.get(record);
+          if (existing) {
+            existing.churn += 1;
+          } else {
+            files.set(record, { churn: 1 });
+          }
+        }
+      }
+    }
+
+    _hotspotCache.set(repo.id, { files, ts: Date.now() });
+  }
+
   async function listRefs(repo) {
     const { stdout } = await runGit(
       repo,
@@ -323,12 +422,29 @@ export function createGitService(config) {
         }
 
         const commits = await listCommitRange(repo, change.previousHash, change.ref.hash);
+
+        // Refresh hotspot cache if stale (fire-and-forget — never blocks the poller)
+        const cached = _hotspotCache.get(repo.id);
+        if (!cached || Date.now() - cached.ts > HOTSPOT_CACHE_TTL_MS) {
+          refreshHotspotCache(repo).catch(() => {
+            // Deliberate no-op: hotspot refresh failures fall back to score 0
+          });
+        }
+
+        const hotspotFiles = _hotspotCache.get(repo.id)?.files ?? new Map();
+
         for (const commit of commits) {
+          // commit.fileDiffs is populated by parseCommitRecords from --numstat output
+          const riskScore = scoreDiff(commit.fileDiffs ?? [], hotspotFiles);
+
+          // Strip internal fileDiffs before emitting — it's a scoring artefact,
+          // not part of the public SSE payload contract.
+          const { fileDiffs: _fd, ...commitPayload } = commit;
           events.push({
             type: "commit_added",
             repoId: repo.id,
             ref: change.ref,
-            commit,
+            commit: { ...commitPayload, riskScore },
           });
         }
       }
@@ -465,6 +581,72 @@ export function createGitService(config) {
           diff: stdout,
           maxBytes: config.diffMaxBytes,
         },
+      };
+    },
+
+    /**
+     * Compute risk score for a specific commit by hash.
+     * Used by GET /api/repos/:id/commits/:sha/risk (future UI integration).
+     *
+     * @param {{ id: string; name: string; path: string }} repo
+     * @param {string} hash — 40-char OID (pre-validated by http.js)
+     * @returns {Promise<{ status: number; body: object }>}
+     */
+    async getCommitRisk(repo, hash) {
+      if (!isValidObjectId(hash)) {
+        return { status: 400, body: { error: "Invalid commit hash" } };
+      }
+      const commitObject = await validateCommitObject(repo, hash, config.gitTimeoutMs);
+      if (!commitObject.ok) {
+        return commitObject.result;
+      }
+
+      const { stdout: numstatOut } = await runGit(
+        repo,
+        commitNumstatShowArgs(hash),
+        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+      );
+
+      const fileDiffs = numstatOut
+        .split("\n")
+        .map((line) => {
+          const parts = line.trimEnd().split("\t");
+          if (parts.length < 3) return null;
+          const filePath = normalizeNumstatPath(parts.at(-1));
+          // Binary files are represented as "-" in numstat output.
+          // Signal binary with -1 so scoreDiff can apply the binary penalty.
+          const isBinaryLine = parts[0] === "-" || parts[1] === "-";
+          return {
+            path: filePath,
+            added: isBinaryLine ? -1 : parseStatCount(parts[0]),
+            deleted: isBinaryLine ? -1 : parseStatCount(parts[1]),
+          };
+        })
+        .filter(Boolean);
+
+      // Ensure hotspot cache is populated (best-effort)
+      if (!_hotspotCache.has(repo.id)) {
+        try {
+          await refreshHotspotCache(repo);
+        } catch {
+          // Fall back to empty cache — score degrades gracefully to 0
+        }
+      }
+
+      const hotspotFiles = _hotspotCache.get(repo.id)?.files ?? new Map();
+      const riskScore = scoreDiff(fileDiffs, hotspotFiles);
+
+      // Breakdown: top files by individual contribution
+      const breakdown = fileDiffs.map((f) => {
+        const churn = hotspotFiles.get(f.path)?.churn ?? 0;
+        const weight = churn > 0 ? Math.log2(churn + 1) : 0;
+        const contribution = Math.round(weight * ((f.added ?? 0) + (f.deleted ?? 0)));
+        return { path: f.path, churn, contribution };
+      }).sort((a, b) => b.contribution - a.contribution).slice(0, 10);
+
+      return {
+        status: 200,
+        body: { hash, riskScore, breakdown },
       };
     },
 
@@ -1481,7 +1663,26 @@ function parseCommitRecords(stdout) {
       const metadata = lines[0] ?? "";
       const [hash, parents, author, authorDate, subject, refs, signatureCode] =
         metadata.split(COMMIT_FIELD_SEPARATOR);
-      const stats = parseNumstatSummary(lines.slice(1));
+      const numstatLines = lines.slice(1);
+      const stats = parseNumstatSummary(numstatLines);
+      // Parse per-file diffs for risk scoring (used by collectRefEvents).
+      // parseNumstatLine returns added=0 for binary "-" lines, but scoreDiff
+      // needs -1 to trigger the binary penalty, so we parse raw here.
+      const fileDiffs = numstatLines.reduce((acc, line) => {
+        const trimmed = line.trimEnd();
+        if (!trimmed) return acc;
+        const parts = trimmed.split("\t");
+        if (parts.length < 3) return acc;
+        const isBinaryLine = parts[0] === "-" || parts[1] === "-";
+        const filePath = normalizeNumstatPath(parts.at(-1));
+        if (!filePath) return acc;
+        acc.push({
+          path: filePath,
+          added: isBinaryLine ? -1 : parseStatCount(parts[0]),
+          deleted: isBinaryLine ? -1 : parseStatCount(parts[1]),
+        });
+        return acc;
+      }, []);
       return {
         hash,
         shortHash: hash.slice(0, 7),
@@ -1496,6 +1697,7 @@ function parseCommitRecords(stdout) {
         added: stats.added,
         deleted: stats.deleted,
         fileCount: stats.fileCount,
+        fileDiffs,
       };
     });
 }

@@ -141,6 +141,11 @@ export function createRequestHandler(config, gitService, fleetService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "commitsRisk") {
+        const result = await gitService.getCommitRisk(repo.value, route.params.hash);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "compare") {
         const result = await gitService.compareRefs(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
@@ -269,6 +274,13 @@ function matchRoute(method, pathname) {
   }
   if (parts.length === 6 && parts[3] === "commits" && parts[5] === "diff") {
     return { name: "diff", params: { repoId, hash: parts[4] } };
+  }
+  // Risky Diff Detector: GET /api/repos/:id/commits/:sha/risk
+  // Matched before the generic /commits/:hash route so "risk" is never
+  // misread as a hash value. Input validation (isValidObjectId) lives in
+  // the handler to keep matchRoute pure.
+  if (parts.length === 6 && parts[3] === "commits" && parts[5] === "risk") {
+    return { name: "commitsRisk", params: { repoId, hash: parts[4] } };
   }
   // File-history view: `/files/history` is a literal sub-path so the file path
   // itself stays in the query string (where validation owns the contract).
