@@ -55,12 +55,24 @@ type GraphLink = d3Force.SimulationLinkDatum<GraphNode> & {
 // ---------------------------------------------------------------------------
 
 const TOP_K = 20;
-const CENTER_RADIUS = 18;
-const MIN_NODE_RADIUS = 6;
-const MAX_NODE_RADIUS = 14;
-const MIN_LINK_WIDTH = 1;
-const MAX_LINK_WIDTH = 6;
-const SVG_PADDING = 40;
+// All visual sizes below are baseline values for a 600x400 canvas.
+// At runtime they are multiplied by a `scale` factor derived from the actual
+// container dimensions so the graph fills any panel without going tiny.
+const CENTER_RADIUS = 22;
+const MIN_NODE_RADIUS = 10;
+const MAX_NODE_RADIUS = 20;
+const MIN_LINK_WIDTH = 1.5;
+const MAX_LINK_WIDTH = 7;
+const LINK_DIST_NEAR = 110;
+const LINK_DIST_FAR = 260;
+const CHARGE_STRENGTH = -260;
+const NODE_LABEL_FONT = 12;
+const CENTER_LABEL_FONT = 11;
+const LINK_LABEL_FONT = 11;
+const SVG_PADDING = 48;
+const SCALE_BASELINE = 600;
+const SCALE_MIN = 1;
+const SCALE_MAX = 2.4;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -77,6 +89,12 @@ function lerp(t: number, lo: number, hi: number): number {
 function shortPath(path: string): string {
   const parts = path.split('/');
   return parts[parts.length - 1] ?? path;
+}
+
+function computeScale(width: number, height: number): number {
+  if (!width || !height) return SCALE_MIN;
+  const minDim = Math.min(width, height);
+  return clamp(minDim / SCALE_BASELINE, SCALE_MIN, SCALE_MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +361,17 @@ export function CoChangeLens({
       )}
 
       {/* Graph SVG */}
-      {!error && nodes.length > 0 && (
+      {!error && nodes.length > 0 && (() => {
+        const scale = computeScale(svgSize.w, svgSize.h);
+        const minLinkW = MIN_LINK_WIDTH * scale;
+        const maxLinkW = MAX_LINK_WIDTH * scale;
+        const centerR = CENTER_RADIUS * scale;
+        const minNodeR = MIN_NODE_RADIUS * scale;
+        const maxNodeR = MAX_NODE_RADIUS * scale;
+        const nodeFont = NODE_LABEL_FONT * scale;
+        const centerFont = CENTER_LABEL_FONT * scale;
+        const linkFont = LINK_LABEL_FONT * scale;
+        return (
         <svg
           width="100%"
           height="100%"
@@ -355,9 +383,9 @@ export function CoChangeLens({
           <g>
             {links.map((link, i) => {
               const strokeW = clamp(
-                lerp(link.strength, MIN_LINK_WIDTH, MAX_LINK_WIDTH),
-                MIN_LINK_WIDTH,
-                MAX_LINK_WIDTH,
+                lerp(link.strength, minLinkW, maxLinkW),
+                minLinkW,
+                maxLinkW,
               );
               const midX = (link.source.x + link.target.x) / 2;
               const midY = (link.source.y + link.target.y) / 2;
@@ -377,7 +405,7 @@ export function CoChangeLens({
                     x={midX}
                     y={midY - 4}
                     textAnchor="middle"
-                    fontSize={9}
+                    fontSize={linkFont}
                     fontFamily="var(--rs-mono)"
                     fill="var(--rs-text-muted)"
                     pointerEvents="none"
@@ -393,11 +421,11 @@ export function CoChangeLens({
           <g>
             {nodes.map((node) => {
               const r = node.isCenter
-                ? CENTER_RADIUS
+                ? centerR
                 : clamp(
-                    lerp(node.strength, MIN_NODE_RADIUS, MAX_NODE_RADIUS),
-                    MIN_NODE_RADIUS,
-                    MAX_NODE_RADIUS,
+                    lerp(node.strength, minNodeR, maxNodeR),
+                    minNodeR,
+                    maxNodeR,
                   );
               const fill = node.isCenter
                 ? 'var(--rs-accent)'
@@ -431,33 +459,34 @@ export function CoChangeLens({
                     <text
                       textAnchor="middle"
                       dominantBaseline="middle"
-                      fontSize={8}
+                      fontSize={centerFont}
                       fontFamily="var(--rs-mono)"
                       fill={textColor}
                       pointerEvents="none"
                       style={{ userSelect: 'none' }}
                     >
-                      {label.length > 12 ? `${label.slice(0, 10)}…` : label}
+                      {label.length > 14 ? `${label.slice(0, 12)}…` : label}
                     </text>
                   )}
                   {/* ラベル (ノード下) */}
                   <text
-                    y={r + 10}
+                    y={r + nodeFont + 2}
                     textAnchor="middle"
-                    fontSize={9}
+                    fontSize={nodeFont}
                     fontFamily="var(--rs-mono)"
                     fill={node.isCenter ? 'var(--rs-accent)' : 'var(--rs-text-secondary)'}
                     pointerEvents="none"
                     style={{ userSelect: 'none' }}
                   >
-                    {label.length > 18 ? `${label.slice(0, 16)}…` : label}
+                    {label.length > 22 ? `${label.slice(0, 20)}…` : label}
                   </text>
                 </g>
               );
             })}
           </g>
         </svg>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -476,6 +505,12 @@ function buildGraph(
 ): void {
   const cx = width / 2;
   const cy = height / 2;
+  const scale = computeScale(width, height);
+  const linkDistNear = LINK_DIST_NEAR * scale;
+  const linkDistFar = LINK_DIST_FAR * scale;
+  const charge = CHARGE_STRENGTH * scale;
+  const centerR = CENTER_RADIUS * scale;
+  const maxNodeR = MAX_NODE_RADIUS * scale;
 
   if (related.length === 0) {
     const centerNode: GraphNode = {
@@ -536,16 +571,16 @@ function buildGraph(
         .id((d) => d.id)
         .distance((d) => {
           // 強度が高い (よく一緒に変化する) ほど中心に近い
-          return lerp(1 - (d as GraphLink).strength, 80, 200);
+          return lerp(1 - (d as GraphLink).strength, linkDistNear, linkDistFar);
         })
         .strength(0.8),
     )
-    .force('charge', d3Force.forceManyBody<GraphNode>().strength(-120))
-    .force('center', d3Force.forceCenter<GraphNode>(cx, cy).strength(0.3))
+    .force('charge', d3Force.forceManyBody<GraphNode>().strength(charge))
+    .force('center', d3Force.forceCenter<GraphNode>(cx, cy).strength(0.18))
     .force(
       'collision',
       d3Force.forceCollide<GraphNode>().radius((d) =>
-        (d as GraphNode).isCenter ? CENTER_RADIUS + 10 : MAX_NODE_RADIUS + 8,
+        (d as GraphNode).isCenter ? centerR + 12 : maxNodeR + 10,
       ),
     )
     .stop();
