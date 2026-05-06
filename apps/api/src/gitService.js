@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { GitCommandError, runGit } from "./gitRunner.js";
 import { addRepository as configAddRepository, removeRepository as configRemoveRepository } from "./config.js";
@@ -47,6 +48,15 @@ export const RELATED_FILES_TOP_K = 20;
 // over-cap responses without leaking the extra ref into the payload.
 export const REF_DRIFT_DEFAULT_LIMIT = 50;
 export const REF_DRIFT_MAX_LIMIT = 100;
+
+// Hotspot Lens hard caps. `limit` governs how many files appear in the
+// response; `commitCap` bounds the `git log` scan depth so large repositories
+// stay within the latency budget.  Both have explicit defaults and maxima that
+// `parseLimitQuery` enforces before any Git command is invoked.
+export const HOTSPOT_DEFAULT_LIMIT = 500;
+export const HOTSPOT_MAX_LIMIT = 1000;
+export const HOTSPOT_DEFAULT_COMMIT_CAP = 200;
+export const HOTSPOT_MAX_COMMIT_CAP = 500;
 
 // Conventional-commit prefix grouping uses a literal regex match on the
 // commit subject. `feat`, `fix`, `chore`, … with optional scope, then a colon
@@ -824,6 +834,266 @@ export function createGitService(config) {
             stat: `git diff --stat ${base} ${target}`,
             diff: `git diff ${base} ${target}`,
           },
+        },
+      };
+    },
+
+    /**
+     * Compute file hotspot data for a given ref: LOC + bytes (from `git show`)
+     * and churn / lastChangedAt (from `git log --name-only`).
+     *
+     * Returns `{ status, body }` where body is a `HotspotResponse`-shaped object.
+     *
+     * @param {{ id: string, path: string }} repo
+     * @param {{ ref?: string, limit?: number, commitCap?: number, since?: string | null }} query
+     */
+    async getFileHotspot(repo, query) {
+      const { ref: refInput, limit, commitCap, since: sinceISO } = query;
+      const refLabel = refInput ?? "HEAD";
+
+      // Hotspot Lens has a dedicated per-request timeout cap (config.hotspotTimeoutMs,
+      // default 20 s) to give large repos enough headroom.  Tests that need to exercise
+      // the timeout/truncated path inject a tiny config.gitTimeoutMs — we honour
+      // whichever of the two is smaller so test overrides still take effect.
+      const hotspotTimeoutMs = Math.min(
+        config.hotspotTimeoutMs ?? HOTSPOT_GIT_TIMEOUT_MS,
+        config.gitTimeoutMs,
+      );
+      // maxBytes cap: use config override when supplied (tests inject small values
+      // to trigger the truncated path), otherwise use the module constant.
+      const hotspotMaxBytes = config.hotspotMaxBytes ?? HOTSPOT_MAX_BYTES;
+
+      // ── Step 1: resolve ref to commit OID ──────────────────────────────────
+      const commitishRef = await resolveCommitishRevision(repo, refLabel, hotspotTimeoutMs);
+      if (!commitishRef.ok) {
+        return commitishRef.result;
+      }
+      const resolvedOid = commitishRef.hash;
+
+      // ── Step 2: collect file paths via git log --name-only ─────────────────
+      // Allowlist does not include `ls-tree`, so we derive the file set from
+      // the name-only log output (spec Q-1 resolution: no allowlist change).
+      // -z uses NUL as the record separator so non-ASCII paths are preserved
+      // verbatim (without -z, git may mangle or drop paths containing non-ASCII
+      // characters on some platforms).  \x1f (ASCII unit separator) delimits the
+      // header fields within each record; \x00 (NUL) is reserved for -z.
+      const logArgs = [
+        "-z",
+        "--no-show-signature",
+        "--name-only",
+        "--format=%H%x1f%aI%x1f%aE",
+        `--max-count=${commitCap}`,
+        ...(sinceISO ? [`--since=${sinceISO}`] : []),
+        "--end-of-options",
+        resolvedOid,
+        "--",
+      ];
+
+      let logStdout;
+      try {
+        const result = await runGit(repo, ["log", ...logArgs], {
+          timeoutMs: hotspotTimeoutMs,
+          maxBytes: hotspotMaxBytes,
+        });
+        logStdout = result.stdout;
+      } catch (err) {
+        if (err instanceof GitCommandError) {
+          if (err.timedOut) {
+            return {
+              status: 504,
+              body: { error: "timeout", truncated: true, truncationReason: "timeout" },
+            };
+          }
+          if (err.truncated) {
+            return {
+              status: 504,
+              body: { error: "timeout", truncated: true, truncationReason: "maxBytes" },
+            };
+          }
+        }
+        throw err;
+      }
+
+      // ── Step 3: parse log output ────────────────────────────────────────────
+      // With -z, git log uses NUL (\x00) as the record separator between
+      // fields within each entry.  The format is:
+      //
+      //   <header>\x00<path1>\x00<path2>\x00...<pathN>\x00<header>\x00...
+      //
+      // where <header> = %H\x1f%aI\x1f%aE  (fields within the header are
+      // separated by \x1f, ASCII unit separator, to avoid collision with \x00).
+      //
+      // Records containing \x1f are commit headers; all others are file paths.
+      // Path values must NOT be trimmed — non-ASCII filenames may contain
+      // leading/trailing whitespace-like bytes on unusual filesystems.
+      /** @type {Map<string, { churn: number; lastChangedAt: string }>} */
+      const fileStats = new Map();
+      let commitsAnalyzed = 0;
+      let currentAuthorDate = "";
+      /** @type {Set<string> | null} */
+      let currentCommitPaths = null;
+
+      for (let raw of logStdout.split("\x00")) {
+        // git log -z emits a newline immediately after the NUL that follows
+        // each header record (before the first path of that commit).  Strip
+        // a single leading \n so paths are matched correctly.  This leading \n
+        // is part of git's record-separator protocol — it is not part of the
+        // actual file path.
+        const record = raw.startsWith("\n") ? raw.slice(1) : raw;
+        if (!record) continue; // empty record between NULs or trailing NUL
+        if (record.includes("\x1f")) {
+          // Header record: %H\x1f%aI\x1f%aE
+          // A new header starts a new commit; reset the per-commit path set so
+          // the same path touched twice in one commit only counts once.
+          const parts = record.split("\x1f");
+          currentAuthorDate = parts[1] ?? "";
+          currentCommitPaths = new Set();
+          commitsAnalyzed += 1;
+        } else {
+          // Path record — do not trim beyond the leading \n already removed,
+          // so non-ASCII filenames with significant whitespace are preserved.
+          if (currentCommitPaths !== null && !currentCommitPaths.has(record)) {
+            currentCommitPaths.add(record);
+            const existing = fileStats.get(record);
+            if (existing) {
+              existing.churn += 1;
+              // keep the most-recent date (log is newest-first)
+              if (!existing.lastChangedAt) existing.lastChangedAt = currentAuthorDate;
+            } else {
+              fileStats.set(record, { churn: 1, lastChangedAt: currentAuthorDate });
+            }
+          }
+        }
+      }
+
+      const allPaths = [...fileStats.keys()];
+
+      // ── Step 4: per-file lines + bytes via git show <oid>:<path> ───────────
+      // Chunk to os.cpus().length / 2 concurrency to avoid saturating the
+      // event loop on large repositories.
+      const concurrency = Math.max(1, Math.floor(os.cpus().length / 2));
+
+      /**
+       * @param {string} filePath
+       * @returns {Promise<{ lines: number, bytes: number }>}
+       */
+      async function fetchFileStat(filePath) {
+        try {
+          const { stdout } = await runGit(
+            repo,
+            ["show", "--no-show-signature", "--end-of-options", `${resolvedOid}:${filePath}`],
+            { timeoutMs: hotspotTimeoutMs, maxBytes: hotspotMaxBytes },
+          );
+          // Split on \n; trailing newline produces an empty final element —
+          // subtract it for an accurate line count.
+          const rawLines = stdout.split("\n");
+          const lines = rawLines.length > 0 && rawLines[rawLines.length - 1] === ""
+            ? rawLines.length - 1
+            : rawLines.length;
+          return { lines };
+        } catch (err) {
+          if (err instanceof GitCommandError) {
+            // Per-file timeouts indicate a single large blob (rare); surface to
+            // the outer 504 handler so the caller knows the budget is exhausted.
+            if (err.timedOut) throw err;
+            // Per-file maxBytes truncation: omit this single path. A huge blob
+            // (bundled assets, lockfiles) shouldn't fail the entire hotspot.
+            if (err.truncated) return null;
+            // exit 128 = file is deleted at this ref, binary blob, or path
+            // does not exist. Return null so the caller omits this path.
+            if (err.exitCode === 128) return null;
+          }
+          throw err;
+        }
+      }
+
+      /** @type {Map<string, { lines: number } | null>} */
+      const sizeMap = new Map();
+
+      for (let i = 0; i < allPaths.length; i += concurrency) {
+        const chunk = allPaths.slice(i, i + concurrency);
+        const results = await Promise.all(chunk.map(fetchFileStat));
+        for (let j = 0; j < chunk.length; j++) {
+          sizeMap.set(chunk[j], results[j]);
+        }
+      }
+
+      // ── Step 5: compose and sort ────────────────────────────────────────────
+      // Exclude paths where git show returned null (deleted/binary at this ref).
+      const composed = allPaths.flatMap((p) => {
+        const size = sizeMap.get(p);
+        if (size === null || size === undefined) {
+          // Deleted or unreadable at this ref — omit from response.
+          return [];
+        }
+        const stat = fileStats.get(p);
+        return [{
+          path: p,
+          lines: size.lines,
+          churn: stat?.churn ?? 0,
+          lastChangedAt: stat?.lastChangedAt ?? "",
+          authors: 0, // Phase 1: always 0
+        }];
+      });
+
+      composed.sort((a, b) => b.lines - a.lines || b.churn - a.churn || a.path.localeCompare(b.path));
+
+      const truncatedByLimit = composed.length > limit;
+
+      // ── Step 5b: probe whether commitCap was a binding constraint ─────────
+      // Probe actual reachable commit count using rev-list --count with
+      // --max-count=(commitCap+1) so we only need to traverse one extra commit.
+      // This is a tiny, fast call (maxBytes=64, short timeout) and runs only
+      // when log returned exactly commitCap records (likely overflow).
+      let truncatedByCommitCap = false;
+      if (commitsAnalyzed >= commitCap) {
+        try {
+          const probeArgs = [
+            "--count",
+            `--max-count=${commitCap + 1}`,
+            ...(sinceISO ? [`--since=${sinceISO}`] : []),
+            "--end-of-options",
+            resolvedOid,
+            "--",
+          ];
+          const { stdout: countOut } = await runGit(repo, ["rev-list", ...probeArgs], {
+            timeoutMs: Math.min(hotspotTimeoutMs, 5_000),
+            maxBytes: 64,
+          });
+          const revCount = Number(countOut.trim());
+          truncatedByCommitCap = Number.isInteger(revCount) && revCount > commitCap;
+        } catch {
+          // If the probe fails (timeout, error), assume the cap was binding to be
+          // conservative — better to over-report truncation than to miss it.
+          truncatedByCommitCap = true;
+        }
+      }
+
+      // `limit` truncation takes priority when both apply (spec AC-LIMIT-2).
+      let truncated = truncatedByLimit || truncatedByCommitCap;
+      let truncationReason;
+      if (truncatedByLimit) {
+        truncationReason = "limit";
+      } else if (truncatedByCommitCap) {
+        truncationReason = "commitCap";
+      }
+
+      const files = truncatedByLimit ? composed.slice(0, limit) : composed;
+
+      return {
+        status: 200,
+        body: {
+          repoId: repo.id,
+          ref: resolvedOid,
+          refLabel,
+          scope: {
+            commitsAnalyzed,
+            commitCap,
+            ...(sinceISO ? { sinceISO } : {}),
+          },
+          files,
+          truncated,
+          ...(truncationReason ? { truncationReason } : {}),
         },
       };
     },
@@ -2347,3 +2617,21 @@ export async function getWorktreeDirtyBoolean(repoPath) {
  * @type {number}
  */
 const FLEET_GIT_TIMEOUT_MS = 4000;
+
+/**
+ * Dedicated git call timeout for Hotspot Lens (ms).
+ * Large repos with many tracked files need more headroom than the default
+ * gitTimeoutMs, but we cap it at 20 s to stay within the 504 budget.
+ *
+ * @type {number}
+ */
+const HOTSPOT_GIT_TIMEOUT_MS = 20_000;
+
+/**
+ * Per-call stdout cap for Hotspot Lens git invocations (bytes).
+ * 1 MiB covers ordinary source repositories; anything larger is truncated and
+ * reported as `truncationReason: "maxBytes"` by the git runner.
+ *
+ * @type {number}
+ */
+const HOTSPOT_MAX_BYTES = 1_048_576;

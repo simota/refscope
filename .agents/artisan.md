@@ -40,6 +40,13 @@
 - ChevronDown rotation via inline `style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 120ms ease-out" }}`. Quiet mode (transition: 0ms !important) is handled globally — no extra logic needed.
 - `useTimelinePrefs` hook mirrors `useLayoutPrefs`: rAF coalesce, schema version check, try/catch localStorage, default fallback on corrupt data.
 
+### HotspotLens recharts ScatterChart pattern (2026-05-06)
+- ScatterChart with log-scale X: pass `logLines = Math.log10(max(1, lines))` as dataKey, `scale="log"`, `domain={[0,'auto']}`. 0-line files filtered before scatter to prevent log(0)=-Infinity crash.
+- Per-point radius: use recharts `shape` prop (custom SVG `<circle>`) with `r` from payload field (linear interpolation 3–8 from lastChangedAt timestamps). Standard `r` prop on `<Scatter>` is scalar-only.
+- Tab state lives in HotspotLens internal state; switching tabs never triggers re-fetch (AC-PERF-3).
+- AbortController pattern: `abortRef.current?.abort()` before each new fetch; cleanup on unmount via `useEffect` return.
+- refreshKey increment forces re-fetch without changing actual deps.
+
 ### Inline-style vs CSS-class background pitfall (Echo R1)
 - `style={{ background: ... }}` is a SHORTHAND that resets `background-image: none`.
 - DiffLineRow originally used the shorthand, which silently wiped the
