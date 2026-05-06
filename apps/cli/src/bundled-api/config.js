@@ -42,6 +42,9 @@ export function loadConfig(env = process.env) {
       max: MAX_TIMEOUT_MS,
       name: "RTGV_GIT_TIMEOUT_MS",
     }),
+    // Hotspot Lens uses a dedicated higher timeout (20 s) to handle large repos.
+    // This is a fixed cap; env knob support is deferred to Phase 2.
+    hotspotTimeoutMs: 20_000,
     diffMaxBytes: parsePositiveInteger(env.RTGV_DIFF_MAX_BYTES, 4_000_000, {
       max: MAX_GIT_OUTPUT_BYTES,
       name: "RTGV_DIFF_MAX_BYTES",
