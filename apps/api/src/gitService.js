@@ -510,7 +510,29 @@ export function createGitService(config) {
         { timeoutMs: config.gitTimeoutMs },
       );
 
-      return { status: 200, body: parseCommitRecords(stdout) };
+      const commits = parseCommitRecords(stdout);
+
+      // Ensure hotspot cache is usable: cold start awaits once so the first
+      // listCommits returns meaningful scores; warm cache uses fire-and-forget refresh.
+      const cached = _hotspotCache.get(repo.id);
+      if (!cached) {
+        try {
+          await refreshHotspotCache(repo);
+        } catch {
+          // Hotspot refresh failures fall back to score 0 — never block the list.
+        }
+      } else if (Date.now() - cached.ts > HOTSPOT_CACHE_TTL_MS) {
+        refreshHotspotCache(repo).catch(() => {});
+      }
+
+      const hotspotFiles = _hotspotCache.get(repo.id)?.files ?? new Map();
+      const scored = commits.map((commit) => {
+        const riskScore = scoreDiff(commit.fileDiffs ?? [], hotspotFiles);
+        const { fileDiffs: _fd, ...rest } = commit;
+        return { ...rest, riskScore };
+      });
+
+      return { status: 200, body: scored };
     },
 
     async getCommit(repo, hash) {
