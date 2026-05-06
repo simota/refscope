@@ -359,3 +359,28 @@ test("collectRefEvents commit_added: riskScore is present and fileDiffs is not l
     assert.ok("author" in evt.commit, "author field must be present");
   }
 });
+
+test("listCommits: every returned commit has riskScore and no fileDiffs leak", async () => {
+  // Regression: REST listCommits (initial UI load) must populate riskScore so badges
+  // show on existing commits, not just new ones arriving via SSE.
+  const repoPath = createTempPath("riskscorer-list-");
+  initRepo(repoPath);
+  writeAndCommit(repoPath, "src/a.js", "const a = 1;\n", "chore: init");
+  writeAndCommit(repoPath, "src/a.js", "const a = 2;\n", "fix: bump");
+  writeAndCommit(repoPath, "src/b.js", "const b = 1;\n", "feat: add b");
+
+  const repo = { id: "list-repo", name: "list-repo", path: repoPath };
+  const service = makeService({ repositories: new Map([["list-repo", repo]]) });
+
+  const result = await service.listCommits(repo, new URLSearchParams({ ref: "HEAD" }));
+  assert.equal(result.status, 200);
+  assert.ok(Array.isArray(result.body));
+  assert.ok(result.body.length >= 3, "expected at least 3 commits");
+
+  for (const commit of result.body) {
+    assert.ok("riskScore" in commit, "every commit must have riskScore");
+    assert.equal(typeof commit.riskScore, "number");
+    assert.ok(!("fileDiffs" in commit), "fileDiffs must not leak from listCommits");
+    assert.ok("hash" in commit && "subject" in commit && "author" in commit);
+  }
+});
