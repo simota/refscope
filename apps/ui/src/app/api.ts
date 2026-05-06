@@ -201,8 +201,9 @@ export async function listCommits(
   path = "",
   searchMode: SearchMode = "subject",
   searchPattern = "",
+  limit = 100,
 ) {
-  const params = new URLSearchParams({ ref, limit: "100" });
+  const params = new URLSearchParams({ ref, limit: String(limit) });
   // subject mode uses the legacy `search` param; other modes use `mode`+`pattern`.
   if (searchMode === "subject") {
     const normalizedSearch = search.trim();

@@ -14,6 +14,7 @@ import { RiskTrendLens } from "./components/refscope/RiskTrendLens";
 import { RiskHeatmapLens } from "./components/refscope/RiskHeatmapLens";
 import { CoChangeLens } from "./components/refscope/CoChangeLens";
 import { DriftLens } from "./components/refscope/DriftLens";
+import { OutboxLens } from "./components/refscope/OutboxLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -1339,6 +1340,19 @@ export default function App() {
             repoId={selectedRepo}
             refs={refs}
             onSelectRef={(ref) => { setSelectedRef(ref); }}
+          />
+        </div>
+      )}
+      {activeLens === 'outbox' && mode === "detail" && selectedRepo && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-outbox" role="tabpanel" aria-labelledby="lens-tab-outbox">
+          <OutboxLens
+            repoId={selectedRepo}
+            refs={refs}
+            onSelectCommit={(hash) => {
+              setSelected(hash);
+              setActiveLens('live');
+            }}
+            onOpenWorktree={() => { setActiveLens('live'); }}
           />
         </div>
       )}
