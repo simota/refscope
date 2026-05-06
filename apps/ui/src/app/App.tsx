@@ -9,6 +9,7 @@ import { FileHistoryView } from "./components/refscope/FileHistoryView";
 import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
 import { PulseLens } from "./components/refscope/PulseLens";
 import { FileStreamLens } from "./components/refscope/FileStreamLens";
+import { HotspotLens } from "./components/refscope/HotspotLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -1263,6 +1264,15 @@ export default function App() {
             onSelectCommit={(hash) => { setSelected(hash); }}
             onOpenFileHistory={submitFileHistoryPath}
             workTree={workTreeHasChanges ? workTree : null}
+          />
+        </div>
+      )}
+      {activeLens === 'hotspot' && mode === "detail" && selectedRepo && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-hotspot" role="tabpanel" aria-labelledby="lens-tab-hotspot">
+          <HotspotLens
+            repoId={selectedRepo}
+            selectedRef={selectedRef}
+            onOpenFileHistory={submitFileHistoryPath}
           />
         </div>
       )}

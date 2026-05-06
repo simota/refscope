@@ -1,9 +1,10 @@
-export type LensId = 'live' | 'pulse' | 'stream';
+export type LensId = 'live' | 'pulse' | 'stream' | 'hotspot';
 
 const LENSES: Array<{ id: LensId; label: string; labelJa: string }> = [
-  { id: 'live',   label: 'Live',   labelJa: 'ライブ' },
-  { id: 'pulse',  label: 'Pulse',  labelJa: 'パルス' },
-  { id: 'stream', label: 'Stream', labelJa: 'ストリーム' },
+  { id: 'live',    label: 'Live',    labelJa: 'ライブ' },
+  { id: 'pulse',   label: 'Pulse',   labelJa: 'パルス' },
+  { id: 'stream',  label: 'Stream',  labelJa: 'ストリーム' },
+  { id: 'hotspot', label: 'Hotspot', labelJa: 'ホットスポット' },
 ];
 
 export function LensSwitcher({

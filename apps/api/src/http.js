@@ -1,11 +1,20 @@
 import { GitCommandError } from "./gitRunner.js";
 import {
+  isValidGitRef,
   isValidRepoId,
+  parseDateQuery,
   parseFleetIncludeQuery,
   parseFleetWindowQuery,
+  parseLimitQuery,
   parsePostBodyJson,
   validateRepoAddInput,
 } from "./validation.js";
+import {
+  HOTSPOT_DEFAULT_COMMIT_CAP,
+  HOTSPOT_DEFAULT_LIMIT,
+  HOTSPOT_MAX_COMMIT_CAP,
+  HOTSPOT_MAX_LIMIT,
+} from "./gitService.js";
 
 export function createRequestHandler(config, gitService, fleetService) {
   return async function handleRequest(req, res) {
@@ -147,6 +156,50 @@ export function createRequestHandler(config, gitService, fleetService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "filesHotspot") {
+        // Validate query parameters before invoking gitService.
+        const refRaw = url.searchParams.get("ref") ?? "HEAD";
+        if (!isValidGitRef(refRaw)) {
+          sendJson(res, 400, { error: "Invalid ref parameter" });
+          return;
+        }
+        const limitResult = parseLimitQuery(
+          url.searchParams.get("limit"),
+          HOTSPOT_DEFAULT_LIMIT,
+          HOTSPOT_MAX_LIMIT,
+        );
+        if (!limitResult.ok) {
+          sendJson(res, 400, { error: limitResult.error });
+          return;
+        }
+        const commitCapResult = parseLimitQuery(
+          url.searchParams.get("commitCap"),
+          HOTSPOT_DEFAULT_COMMIT_CAP,
+          HOTSPOT_MAX_COMMIT_CAP,
+          "commitCap",
+        );
+        if (!commitCapResult.ok) {
+          sendJson(res, 400, { error: commitCapResult.error });
+          return;
+        }
+        const sinceResult = parseDateQuery(url.searchParams.get("since"), "since");
+        if (!sinceResult.ok) {
+          sendJson(res, 400, { error: sinceResult.error });
+          return;
+        }
+        const result = await gitService.getFileHotspot(repo.value, {
+          ref: refRaw,
+          limit: limitResult.value,
+          commitCap: commitCapResult.value,
+          since: sinceResult.value,
+        });
+        if (result.status === 504) {
+          sendJson(res, 504, result.body);
+          return;
+        }
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "workTree") {
         const result = await gitService.getWorkTreeChanges(repo.value);
         sendJson(res, result.status, result.body);
@@ -227,6 +280,12 @@ function matchRoute(method, pathname) {
   // (`parsePathQuery`) is the single contract authority for path inputs.
   if (parts.length === 5 && parts[3] === "files" && parts[4] === "related") {
     return { name: "filesRelated", params: { repoId } };
+  }
+  // Hotspot Lens view: LOC × churn scatter data for the repo at a given ref.
+  // All query parameters (ref, limit, commitCap, since) are validated in the
+  // handler before `gitService.getFileHotspot` is called.
+  if (parts.length === 5 && parts[3] === "files" && parts[4] === "hotspot") {
+    return { name: "filesHotspot", params: { repoId } };
   }
   // Working-tree changes view: HEAD vs index + index vs worktree.
   // Literal sub-path with no parameters — we surface staged + unstaged

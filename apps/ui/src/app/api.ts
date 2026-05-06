@@ -543,6 +543,49 @@ export async function fetchFleetSnapshot(params: {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Hotspot Lens
+// ---------------------------------------------------------------------------
+
+export type HotspotFileEntry = {
+  path: string;
+  lines: number;
+  // bytes is intentionally omitted in Phase 1 (UTF-8 re-encoding makes it
+  // inaccurate for binary files); will be re-introduced in Phase 2.
+  churn: number;
+  lastChangedAt: string; // ISO 8601
+  authors: number;       // Phase 1 では 0 固定
+};
+
+export type HotspotResponse = {
+  repoId: string;
+  ref: string;           // 解決済み commit OID (40 hex)
+  refLabel: string;      // 元の ref 表記
+  scope: {
+    commitsAnalyzed: number;
+    commitCap: number;
+    sinceISO?: string;
+  };
+  files: HotspotFileEntry[];
+  truncated: boolean;
+  truncationReason?: 'limit' | 'commitCap' | 'maxBytes' | 'timeout';
+};
+
+export async function fetchFileHotspot(
+  repoId: string,
+  params: { ref?: string; limit?: number; since?: string; commitCap?: number },
+  signal?: AbortSignal,
+): Promise<HotspotResponse> {
+  const search = new URLSearchParams();
+  if (params.ref)       search.set('ref', params.ref);
+  if (params.limit)     search.set('limit', String(params.limit));
+  if (params.since)     search.set('since', params.since);
+  if (params.commitCap) search.set('commitCap', String(params.commitCap));
+  const qs = search.toString();
+  const path = `/api/repos/${encodeURIComponent(repoId)}/files/hotspot${qs ? `?${qs}` : ''}`;
+  return getJson<HotspotResponse>(path, signal);
+}
+
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
