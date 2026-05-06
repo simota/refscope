@@ -38,6 +38,23 @@ test("parseDateQuery accepts canonical date-time ISO 8601 with explicit Z", () =
   });
 });
 
+test("parseDateQuery accepts ISO 8601 date-time with fractional seconds (Date.toISOString output)", () => {
+  // Date.prototype.toISOString() always emits ".NNN" milliseconds before the Z.
+  // Rejecting that form forces every UI caller to slice the string — DigestLens
+  // hit this and broke with "Invalid since parameter".
+  assert.deepEqual(parseDateQuery("2024-01-15T12:34:56.789Z", "since"), {
+    ok: true,
+    value: "2024-01-15T12:34:56.789Z",
+  });
+  assert.deepEqual(parseDateQuery("2024-01-15T12:34:56.7Z", "since"), {
+    ok: true,
+    value: "2024-01-15T12:34:56.7Z",
+  });
+  // Still reject malformed fractional seconds.
+  assert.equal(parseDateQuery("2024-01-15T12:34:56.Z", "since").ok, false);
+  assert.equal(parseDateQuery("2024-01-15T12:34:56.1234Z", "since").ok, false);
+});
+
 test("parseDateQuery accepts year boundary values 1900 and 2099", () => {
   assert.deepEqual(parseDateQuery("1900-01-01", "since"), {
     ok: true,
