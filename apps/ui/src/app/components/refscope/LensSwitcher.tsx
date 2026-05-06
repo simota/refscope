@@ -1,4 +1,4 @@
-export type LensId = 'live' | 'pulse' | 'stream' | 'hotspot' | 'risk-trend' | 'risk-heatmap';
+export type LensId = 'live' | 'pulse' | 'stream' | 'hotspot' | 'risk-trend' | 'risk-heatmap' | 'co-change';
 
 const LENSES: Array<{ id: LensId; label: string; labelJa: string }> = [
   { id: 'live',          label: 'Live',          labelJa: 'ライブ' },
@@ -7,6 +7,7 @@ const LENSES: Array<{ id: LensId; label: string; labelJa: string }> = [
   { id: 'hotspot',       label: 'Hotspot',       labelJa: 'ホットスポット' },
   { id: 'risk-trend',    label: 'Risk Trend',    labelJa: 'リスク推移' },
   { id: 'risk-heatmap',  label: 'Risk Heatmap',  labelJa: 'リスクヒートマップ' },
+  { id: 'co-change',     label: 'Co-change',     labelJa: 'コチェンジ' },
 ];
 
 export function LensSwitcher({

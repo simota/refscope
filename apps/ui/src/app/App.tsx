@@ -12,6 +12,7 @@ import { FileStreamLens } from "./components/refscope/FileStreamLens";
 import { HotspotLens } from "./components/refscope/HotspotLens";
 import { RiskTrendLens } from "./components/refscope/RiskTrendLens";
 import { RiskHeatmapLens } from "./components/refscope/RiskHeatmapLens";
+import { CoChangeLens } from "./components/refscope/CoChangeLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -1318,6 +1319,16 @@ export default function App() {
           <RiskHeatmapLens
             commits={commits}
             onSelectCommit={(hash) => { setSelected(hash); }}
+          />
+        </div>
+      )}
+      {activeLens === 'co-change' && mode === "detail" && selectedRepo && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-co-change" role="tabpanel" aria-labelledby="lens-tab-co-change">
+          <CoChangeLens
+            repoId={selectedRepo}
+            selectedRef={selectedRef}
+            selectedFilePath={fileHistoryPath}
+            onOpenFileHistory={submitFileHistoryPath}
           />
         </div>
       )}
