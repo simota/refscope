@@ -427,9 +427,9 @@ export function RiskHeatmapLens({ commits, onSelectCommit }: RiskHeatmapLensProp
   // Render
   // ---------------------------------------------------------------------------
 
-  const LABEL_W = 140; // 著者ラベル列の幅 (px)
-  const CELL_H = 22;   // セル高さ (px)
-  const HEADER_H = 32; // ヘッダ行の高さ (px)
+  const LABEL_W = 180; // 著者ラベル列の幅 (px)
+  const CELL_H = 36;   // セル高さ (px)
+  const HEADER_H = 44; // ヘッダ行の高さ (px)
 
   return (
     <div
@@ -516,7 +516,7 @@ function AuthorDayGrid({
   cellH,
   headerH,
 }: AuthorDayGridProps) {
-  const CELL_W = 20;
+  const CELL_W = 32;
 
   const totalW = labelW + days.length * CELL_W;
 
@@ -552,7 +552,7 @@ function AuthorDayGrid({
               style={{
                 width: CELL_W,
                 flexShrink: 0,
-                fontSize: 9,
+                fontSize: 11,
                 color: 'var(--rs-text-secondary)',
                 textAlign: 'center',
                 overflow: 'hidden',
@@ -584,7 +584,7 @@ function AuthorDayGrid({
             style={{
               width: labelW,
               flexShrink: 0,
-              fontSize: 11,
+              fontSize: 13,
               color: 'var(--rs-text)',
               paddingRight: 8,
               overflow: 'hidden',
@@ -634,7 +634,7 @@ function AuthorDayGrid({
         <div
           style={{
             paddingLeft: labelW,
-            fontSize: 10,
+            fontSize: 12,
             color: 'var(--rs-text-secondary)',
             marginTop: 4,
           }}
@@ -669,7 +669,7 @@ function DayHourGrid({
   cellH,
   headerH,
 }: DayHourGridProps) {
-  const CELL_W = 24;
+  const CELL_W = 40;
   const totalW = labelW + hours.length * CELL_W;
 
   return (
