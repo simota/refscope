@@ -74,6 +74,7 @@ type CommitResponse = {
   added?: number;
   deleted?: number;
   fileCount?: number;
+  riskScore?: number;
 };
 
 export type ViewerEvent =
@@ -633,6 +634,7 @@ function toCommit(commit: CommitResponse): Commit {
     signatureStatus: commit.signatureStatus,
     parents: commit.parents,
     lane: commit.isMerge ? 1 : 0,
+    riskScore: commit.riskScore,
   };
 }
 

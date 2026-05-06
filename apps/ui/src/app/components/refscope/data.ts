@@ -18,6 +18,8 @@ export type Commit = {
   body?: string;
   parents?: string[];
   lane: number;
+  /** Risky Diff Detector score (0 = no risk, 1-49 = warning, 50+ = danger). */
+  riskScore?: number;
 };
 
 export type SignatureStatus =
