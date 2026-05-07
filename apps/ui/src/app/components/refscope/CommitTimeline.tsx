@@ -12,6 +12,7 @@ import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import type { Commit, CompareResult, GitRef } from "./data";
 import type { WorkTreeResponse } from "../../api";
+import { parseConventionalCommit } from "../../lib/conventionalCommit";
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -919,16 +920,7 @@ function CommitRow({
           >
             {commit.hash.slice(0, 7)}
           </span>
-          <span
-            className="truncate"
-            style={{
-              fontSize: 13,
-              color: "var(--rs-text-primary)",
-              fontWeight: commit.isMerge ? 500 : 400,
-            }}
-          >
-            {commit.subject}
-          </span>
+          <ConventionalSubject subject={commit.subject} bold={commit.isMerge} />
           {commit.isNew ? <Badge tone="accent" ariaLabel="New commit from live update">New</Badge> : null}
           {commit.isMerge ? (
             <Badge tone="merge" ariaLabel="Merge commit">
@@ -1309,6 +1301,86 @@ function GraphCell({
         }}
       />
     </div>
+  );
+}
+
+// Type → CSS variable mapping for Conventional Commits. The palette reuses
+// existing Refscope tokens so the badges visually agree with the diff /
+// merge / git-status colors users already learned. Unknown types fall
+// through to muted gray (treated as `chore`-like noise).
+const CONVENTIONAL_TYPE_COLORS: Record<string, string> = {
+  feat: "var(--rs-git-added)",
+  fix: "var(--rs-git-deleted)",
+  perf: "var(--rs-warning)",
+  refactor: "var(--rs-git-modified)",
+  docs: "var(--rs-accent)",
+  test: "var(--rs-git-merge)",
+  build: "var(--rs-text-muted)",
+  ci: "var(--rs-text-muted)",
+  chore: "var(--rs-text-muted)",
+  style: "var(--rs-text-muted)",
+  revert: "var(--rs-git-deleted)",
+};
+
+function ConventionalSubject({
+  subject,
+  bold,
+}: {
+  subject: string;
+  bold: boolean;
+}) {
+  const parsed = parseConventionalCommit(subject);
+  const baseStyle: React.CSSProperties = {
+    fontSize: 13,
+    color: "var(--rs-text-primary)",
+    fontWeight: bold ? 500 : 400,
+  };
+  // Non-conventional subjects: render as before so we never silently distort
+  // arbitrary commit messages by stripping a leading word.
+  if (!parsed) {
+    return (
+      <span className="truncate" style={baseStyle}>
+        {subject}
+      </span>
+    );
+  }
+  const tint = CONVENTIONAL_TYPE_COLORS[parsed.type] ?? "var(--rs-text-muted)";
+  return (
+    <span className="inline-flex items-center gap-1.5 truncate" style={{ minWidth: 0 }}>
+      <span
+        title={`Conventional commit type: ${parsed.type}${parsed.breaking ? " (breaking)" : ""}`}
+        className="inline-flex items-center rounded-full"
+        aria-label={`Type ${parsed.type}${parsed.breaking ? ", breaking change" : ""}`}
+        style={{
+          padding: "1px 6px",
+          fontSize: 10,
+          fontFamily: "var(--rs-mono)",
+          height: 18,
+          color: tint,
+          background: `color-mix(in oklab, var(--rs-bg-elevated), ${tint} 18%)`,
+          border: `1px solid color-mix(in oklab, var(--rs-border), ${tint} 45%)`,
+          flexShrink: 0,
+        }}
+      >
+        {parsed.type}
+        {parsed.breaking ? "!" : ""}
+      </span>
+      {parsed.scope ? (
+        <span
+          style={{
+            fontSize: 11,
+            fontFamily: "var(--rs-mono)",
+            color: "var(--rs-text-muted)",
+            flexShrink: 0,
+          }}
+        >
+          {parsed.scope}
+        </span>
+      ) : null}
+      <span className="truncate" style={baseStyle}>
+        {parsed.description}
+      </span>
+    </span>
   );
 }
 
