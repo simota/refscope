@@ -54,6 +54,7 @@ export function CommandPalette({
   onAuthorChange,
   onPathChange,
   onSearchPatternChange,
+  onSetSearchMode,
   diffAvailable,
   diffFullscreen,
   onToggleDiffFullscreen,
@@ -93,6 +94,7 @@ export function CommandPalette({
   onAuthorChange: (value: string) => void;
   onPathChange: (value: string) => void;
   onSearchPatternChange: (value: string) => void;
+  onSetSearchMode: (mode: SearchMode) => void;
   diffAvailable: boolean;
   diffFullscreen: boolean;
   onToggleDiffFullscreen: () => void;
@@ -432,9 +434,72 @@ export function CommandPalette({
     setActive(0);
   }, [open]);
 
-  const filtered = commands.filter((c) =>
-    c.label.toLowerCase().includes(q.toLowerCase()),
-  );
+  // Dynamic commands synthesised from the literal query. Each label always
+  // includes the query verbatim, so they survive the substring-includes
+  // filter below. Kept as separate `if`s instead of useMemo because the cost
+  // is trivial and we re-evaluate per keystroke anyway.
+  const trimmedQ = q.trim();
+
+  // "Scope to <path>" — when the query looks path-like (contains a forward
+  // slash). Monorepo users land on `Cmd+K → "apps/api/" → Enter` for a
+  // single-keystroke scope without polluting the static command list.
+  const looksLikePath =
+    trimmedQ.length > 0 &&
+    trimmedQ.includes("/") &&
+    !trimmedQ.startsWith("-") &&
+    trimmedQ !== path &&
+    /^[A-Za-z0-9_./*-]+$/.test(trimmedQ);
+
+  // "Jump to PR #N" — recognises three forms reviewers actually type into a
+  // chat-link → palette workflow: `pr 1234`, `#1234`, or a bare digit run
+  // long enough to look like an issue number. The action narrows the
+  // timeline via message-mode regex so both `Merge pull request #N` (merge
+  // commits) and `(#N)` (squashed) are matched, then closes the palette.
+  // No GitHub API call — purely local commit-message matching, the
+  // explicit fallback strategy from the demand.
+  let prNumber: string | null = null;
+  const prMatch =
+    /^pr\s+#?(\d+)$/i.exec(trimmedQ) ??
+    /^#(\d+)$/.exec(trimmedQ) ??
+    /^(\d{2,})$/.exec(trimmedQ);
+  if (prMatch) prNumber = prMatch[1];
+
+  const dynamicCommands: PaletteCommand[] = [];
+  if (looksLikePath) {
+    dynamicCommands.push({
+      icon: FileSearch,
+      label: `Scope to "${trimmedQ}"`,
+      hint: "scope",
+      run: () => {
+        onPathChange(trimmedQ);
+        onClose();
+      },
+    });
+  }
+  if (prNumber) {
+    // POSIX ERE pattern (Git --grep --extended-regexp): match either the
+    // GitHub merge-commit subject or the squash trailing `(#N)`. The digit
+    // boundary `[^0-9]|$` prevents `#1234` matching `#12345`.
+    const ereSafe = prNumber;
+    const grepPattern =
+      `(Merge pull request #${ereSafe}([^0-9]|$))|` +
+      `(\\(#${ereSafe}\\))`;
+    dynamicCommands.push({
+      icon: GitBranch,
+      label: `Jump to PR #${prNumber}`,
+      hint: "pr",
+      run: () => {
+        onSetSearchMode("message");
+        onSearchPatternChange(grepPattern);
+        onClose();
+      },
+    });
+  }
+
+  const filtered = [
+    ...commands.filter((c) => c.label.toLowerCase().includes(q.toLowerCase())),
+    ...dynamicCommands,
+  ];
 
   useEffect(() => {
     setActive((current) => Math.min(current, Math.max(0, filtered.length - 1)));

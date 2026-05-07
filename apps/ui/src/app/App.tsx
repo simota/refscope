@@ -1559,6 +1559,10 @@ export default function App() {
           setSearchPattern(value);
           setSelected("");
         }}
+        onSetSearchMode={(nextMode) => {
+          setSearchMode(nextMode);
+          setSelected("");
+        }}
         workTreeAvailable={workTreeHasChanges}
         onShowWorkTree={handleSelectWorkTree}
         onRefreshWorkTree={handleRefreshWorkTree}

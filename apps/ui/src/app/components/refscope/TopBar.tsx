@@ -14,6 +14,7 @@ import {
   RefreshCw,
   FolderPlus,
   SlidersHorizontal,
+  X,
 } from "lucide-react";
 import {
   Tooltip,
@@ -339,6 +340,49 @@ export function TopBar({
             style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
           />
         </div>
+        {/* Active path-scope chip — only rendered when a scope is active.
+            Visible at all viewports (the path input above hides at sub-xl)
+            so a monorepo user always knows what's filtered, and can clear it
+            with one click without re-opening the palette. */}
+        {path ? (
+          <div
+            className="shrink-0 inline-flex items-center gap-1.5 px-2"
+            role="status"
+            aria-label={`Active path scope: ${path}`}
+            style={{
+              height: 26,
+              fontSize: 11,
+              fontFamily: "var(--rs-mono)",
+              borderRadius: "var(--rs-radius-sm)",
+              color: "var(--rs-accent)",
+              background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 16%)",
+              border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
+            }}
+          >
+            <FileSearch size={11} aria-hidden />
+            <span style={{ maxWidth: 200 }} className="truncate" title={path}>
+              scoped: {path}
+            </span>
+            <button
+              type="button"
+              onClick={() => onPathChange("")}
+              aria-label="Clear path scope"
+              title="Clear path scope"
+              className="inline-flex items-center justify-center"
+              style={{
+                width: 14,
+                height: 14,
+                color: "inherit",
+                cursor: "pointer",
+                background: "transparent",
+                border: "none",
+                padding: 0,
+              }}
+            >
+              <X size={11} aria-hidden />
+            </button>
+          </div>
+        ) : null}
         {/* Top-level entry to file history. Always visible so the feature is
             reachable regardless of viewport (the path filter above hides at
             sub-xl widths but the history view should not). */}
