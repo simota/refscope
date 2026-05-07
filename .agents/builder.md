@@ -1,5 +1,61 @@
 # Builder Journal
 
+## 2026-05-07 — D-3 Refactor Branch Health Dashboard (Option A)
+
+### Task scope
+Implement the Group tab in BranchSidebar (proposal §4 Option A).
+Source: `docs/spark-r6-maya-branch-dashboard-proposal.md`.
+
+### Domain decisions
+- **rotScore is derived, not observed**: clamp(D/7,0,10)+clamp(B/5,0,10)+clamp(A/10,0,5).
+  Tooltip surfaces each component for transparency. Max 25, not a definitive verdict.
+- **No extra API call from UI**: Group panel uses existing `refs` (GitRef[]) and
+  `driftMap` already in BranchSidebar props. `daysSinceLast` is derived from
+  `updatedAt` (committerdate, an observation). `rotScore` is a pure derivation.
+- **API endpoint added anyway**: `GET /api/repos/:repoId/branches/grouped` validates
+  prefix, runs `computeRefDrift` in parallel, computes rotScore server-side.
+  Useful for future integrations (e.g. CLI, Digest Lens summary).
+- **Single state owner preserved**: `branchGroupPrefix` lives in App.tsx, persisted
+  via localStorage. BranchSidebar receives it as a prop; no child fetches.
+- **gitRunner allowlist unchanged**: only `for-each-ref` + `rev-list` (already allowed).
+- **Prefix validation**: must match `[A-Za-z0-9...]+/` — slash required to prevent
+  accidental matches across prefixes (e.g. `feat` matching `feature/foo`).
+- **Branch count cap**: `BRANCH_GROUP_MAX_BRANCHES = 500` — prevents O(N) fanout
+  on huge repos, consistent with `REF_DRIFT_MAX_LIMIT` philosophy.
+
+### Files changed
+- `apps/api/src/validation.js` — `parseBranchPrefixQuery`, `BRANCH_GROUP_MAX_BRANCHES`
+- `apps/api/src/gitService.js` — `getBranchGroupHealth` method
+- `apps/api/src/http.js` — `branchesGrouped` route
+- `apps/ui/src/app/api.ts` — types + `fetchBranchGroupHealth`
+- `apps/ui/src/app/App.tsx` — `branchGroupPrefix` state + handler + sidebar props
+- `apps/ui/src/app/components/refscope/BranchSidebar.tsx` — Group UI components
+- `apps/api/test/branchGroupHealth.test.js` — 10 new tests
+
+## 2026-05-07 — D-7 Rewrite Rescue Snapshot (Option B: localStorage)
+
+### Task scope
+Implement `history_rewritten` SSE snapshot persistence (UI-only, no API changes).
+Proposal: `docs/spark-r6-carlos-rewrite-rescue-proposal.md`.
+
+### Domain decisions
+- **Read-only philosophy**: commands are text-only templates; never executed.
+- **Storage key**: `refscope:rewrite_snapshots:v1:<repoId>` — versioned prefix
+  separates schema from other localStorage keys.
+- **Ring buffer**: MAX=20 entries per repo, prepend-newest, `.slice(0, 20)`.
+- **SSE capture is eager**: snapshot is captured and persisted *before* the
+  pause/resume guard so no rewrite event is ever silently dropped.
+- **Graceful degradation**: every localStorage call is in try/catch; private
+  mode and quota errors degrade to session-only (state still held in React).
+- **Integration point**: new `rescue` lens in LensSwitcher — follows the
+  existing DigestLens/OutboxLens pattern exactly. Zero new npm packages.
+
+### Files changed
+- `apps/ui/src/app/rewriteStore.ts` (new) — types, localStorage CRUD, command templates
+- `apps/ui/src/app/components/refscope/RewriteRescuePanel.tsx` (new) — lens UI
+- `apps/ui/src/app/components/refscope/LensSwitcher.tsx` — added `rescue` LensId
+- `apps/ui/src/app/App.tsx` — state + SSE handler + rescue lens panel
+
 ## 2026-05-02 — Hunk timeline (file history) feature
 
 ### Task scope
@@ -188,3 +244,22 @@ Last fix-up I let `ref` collide with React's reserved prop name. This time the U
 - `pnpm build:ui`: PASS
 - `pnpm build:api`: PASS
 - API 変更なし、新規 npm パッケージなし、新規 CSS 変数なし
+
+## 2026-05-07 — D-6 Graded Cherry-pick Equivalence (Option B)
+
+### Task scope
+Extend existing cherry-pick equivalence panel (8e90179) to grade equivalent entries as `identical / near-identical / divergent` using `git diff B T -- <paths>` comparison.
+
+### Domain decisions
+- **Grade computation strategy**: `git diff B T -- <paths>` (base commit state vs target commit state, scoped to paths B touched) rather than `git diff T^ T` (T's own patch). This correctly returns empty diff for a clean cherry-pick while surfacing whitespace-only divergence.
+- **target-side hash detection**: `git log --left-right --cherry-mark` emits `=<hash>` for both sides. Base-side hashes (from `git cherry`) are used to partition `=` entries; remaining `=` entries are target-side counterparts. Subject-based FIFO matching handles multiple equivalents with the same subject.
+- **near-identical scenario**: `git patch-id` is whitespace-insensitive. A cherry-pick amended to add indentation still reports `-` (equivalent) in `git cherry`, but `git diff B T -- paths` reveals the whitespace difference. This is the primary real-world near-identical case.
+- **CHERRY_GRADE_MAX_ENTRIES = 100**: bounds request cost (2 git calls per graded entry). Beyond cap → `grade: "ungraded"`.
+- **threshold local state in CompareBar**: no lift to App.tsx (proposal §7 Assumption 4). Resets on base/target change via existing useEffect.
+
+### Verification
+- `pnpm --filter api test`: 312/312 PASS (304→312, +8 tests)
+- `pnpm build:ui`: PASS
+- `pnpm build:api`: PASS
+- gitRunner allowlist: unchanged (diff/log already allowed)
+- App.tsx D-7 (rewriteRescueEntries) + D-3 (branchGroupPrefix): preserved
