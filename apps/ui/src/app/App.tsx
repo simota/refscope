@@ -58,6 +58,7 @@ import {
   fetchRefDrift,
   fetchWorkTree,
   getCommit,
+  getCommitContainingRefs,
   getDiff,
   getRepoState,
   listCommits,
@@ -67,6 +68,7 @@ import {
   listSubmodules,
   listWorktrees,
   postRepo,
+  type ContainingRef,
   type DiffPayload,
   type FleetSnapshot,
   type RefDriftEntry,
@@ -281,6 +283,11 @@ export default function App() {
   const [selected, setSelected] = useState("");
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [diff, setDiff] = useState<DiffPayload>(EMPTY_DIFF);
+  // Reachability ("Contained in") — public refs whose history reaches the
+  // selected commit. `null` means "not yet loaded for this commit"; `[]`
+  // is a valid loaded state (commit exists but is unreachable from any
+  // public ref, e.g. a fresh local commit before push).
+  const [containingRefs, setContainingRefs] = useState<ContainingRef[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
@@ -508,9 +515,13 @@ export default function App() {
     if (!selectedRepo || !selected) {
       setDetail(null);
       setDiff(EMPTY_DIFF);
+      setContainingRefs(null);
       setDetailLoading(false);
       return;
     }
+    // Reset reachability while loading so the previous commit's "Contained
+    // in" list never bleeds into the new selection.
+    setContainingRefs(null);
     // Show the indicator immediately so rapid navigation has visible feedback
     // while we coalesce key-repeat bursts before issuing a fetch.
     setDetailLoading(true);
@@ -527,6 +538,22 @@ export default function App() {
     // server-side `git show --patch` spawns the API has to absorb during
     // rapid navigation.
     const timer = setTimeout(() => {
+      // Reachability fetch is fire-and-forget alongside detail/diff so a slow
+      // for-each-ref on a repo with thousands of refs doesn't block the
+      // primary detail render. Failures degrade the section to a friendly
+      // empty state rather than surfacing a top-level banner.
+      getCommitContainingRefs(selectedRepo, selected, controller.signal)
+        .then((refs) => {
+          if (controller.signal.aborted) return;
+          setContainingRefs(refs);
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return;
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          // Treat as "no data" rather than a hard error; an empty array is a
+          // valid render state for the panel.
+          setContainingRefs([]);
+        });
       Promise.all([
         getCommit(selectedRepo, selected, controller.signal),
         getDiff(selectedRepo, selected, controller.signal),
@@ -1480,6 +1507,7 @@ export default function App() {
             repoId={selectedRepo}
             workTreeSelected={selectedWorkTree}
             workTree={workTree}
+            containingRefs={containingRefs}
             onOpenFileHistory={submitFileHistoryPath}
             onFilterByPath={(value) => {
               setPath(value);

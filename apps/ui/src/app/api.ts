@@ -238,6 +238,26 @@ export async function getCommit(repoId: string, hash: string, signal?: AbortSign
   );
 }
 
+export type ContainingRef = {
+  name: string;
+  shortName: string;
+  hash: string;
+  type: "branch" | "tag" | "remote" | "other";
+  updatedAt: string | null;
+};
+
+export async function getCommitContainingRefs(
+  repoId: string,
+  hash: string,
+  signal?: AbortSignal,
+): Promise<ContainingRef[]> {
+  const body = await getJson<{ refs: ContainingRef[] }>(
+    `/api/repos/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(hash)}/refs`,
+    signal,
+  );
+  return body.refs;
+}
+
 export type DiffPayload = {
   diff: string;
   truncated: boolean;

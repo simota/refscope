@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import type { Commit, CommitDetail } from "./data";
 import type {
+  ContainingRef,
   DiffPayload,
   WorkTreeResponse,
   WorkTreeUntrackedFile,
@@ -34,6 +35,7 @@ export function DetailPanel({
   repoId,
   workTreeSelected,
   workTree,
+  containingRefs,
   onOpenFileHistory,
   onFilterByPath,
 }: {
@@ -49,6 +51,9 @@ export function DetailPanel({
   repoId: string;
   workTreeSelected: boolean;
   workTree: WorkTreeResponse | null;
+  // Reachability — public refs whose history reaches this commit. `null`
+  // means "not yet loaded for this commit"; `[]` is loaded-but-empty.
+  containingRefs: ContainingRef[] | null;
   // Opens the path-input prompt or — when a path is supplied directly —
   // jumps straight to FileHistoryView (state owner: App.tsx).
   onOpenFileHistory: (path: string) => void;
@@ -261,6 +266,13 @@ export function DetailPanel({
 
         {loading ? <Empty>Loading commit detail…</Empty> : null}
         {error ? <Empty>{error}</Empty> : null}
+
+        <Section
+          title="CONTAINED IN"
+          hint={containedInHint(containingRefs)}
+        >
+          <ContainedIn refs={containingRefs} />
+        </Section>
 
         <Section title="CHANGE GRAPH" hint={`${commit.added} / ${commit.deleted}`}>
           <ChangeGraph files={files} totalAdded={commit.added} totalDeleted={commit.deleted} />
@@ -938,6 +950,113 @@ function Empty({ children }: { children: React.ReactNode }) {
       style={{ fontSize: 12, color: "var(--rs-text-muted)" }}
     >
       {children}
+    </div>
+  );
+}
+
+// Branch priority for "Contained in" — main and release/* surface first so
+// the SRE / release-engineer view answers "is this in prod yet?" without
+// scrolling. Everything else (feature/*, personal branches) keeps API order.
+function branchPriority(shortName: string): number {
+  if (shortName === "main" || shortName === "master") return 0;
+  if (shortName.startsWith("release/") || shortName.startsWith("releases/")) return 1;
+  if (shortName.startsWith("hotfix/")) return 2;
+  return 3;
+}
+
+function groupContainingRefs(refs: ContainingRef[]) {
+  const branches = refs.filter((r) => r.type === "branch");
+  const tags = refs.filter((r) => r.type === "tag");
+  const remotes = refs.filter((r) => r.type === "remote");
+  branches.sort((a, b) => {
+    const p = branchPriority(a.shortName) - branchPriority(b.shortName);
+    return p !== 0 ? p : a.shortName.localeCompare(b.shortName);
+  });
+  // Tags arrive newest-first from the API (--sort=-committerdate); preserve
+  // that ordering so v0.9.0 lists above v0.1.0.
+  return { branches, tags, remotes };
+}
+
+function containedInHint(refs: ContainingRef[] | null): string | undefined {
+  if (refs === null) return undefined;
+  if (refs.length === 0) return "0 refs";
+  const { branches, tags, remotes } = groupContainingRefs(refs);
+  const parts: string[] = [];
+  if (branches.length > 0) parts.push(`${branches.length} branch${branches.length === 1 ? "" : "es"}`);
+  if (tags.length > 0) parts.push(`${tags.length} tag${tags.length === 1 ? "" : "s"}`);
+  if (remotes.length > 0) parts.push(`${remotes.length} remote${remotes.length === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
+
+function ContainedIn({ refs }: { refs: ContainingRef[] | null }) {
+  if (refs === null) {
+    return <Empty>Loading reachability…</Empty>;
+  }
+  if (refs.length === 0) {
+    // Distinct copy from the generic empty states elsewhere in the panel —
+    // the AC requires we explicitly tell the user the commit is unreachable
+    // from any *public* ref (heads/tags/remotes), not that the section
+    // failed to load.
+    return <Empty>Not yet reachable from any public ref.</Empty>;
+  }
+  const { branches, tags, remotes } = groupContainingRefs(refs);
+  return (
+    <div className="px-3 py-2" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {branches.length > 0 ? <RefRow label="Branches" items={branches} accent="branch" /> : null}
+      {tags.length > 0 ? <RefRow label="Tags" items={tags} accent="tag" /> : null}
+      {remotes.length > 0 ? <RefRow label="Remotes" items={remotes} accent="remote" /> : null}
+    </div>
+  );
+}
+
+function RefRow({
+  label,
+  items,
+  accent,
+}: {
+  label: string;
+  items: ContainingRef[];
+  accent: "branch" | "tag" | "remote";
+}) {
+  // Three accent palettes so a glance at the chip color answers
+  // "did this reach main? is there a tag yet?" without reading text.
+  const accentMap = {
+    branch: "var(--rs-accent)",
+    tag: "var(--rs-git-added)",
+    remote: "var(--rs-text-muted)",
+  } as const;
+  const tint = accentMap[accent];
+  return (
+    <div className="flex items-baseline gap-2 flex-wrap">
+      <span
+        style={{
+          fontSize: 10,
+          letterSpacing: "0.08em",
+          fontWeight: 600,
+          color: "var(--rs-text-muted)",
+          minWidth: 56,
+        }}
+      >
+        {label.toUpperCase()}
+      </span>
+      <span className="flex flex-wrap gap-1">
+        {items.map((ref) => (
+          <span
+            key={ref.name}
+            title={ref.name}
+            className="px-1.5 rounded-full"
+            style={{
+              fontSize: 10,
+              fontFamily: "var(--rs-mono)",
+              background: `color-mix(in oklab, var(--rs-bg-elevated), ${tint} 22%)`,
+              color: "var(--rs-text-primary)",
+              border: `1px solid color-mix(in oklab, var(--rs-border), ${tint} 50%)`,
+            }}
+          >
+            {ref.shortName}
+          </span>
+        ))}
+      </span>
     </div>
   );
 }
