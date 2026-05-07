@@ -10,10 +10,12 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { Commit, CompareResult, GitRef } from "./data";
+import type { Commit, CompareResult, GitRef, StructuralKind } from "./data";
+import { StructuralDiffBadge } from "./StructuralDiffBadge";
 import {
   compareCherry as fetchCompareCherry,
   type CompareCherryResult,
+  type CherryEntry,
   type WorkTreeResponse,
 } from "../../api";
 import { parseConventionalCommit } from "../../lib/conventionalCommit";
@@ -70,6 +72,8 @@ export function CommitTimeline({
   onSetCommitAsCompareBase,
   onSetCommitAsCompareTarget,
   onFilterByAuthor,
+  commitKindFilter = "all",
+  onCommitKindFilterChange,
 }: {
   commits: Commit[];
   selected: string;
@@ -114,6 +118,10 @@ export function CommitTimeline({
   onSetCommitAsCompareBase?: (hash: string) => void;
   onSetCommitAsCompareTarget?: (hash: string) => void;
   onFilterByAuthor?: (author: string) => void;
+  // Commit kind filter (D-2). Controlled by App.tsx; CommitTimeline renders
+  // only the toggle UI — filtering is done upstream (filteredCommits).
+  commitKindFilter?: "all" | "refactor" | "logic";
+  onCommitKindFilterChange?: (value: "all" | "refactor" | "logic") => void;
 }) {
   const emptyState = activeFilters?.length
     ? {
@@ -177,6 +185,12 @@ export function CommitTimeline({
         onToggle={onToggleActivityGraph}
         summaryViewOpen={summaryViewOpen}
       />
+      {onCommitKindFilterChange ? (
+        <CommitKindFilterBar
+          value={commitKindFilter}
+          onChange={onCommitKindFilterChange}
+        />
+      ) : null}
 
       <div className="overflow-y-auto" style={{ flex: 1 }}>
         {loading ? (
@@ -488,6 +502,11 @@ function CompareBar({
   const [cherry, setCherry] = useState<CompareCherryResult | null>(null);
   const [cherryLoading, setCherryLoading] = useState(false);
   const [cherryError, setCherryError] = useState<string>("");
+  // Graded equivalence threshold (D-6). Local to CompareBar — no lift to
+  // App.tsx needed. Clamped server-side to [1, 50]; default matches the
+  // server default (10). Changing the threshold only takes effect on the
+  // next "Cherry-pick status" fetch.
+  const [threshold, setThreshold] = useState<number>(10);
   useEffect(() => {
     setCherry(null);
     setCherryError("");
@@ -497,7 +516,7 @@ function CompareBar({
     setCherryLoading(true);
     setCherryError("");
     try {
-      const data = await fetchCompareCherry(repoId, base, target);
+      const data = await fetchCompareCherry(repoId, base, target, threshold);
       setCherry(data);
     } catch (err) {
       setCherryError(err instanceof Error ? err.message : String(err));
@@ -540,7 +559,7 @@ function CompareBar({
             Ahead {result.ahead} / Behind {result.behind} / Files {result.files} / +{result.added} -{result.deleted}
           </CompareSummary>
           <CompareGraph result={result} />
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2 items-center">
             <CopyCommand label="Copy log" command={result.commands.log} />
             <CopyCommand label="Copy stat" command={result.commands.stat} />
             <CopyCommand label="Copy diff" command={result.commands.diff} />
@@ -553,11 +572,37 @@ function CompareBar({
             >
               {cherryLoading ? "Checking…" : "Cherry-pick status"}
             </button>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--rs-text-muted)" }}
+              title="Near-identical threshold: equivalent entries with ≤ N changed lines are graded 'near-identical'; more than N lines = 'divergent'. Default 10 is a derived heuristic — adjust per your repo's typical commit size."
+            >
+              Threshold
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={threshold}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isInteger(v) && v >= 1 && v <= 50) setThreshold(v);
+                }}
+                style={{
+                  width: 44,
+                  padding: "1px 4px",
+                  fontSize: 11,
+                  borderRadius: "var(--rs-radius-sm)",
+                  border: "1px solid var(--rs-border)",
+                  background: "var(--rs-bg-input, var(--rs-bg-elevated))",
+                  color: "var(--rs-text-primary)",
+                }}
+              />
+              lines
+            </label>
           </div>
           {cherryError ? (
             <CompareSummary>Cherry-pick check failed: {cherryError}</CompareSummary>
           ) : null}
-          {cherry ? <CherryStatus cherry={cherry} /> : null}
+          {cherry ? <CherryStatus cherry={cherry} threshold={threshold} /> : null}
         </>
       ) : active ? (
         <CompareSummary>Choose both base and target to compare.</CompareSummary>
@@ -671,19 +716,18 @@ function CompareBarCollapsible({
   );
 }
 
-function CherryStatus({ cherry }: { cherry: CompareCherryResult }) {
+function CherryStatus({ cherry, threshold }: { cherry: CompareCherryResult; threshold: number }) {
   // Bound the rendered list — large compares can produce thousands of lines
   // and we'd freeze the panel. The user already sees the full count so
   // truncation is honest, not silent.
   const CAP = 50;
+  const activeThreshold = cherry.threshold ?? threshold;
   return (
     <div className="mt-3" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <CherryList
-        title="Equivalent on target"
-        hint="Already cherry-picked (patch-id match)."
-        accent="var(--rs-git-added)"
+      <GradedCherryList
         entries={cherry.equivalent}
         cap={CAP}
+        threshold={activeThreshold}
       />
       <CherryList
         title="Missing on target"
@@ -692,6 +736,203 @@ function CherryStatus({ cherry }: { cherry: CompareCherryResult }) {
         entries={cherry.missing}
         cap={CAP}
       />
+    </div>
+  );
+}
+
+/** Grade colour tokens for the cherry-pick equivalence panel (D-6). */
+const GRADE_COLORS = {
+  identical: "var(--rs-git-added)",
+  "near-identical": "var(--color-amber-500, #f59e0b)",
+  divergent: "var(--rs-git-deleted)",
+  ungraded: "var(--rs-text-muted)",
+} as const;
+
+const GRADE_LABELS = {
+  identical: "identical",
+  "near-identical": "near-identical",
+  divergent: "divergent",
+  ungraded: "ungraded",
+} as const;
+
+/** Inline diff viewer for cherry-pick equivalence hunks. */
+function CherryDiffHunks({ hunks, truncated }: { hunks: string; truncated?: boolean }) {
+  const lines = hunks.split("\n");
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        padding: "4px 6px",
+        borderRadius: "var(--rs-radius-sm)",
+        background: "var(--rs-bg-input, var(--rs-bg-panel))",
+        border: "1px solid var(--rs-border)",
+        overflow: "auto",
+        maxHeight: 200,
+        fontSize: 10,
+        fontFamily: "var(--rs-mono)",
+        lineHeight: 1.5,
+        whiteSpace: "pre",
+      }}
+    >
+      {lines.map((line, i) => {
+        const isAdded = line.startsWith("+") && !line.startsWith("+++");
+        const isDeleted = line.startsWith("-") && !line.startsWith("---");
+        return (
+          <div
+            key={i}
+            style={{
+              color: isAdded
+                ? "var(--rs-git-added)"
+                : isDeleted
+                  ? "var(--rs-git-deleted)"
+                  : "var(--rs-text-muted)",
+              background: isAdded
+                ? "color-mix(in oklab, transparent, var(--rs-git-added) 10%)"
+                : isDeleted
+                  ? "color-mix(in oklab, transparent, var(--rs-git-deleted) 10%)"
+                  : "transparent",
+            }}
+          >
+            {line || " "}
+          </div>
+        );
+      })}
+      {truncated ? (
+        <div style={{ color: "var(--rs-text-muted)", marginTop: 2 }}>[truncated — diff exceeded server byte cap]</div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Single expandable row for a graded equivalent entry. */
+function GradedCherryRow({ entry }: { entry: CherryEntry }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasDetail = entry.diffHunks && (entry.grade === "near-identical" || entry.grade === "divergent");
+  const gradeColor = entry.grade ? GRADE_COLORS[entry.grade] : "var(--rs-text-muted)";
+  const gradeLabel = entry.grade ? GRADE_LABELS[entry.grade] : undefined;
+
+  return (
+    <li style={{ lineHeight: 1.6 }}>
+      <div
+        className="flex items-center gap-1"
+        style={{ cursor: hasDetail ? "pointer" : "default" }}
+        onClick={() => { if (hasDetail) setExpanded((v) => !v); }}
+        title={`${entry.hash} ${entry.subject}`}
+      >
+        {/* grade badge */}
+        {gradeLabel ? (
+          <span
+            style={{
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: "0.04em",
+              padding: "0 4px",
+              borderRadius: "var(--rs-radius-sm)",
+              background: `color-mix(in oklab, var(--rs-bg-elevated), ${gradeColor} 20%)`,
+              color: gradeColor,
+              border: `1px solid color-mix(in oklab, var(--rs-border), ${gradeColor} 40%)`,
+              flexShrink: 0,
+              textTransform: "uppercase",
+            }}
+          >
+            {gradeLabel}
+          </span>
+        ) : null}
+        {/* diff line count */}
+        {entry.diffLines && entry.grade !== "identical" ? (
+          <span style={{ fontSize: 9, color: "var(--rs-text-muted)", flexShrink: 0 }}>
+            +{entry.diffLines.added} -{entry.diffLines.deleted}
+          </span>
+        ) : null}
+        {/* expand chevron */}
+        {hasDetail ? (
+          <span
+            style={{
+              fontSize: 9,
+              color: "var(--rs-text-muted)",
+              flexShrink: 0,
+              transform: expanded ? "rotate(180deg)" : "none",
+              display: "inline-block",
+              transition: "transform 100ms",
+            }}
+          >
+            ▾
+          </span>
+        ) : null}
+        {/* hash + subject */}
+        <span
+          className="truncate"
+          style={{ fontSize: 11, fontFamily: "var(--rs-mono)", color: "var(--rs-text-primary)" }}
+        >
+          <span style={{ color: "var(--rs-text-muted)" }}>{entry.shortHash}</span>{" "}
+          {entry.subject}
+        </span>
+      </div>
+      {expanded && entry.diffHunks ? (
+        <CherryDiffHunks hunks={entry.diffHunks} truncated={entry.truncated} />
+      ) : null}
+    </li>
+  );
+}
+
+/**
+ * Equivalent cherry-pick list with 3-tier grade badges (D-6).
+ * Maintains the existing group structure; groups equivalent entries into
+ * identical / near-identical / divergent sub-groups within the same panel.
+ */
+function GradedCherryList({
+  entries,
+  cap,
+  threshold,
+}: {
+  entries: CherryEntry[];
+  cap: number;
+  threshold: number;
+}) {
+  const accent = "var(--rs-git-added)";
+  const visible = entries.slice(0, cap);
+
+  // Sub-group counts for the header summary.
+  const identicalCount = entries.filter((e) => e.grade === "identical").length;
+  const nearCount = entries.filter((e) => e.grade === "near-identical").length;
+  const divergentCount = entries.filter((e) => e.grade === "divergent").length;
+  const ungradedCount = entries.filter((e) => !e.grade || e.grade === "ungraded").length;
+
+  const hasGrades = identicalCount + nearCount + divergentCount > 0;
+
+  return (
+    <div
+      style={{
+        border: `1px solid color-mix(in oklab, var(--rs-border), ${accent} 30%)`,
+        borderRadius: "var(--rs-radius-sm)",
+        background: `color-mix(in oklab, var(--rs-bg-elevated), ${accent} 6%)`,
+        padding: "6px 8px",
+      }}
+    >
+      <div className="flex items-baseline justify-between mb-1">
+        <span style={{ fontSize: 11, fontWeight: 650, color: accent }}>
+          Equivalent on target ({entries.length})
+        </span>
+        <span style={{ fontSize: 10, color: "var(--rs-text-muted)" }}>
+          {hasGrades
+            ? `${identicalCount} identical · ${nearCount} near (≤${threshold}) · ${divergentCount} divergent${ungradedCount > 0 ? ` · ${ungradedCount} ungraded` : ""}`
+            : "Already cherry-picked (patch-id match)."}
+        </span>
+      </div>
+      {entries.length === 0 ? (
+        <span style={{ fontSize: 11, color: "var(--rs-text-muted)" }}>None.</span>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          {visible.map((entry) => (
+            <GradedCherryRow key={entry.hash} entry={entry} />
+          ))}
+          {entries.length > cap ? (
+            <li style={{ fontSize: 10, color: "var(--rs-text-muted)", marginTop: 4 }}>
+              … {entries.length - cap} more not shown
+            </li>
+          ) : null}
+        </ul>
+      )}
     </div>
   );
 }
@@ -984,6 +1225,33 @@ function StateMessage({ title, message }: { title: string; message: string }) {
   );
 }
 
+/**
+ * Priority order for aggregating per-file structural kinds into a commit-level
+ * badge. "Worst" kind wins — a commit with one logic_change file is flagged.
+ * This is a DERIVATION (heuristic); see StructuralDiffBadge for tooltip text.
+ */
+const KIND_PRIORITY: Record<StructuralKind, number> = {
+  whitespace_only: 0,
+  comment_only: 1,
+  rename_only: 2,
+  symmetric: 3,
+  mixed: 4,
+  logic_change: 5,
+};
+
+function aggregateCommitKind(files: Commit["files"]): StructuralKind | undefined {
+  if (!files || files.length === 0) return undefined;
+  const kinds = files
+    .map((f) => f.structuralKind)
+    .filter((k): k is StructuralKind => Boolean(k));
+  if (kinds.length === 0) return undefined;
+  return kinds.reduce((worst, current) => {
+    const w = KIND_PRIORITY[worst] ?? 4;
+    const c = KIND_PRIORITY[current] ?? 4;
+    return c > w ? current : worst;
+  }, "whitespace_only" as StructuralKind);
+}
+
 function CommitRow({
   commit,
   prev,
@@ -1007,6 +1275,7 @@ function CommitRow({
   const fileCount = commit.fileCount ?? commit.files.length;
   const hasStats = commit.added > 0 || commit.deleted > 0 || fileCount > 0;
   const shortHash = commit.shortHash ?? commit.hash.slice(0, 7);
+  const commitStructuralKind = aggregateCommitKind(commit.files);
 
   const row = (
     <li
@@ -1091,6 +1360,9 @@ function CommitRow({
                 -{commit.deleted}
               </span>
               <span>· {fileCount} files</span>
+              {commitStructuralKind ? (
+                <StructuralDiffBadge kind={commitStructuralKind} compact />
+              ) : null}
             </>
           ) : null}
         </div>
@@ -1588,6 +1860,86 @@ function Avatar({ name }: { name: string }) {
     >
       {name[0]?.toUpperCase()}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CommitKindFilterBar (D-2)
+// ---------------------------------------------------------------------------
+
+/**
+ * 3-state toggle bar for filtering commits by coarse structural kind.
+ * DERIVATION — filters on `coarseKind` which is a numstat-based heuristic.
+ * Hover tooltip discloses the classification logic (threshold transparency).
+ */
+function CommitKindFilterBar({
+  value,
+  onChange,
+}: {
+  value: "all" | "refactor" | "logic";
+  onChange: (v: "all" | "refactor" | "logic") => void;
+}) {
+  const TOOLTIP_TEXT =
+    "Coarse classification is a heuristic based on numstat totals.\n" +
+    "Refactor: symmetry ≥ 90% AND total lines ≤ 50.\n" +
+    "Logic: asymmetric or large diff, or contains binary files.\n" +
+    "For precise classification, select a commit to see per-file structural kind.";
+
+  const options: Array<{ key: "all" | "refactor" | "logic"; label: string }> = [
+    { key: "all", label: "All" },
+    { key: "refactor", label: "~Refactor" },
+    { key: "logic", label: "Logic change" },
+  ];
+
+  return (
+    <div
+      className="flex items-center gap-2 px-4 py-1"
+      style={{
+        borderBottom: "1px solid var(--rs-border)",
+        background: "var(--rs-bg-panel)",
+        fontSize: 11,
+      }}
+    >
+      <span style={{ color: "var(--rs-text-muted)", userSelect: "none" }}>Kind:</span>
+      <div className="flex items-center gap-1">
+        {options.map((opt) => (
+          <button
+            key={opt.key}
+            type="button"
+            onClick={() => onChange(opt.key)}
+            style={{
+              padding: "1px 8px",
+              borderRadius: "var(--rs-radius-sm)",
+              fontSize: 11,
+              cursor: "pointer",
+              border: "1px solid",
+              borderColor: value === opt.key ? "var(--rs-accent)" : "var(--rs-border)",
+              background:
+                value === opt.key
+                  ? "color-mix(in srgb, var(--rs-accent) 15%, transparent)"
+                  : "transparent",
+              color: value === opt.key ? "var(--rs-accent)" : "var(--rs-text-secondary)",
+              transition: "all 100ms",
+            }}
+            aria-pressed={value === opt.key}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      <span
+        title={TOOLTIP_TEXT}
+        style={{
+          cursor: "help",
+          color: "var(--rs-text-muted)",
+          fontSize: 11,
+          userSelect: "none",
+        }}
+        aria-label="Classification criteria"
+      >
+        ?
+      </span>
+    </div>
   );
 }
 

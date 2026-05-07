@@ -4,9 +4,11 @@ import { TopBar } from "./components/refscope/TopBar";
 import { BranchSidebar } from "./components/refscope/BranchSidebar";
 import { CommitTimeline } from "./components/refscope/CommitTimeline";
 import { DetailPanel } from "./components/refscope/DetailPanel";
+import type { WhyPanelQuery } from "./components/refscope/DetailPanel";
 import { CommandPalette } from "./components/refscope/CommandPalette";
 import { FileHistoryView } from "./components/refscope/FileHistoryView";
 import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
+import { RewriteRescuePanel } from "./components/refscope/RewriteRescuePanel";
 import { PulseLens } from "./components/refscope/PulseLens";
 import { FileStreamLens } from "./components/refscope/FileStreamLens";
 import { HotspotLens } from "./components/refscope/HotspotLens";
@@ -42,6 +44,7 @@ import { ShortcutHelp } from "./components/refscope/ShortcutHelp";
 import { FleetSurface } from "./components/refscope/FleetSurface";
 import { FleetOnboardingOverlay } from "./components/refscope/FleetOnboardingOverlay";
 import { AddRepoDialog } from "./components/refscope/AddRepoDialog";
+import { SymbolHistoryView } from "./components/refscope/SymbolHistoryView";
 import type {
   Commit,
   CommitDetail,
@@ -81,6 +84,11 @@ import {
   type WorktreeEntry,
 } from "./api";
 import type { RefDriftSummary } from "./components/refscope/BranchSidebar";
+import {
+  loadRewriteSnapshots,
+  saveRewriteSnapshot,
+  type RewriteRescueEntry,
+} from "./rewriteStore";
 
 const EMPTY_DIFF: DiffPayload = { diff: "", truncated: false, maxBytes: 0 };
 
@@ -307,6 +315,9 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
   const [path, setPath] = useState("");
+  // Commit kind filter (D-2): client-side filter applied to coarseKind from API.
+  // 'all' = show all, 'refactor' = likely_refactor + empty, 'logic' = likely_logic.
+  const [commitKindFilter, setCommitKindFilter] = useState<"all" | "refactor" | "logic">("all");
   // State A: subject-mode value lives in `search`; pickaxe/regex/message values live in `searchPattern`.
   // Keeping them separate prevents mode-switch cross-contamination and maps 1-to-1 onto the API contract
   // (`search` param vs `mode`+`pattern` params).
@@ -349,6 +360,44 @@ export default function App() {
   const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
   const [submodules, setSubmodules] = useState<SubmoduleEntry[]>([]);
   const [repoState, setRepoState] = useState<RepoStateResponse | null>(null);
+  // Rewrite rescue: SSE history_rewritten snapshots persisted in localStorage.
+  // Initialized from localStorage on repo change so previously captured events
+  // survive browser refresh. App.tsx owns this state; the panel is read-only.
+  const [rewriteRescueEntries, setRewriteRescueEntries] = useState<RewriteRescueEntry[]>([]);
+  // Branch group prefix for the Group tab in BranchSidebar.
+  // Persisted in localStorage keyed by repoId so each repo keeps its own setting.
+  const [branchGroupPrefix, setBranchGroupPrefix] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem("refscope.branchGroup.prefix.v1");
+      if (!raw) return null;
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== "string") return null;
+      return parsed || null;
+    } catch {
+      return null;
+    }
+  });
+  const handleSetBranchGroupPrefix = useCallback((prefix: string | null) => {
+    setBranchGroupPrefix(prefix);
+    try {
+      if (prefix) {
+        window.localStorage.setItem("refscope.branchGroup.prefix.v1", JSON.stringify(prefix));
+      } else {
+        window.localStorage.removeItem("refscope.branchGroup.prefix.v1");
+      }
+    } catch {
+      // localStorage unavailable — setting works for the session only.
+    }
+  }, []);
+  // D-4 "Why is this here?" panel query. Owned here so the query survives
+  // commit re-selections within the same session. Reset when the selected
+  // commit changes (handled below) so stale results don't mislead.
+  const [whyPanelQuery, setWhyPanelQuery] = useState<WhyPanelQuery | null>(null);
+  // D-1 Symbol History query. { path, funcname } when the Symbol lens is
+  // active; null clears the view. Owned here so CommandPalette / LensSwitcher
+  // can drive the same view without parallel state copies.
+  const [symbolHistoryQuery, setSymbolHistoryQuery] = useState<{ path: string; funcname: string } | null>(null);
   const workTreeAbortRef = useRef<AbortController | null>(null);
   const workTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRefRef = useRef(selectedRef);
@@ -735,6 +784,32 @@ export default function App() {
     source.addEventListener("history_rewritten", (event) => {
       const data = parseEvent(event);
       const notice = `History rewritten on ${eventRefName(data)}`;
+      // Capture the pre-rewrite snapshot immediately (outside the pause guard)
+      // so we never miss it even when live updates are paused. Persistence to
+      // localStorage happens here; the state update is handled inside the guard
+      // to keep UI changes coherent with the pause/resume cycle.
+      if (data.type === "history_rewritten") {
+        const entry: RewriteRescueEntry = {
+          ref: data.ref.name,
+          branch: data.ref.name.replace(/^refs\/heads\//, ""),
+          previousHash: data.previousHash,
+          currentHash: data.currentHash,
+          observedAt: data.observedAt ?? new Date().toISOString(),
+          repoId: data.repoId,
+        };
+        saveRewriteSnapshot(data.repoId, entry);
+        // Update in-memory state immediately so the Rescue lens shows the event
+        // without requiring the user to switch repos or refresh. Prepend newest
+        // first and cap at 20 entries (mirrors rewriteStore.ts ring buffer).
+        setRewriteRescueEntries((prev) =>
+          [entry, ...prev.filter(
+            (e) =>
+              !(e.ref === entry.ref &&
+                e.previousHash === entry.previousHash &&
+                e.observedAt === entry.observedAt),
+          )].slice(0, 20),
+        );
+      }
       handleRealtimeEvent(notice, () => {
         setEventNotice(notice);
         if (data.type === "history_rewritten") {
@@ -805,11 +880,36 @@ export default function App() {
     };
   }, [selectedRepo]);
 
+  // Rewrite rescue: load persisted snapshots from localStorage when the active
+  // repo changes. The in-memory state is replaced so stale entries from a
+  // previous repo don't bleed into the new repo's panel.
+  useEffect(() => {
+    if (!selectedRepo) {
+      setRewriteRescueEntries([]);
+      return;
+    }
+    setRewriteRescueEntries(loadRewriteSnapshots(selectedRepo));
+  }, [selectedRepo]);
+
   // Shortcut wiring lives further down (see `shortcutBindings` + `useKeyboardShortcuts`)
   // so it can read `current`, `commits`, and `diff` availability that are
   // computed below.
 
   const current = commits.find((c) => c.hash === selected) ?? commits[0] ?? null;
+  // Client-side commit kind filter (D-2). Applied after server-side filters so the
+  // list endpoint payload is unchanged; only the rendered subset changes.
+  const filteredCommits = useMemo(() => {
+    if (commitKindFilter === "all") return commits;
+    return commits.filter((c) => {
+      const kind = c.coarseKind;
+      if (commitKindFilter === "refactor") {
+        // 'empty' is included because zero-change commits carry no logic.
+        return kind === "likely_refactor" || kind === "empty" || kind === undefined;
+      }
+      // 'logic': show likely_logic and unknown (undefined = legacy API response)
+      return kind === "likely_logic" || kind === undefined;
+    });
+  }, [commits, commitKindFilter]);
   const repoName = repositories.find((repo) => repo.id === selectedRepo)?.name ?? selectedRepo;
   const refName = displayRefName(selectedRef, refs);
   const toggleSummaryView = useCallback(() => setSummaryViewOpen((prev) => !prev), []);
@@ -1184,6 +1284,7 @@ export default function App() {
           setLiveAnnouncement("");
           pendingRealtimeEventsRef.current = [];
           setRealtimeAlerts([]);
+          setRewriteRescueEntries([]);
           setCompareBase("");
           setCompareTarget("");
           setCompareResult(null);
@@ -1370,6 +1471,29 @@ export default function App() {
           />
         </div>
       )}
+      {activeLens === 'rescue' && mode === "detail" && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-rescue" role="tabpanel" aria-labelledby="lens-tab-rescue">
+          <RewriteRescuePanel
+            repoId={selectedRepo}
+            entries={rewriteRescueEntries}
+            onClear={(repoId) => {
+              if (repoId === selectedRepo) {
+                setRewriteRescueEntries([]);
+              }
+            }}
+          />
+        </div>
+      )}
+      {activeLens === 'symbol' && mode === "detail" && selectedRepo && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-symbol" role="tabpanel" aria-labelledby="lens-tab-symbol">
+          <SymbolHistoryView
+            repoId={selectedRepo}
+            query={symbolHistoryQuery}
+            onClose={() => setActiveLens('live')}
+            onQueryChange={setSymbolHistoryQuery}
+          />
+        </div>
+      )}
       {/* Live lens: render the full existing layout. Hidden (not unmounted) when inactive
           so that SSE subscriptions, hooks, and resizable-panel refs stay alive. */}
       <ResizablePanelGroup
@@ -1417,6 +1541,8 @@ export default function App() {
             worktrees={worktrees}
             submodules={submodules}
             repoState={repoState}
+            branchGroupPrefix={branchGroupPrefix}
+            onSetBranchGroupPrefix={handleSetBranchGroupPrefix}
           />
         </ResizablePanel>
         <ResizableHandle withHandle aria-label="Resize branch sidebar" />
@@ -1438,7 +1564,7 @@ export default function App() {
               </div>
             ) : null}
             <CommitTimeline
-              commits={commits}
+              commits={filteredCommits}
               selected={selected}
               onSelect={handleSelectCommit}
               loading={loading}
@@ -1484,6 +1610,11 @@ export default function App() {
                 setAuthor(value);
                 setSelected("");
               }}
+              commitKindFilter={commitKindFilter}
+              onCommitKindFilterChange={(value) => {
+                setCommitKindFilter(value);
+                setSelected("");
+              }}
             />
           </div>
         </ResizablePanel>
@@ -1514,6 +1645,8 @@ export default function App() {
               setPath(value);
               setSelected("");
             }}
+            whyPanelQuery={whyPanelQuery}
+            onWhyPanelQueryChange={setWhyPanelQuery}
           />
         </ResizablePanel>
       </ResizablePanelGroup>

@@ -46,6 +46,40 @@ export type RefDriftSummary = {
   mergeBase: string | null;
 };
 
+/**
+ * Derived rot-risk score for a single branch.
+ *
+ * Observed inputs (raw Git data, never inferred):
+ *   - `daysSinceLast` — computed from `updatedAt` (committerdate)
+ *   - `ahead`  / `behind` — from `git rev-list --count`
+ *
+ * Formula (proposal §5):
+ *   clamp(D/7, 0, 10) + clamp(B/5, 0, 10) + clamp(A/10, 0, 5) → max 25
+ *
+ * This is a "rot risk" indicator only, not a definitive decay verdict.
+ */
+export function computeRotScore(ahead: number, behind: number, daysSinceLast: number): number {
+  return (
+    Math.min(10, Math.floor(daysSinceLast / 7)) +
+    Math.min(10, Math.floor(behind / 5)) +
+    Math.min(5, Math.floor(ahead / 10))
+  );
+}
+
+export type RotScoreLabel = "healthy" | "warning" | "critical";
+
+export function rotScoreLabel(score: number): RotScoreLabel {
+  if (score <= 7) return "healthy";
+  if (score <= 15) return "warning";
+  return "critical";
+}
+
+const ROT_SCORE_COLORS: Record<RotScoreLabel, string> = {
+  healthy: "var(--rs-git-added)",
+  warning: "var(--rs-warning)",
+  critical: "var(--rs-git-deleted)",
+};
+
 export type BranchHealth = "active" | "stale" | "merged" | "diverged";
 
 // 90-day default mirrors the demand AC. Tunable via UI in a follow-up; for
@@ -100,6 +134,8 @@ export function BranchSidebar({
   worktrees = [],
   submodules = [],
   repoState = null,
+  branchGroupPrefix = null,
+  onSetBranchGroupPrefix,
 }: {
   // Pinned refs are scoped per-repo so favourites from one project don't
   // leak into another. The hook is no-op when repoId is empty (initial load).
@@ -131,6 +167,10 @@ export function BranchSidebar({
   // Active in-progress operations (merge / rebase / cherry-pick / revert /
   // bisect / sequencer). `null` while the initial fetch is pending.
   repoState?: RepoStateResponse | null;
+  // Branch group prefix for the Group tab (e.g. "refactor/", "feat/").
+  // Persisted in localStorage via App.tsx; null = show default Group view.
+  branchGroupPrefix?: string | null;
+  onSetBranchGroupPrefix?: (prefix: string | null) => void;
 }) {
   const { isPinned, toggle: togglePin } = usePinnedRefs(repoId);
   // Resolve pinned ref names back to live refs in the current snapshot —
@@ -144,6 +184,8 @@ export function BranchSidebar({
   // pinned / remotes / tags. Health is computed once per render so we don't
   // recompute it inside both the filter and the row badge.
   const [healthFilter, setHealthFilter] = useState<"all" | BranchHealth>("all");
+  // Branches section view: "list" = normal health-filtered list, "group" = group panel.
+  const [branchesView, setBranchesView] = useState<"list" | "group">("list");
   const branchHealth = new Map<string, BranchHealth>();
   for (const ref of allBranches) {
     branchHealth.set(ref.name, computeBranchHealth(ref, driftMap?.get(ref.name)));
@@ -217,38 +259,55 @@ export function BranchSidebar({
       </Section>
 
       <Section icon={<GitBranch size={11} />} title="BRANCHES">
-        <BranchHealthFilter
-          value={healthFilter}
-          onChange={setHealthFilter}
-          counts={branchHealthCounts}
-          total={allBranches.length}
+        {/* View mode selector: List (health filter) vs Group (prefix cards) */}
+        <BranchViewTabs
+          view={branchesView}
+          onChange={setBranchesView}
         />
-        {branches.length ? (
-          branches.map((ref) => (
-            <BranchRow
-              key={ref.name}
-              active={selectedRef === ref.shortName || selectedRef === ref.name}
-              dot="var(--rs-accent)"
-              name={ref.shortName}
-              fullName={ref.name}
-              hint={ref.hash.slice(0, 7)}
-              drift={driftMap?.get(ref.name) ?? null}
-              driftScale={driftScale}
-              baseLabel={baseLabel}
-              health={branchHealth.get(ref.name)}
-              onClick={() => onSelectRef(ref.name)}
-              onSetCompareBase={onSetRefAsCompareBase}
-              onSetCompareTarget={onSetRefAsCompareTarget}
-              isPinned={isPinned(ref.name)}
-              onTogglePin={() => togglePin(ref.name)}
-            />
-          ))
+        {branchesView === "group" ? (
+          <BranchGroupPanel
+            allBranches={allBranches}
+            driftMap={driftMap}
+            branchGroupPrefix={branchGroupPrefix}
+            onSetBranchGroupPrefix={onSetBranchGroupPrefix}
+            onSelectRef={onSelectRef}
+          />
         ) : (
-          <EmptyRow>
-            {healthFilter === "all"
-              ? "No branches"
-              : `No ${healthFilter} branches`}
-          </EmptyRow>
+          <>
+            <BranchHealthFilter
+              value={healthFilter}
+              onChange={setHealthFilter}
+              counts={branchHealthCounts}
+              total={allBranches.length}
+            />
+            {branches.length ? (
+              branches.map((ref) => (
+                <BranchRow
+                  key={ref.name}
+                  active={selectedRef === ref.shortName || selectedRef === ref.name}
+                  dot="var(--rs-accent)"
+                  name={ref.shortName}
+                  fullName={ref.name}
+                  hint={ref.hash.slice(0, 7)}
+                  drift={driftMap?.get(ref.name) ?? null}
+                  driftScale={driftScale}
+                  baseLabel={baseLabel}
+                  health={branchHealth.get(ref.name)}
+                  onClick={() => onSelectRef(ref.name)}
+                  onSetCompareBase={onSetRefAsCompareBase}
+                  onSetCompareTarget={onSetRefAsCompareTarget}
+                  isPinned={isPinned(ref.name)}
+                  onTogglePin={() => togglePin(ref.name)}
+                />
+              ))
+            ) : (
+              <EmptyRow>
+                {healthFilter === "all"
+                  ? "No branches"
+                  : `No ${healthFilter} branches`}
+              </EmptyRow>
+            )}
+          </>
         )}
       </Section>
 
@@ -1737,5 +1796,363 @@ function TagRow({
     >
       {button}
     </RefRowMenu>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Branch Group Panel — "Group" tab in BRANCHES section
+// ---------------------------------------------------------------------------
+
+const DEFAULT_GROUP_PREFIXES = ["refactor/", "feat/", "fix/", "chore/"];
+
+/**
+ * Tab selector between "List" (health-filter) and "Group" (prefix cards) views.
+ */
+function BranchViewTabs({
+  view,
+  onChange,
+}: {
+  view: "list" | "group";
+  onChange: (next: "list" | "group") => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Branch view mode"
+      className="flex gap-1 px-2 py-1.5"
+      style={{ borderBottom: "1px solid var(--rs-border)" }}
+    >
+      {(["list", "group"] as const).map((tab) => {
+        const isActive = view === tab;
+        const label = tab === "list" ? "List" : "Group";
+        return (
+          <button
+            key={tab}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => onChange(tab)}
+            className="px-1.5 rounded"
+            style={{
+              fontSize: 10,
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+              color: isActive ? "var(--rs-text-primary)" : "var(--rs-text-muted)",
+              background: isActive
+                ? "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 28%)"
+                : "transparent",
+              border: `1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) ${isActive ? 60 : 30}%)`,
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+type GroupedBranchEntry = {
+  ref: GitRef;
+  ahead: number;
+  behind: number;
+  daysSinceLast: number;
+  rotScore: number;
+};
+
+/**
+ * Group prefix settings bar. Shows current prefix input and provides quick-
+ * switch buttons for common prefixes. Designed to be minimal — one row.
+ */
+function GroupPrefixBar({
+  prefix,
+  onSetPrefix,
+}: {
+  prefix: string | null;
+  onSetPrefix?: (prefix: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(prefix ?? "");
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    const normalized = trimmed && !trimmed.endsWith("/") ? `${trimmed}/` : trimmed;
+    onSetPrefix?.(normalized || null);
+    setEditing(false);
+  };
+
+  return (
+    <div
+      className="px-2 py-1.5 flex flex-col gap-1"
+      style={{ borderBottom: "1px solid var(--rs-border)" }}
+    >
+      {editing ? (
+        <div className="flex items-center gap-1">
+          <input
+            autoFocus
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+              if (e.key === "Escape") { setEditing(false); setDraft(prefix ?? ""); }
+            }}
+            placeholder="refactor/"
+            style={{
+              flex: 1,
+              fontSize: 11,
+              fontFamily: "var(--rs-mono)",
+              background: "var(--rs-bg-canvas)",
+              border: "1px solid var(--rs-border)",
+              borderRadius: "var(--rs-radius-sm)",
+              color: "var(--rs-text-primary)",
+              padding: "2px 6px",
+              outline: "none",
+            }}
+          />
+          <button
+            type="button"
+            onClick={commit}
+            style={{ fontSize: 10, color: "var(--rs-accent)", cursor: "pointer" }}
+          >
+            OK
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1">
+          <span
+            style={{
+              fontSize: 10,
+              color: "var(--rs-text-muted)",
+              fontFamily: "var(--rs-mono)",
+              flex: 1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={prefix ?? "(all branches)"}
+          >
+            {prefix ? prefix : <span style={{ fontStyle: "italic" }}>all</span>}
+          </span>
+          <button
+            type="button"
+            onClick={() => { setDraft(prefix ?? ""); setEditing(true); }}
+            style={{ fontSize: 10, color: "var(--rs-text-muted)", cursor: "pointer" }}
+            aria-label="Edit branch group prefix"
+          >
+            edit
+          </button>
+          {prefix ? (
+            <button
+              type="button"
+              onClick={() => onSetPrefix?.(null)}
+              style={{ fontSize: 10, color: "var(--rs-text-muted)", cursor: "pointer" }}
+              aria-label="Clear prefix filter"
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-1">
+        {DEFAULT_GROUP_PREFIXES.map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => { onSetPrefix?.(p); setEditing(false); }}
+            className="px-1 rounded"
+            style={{
+              fontSize: 9,
+              fontFamily: "var(--rs-mono)",
+              cursor: "pointer",
+              color: prefix === p ? "var(--rs-accent)" : "var(--rs-text-muted)",
+              border: `1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) ${prefix === p ? 50 : 20}%)`,
+              background: prefix === p
+                ? "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 14%)"
+                : "transparent",
+            }}
+          >
+            {p}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * RotScore badge — shows the numeric score and a color-coded label.
+ * Tooltip surfaces the breakdown: D (staleness), B (behind), A (ahead).
+ */
+function RotScoreBadge({
+  score,
+  ahead,
+  behind,
+  daysSinceLast,
+}: {
+  score: number;
+  ahead: number;
+  behind: number;
+  daysSinceLast: number;
+}) {
+  const label = rotScoreLabel(score);
+  const color = ROT_SCORE_COLORS[label];
+  const tooltipText =
+    `rot risk: ${score}/25\n` +
+    `  staleness (D/7): ${Math.min(10, Math.floor(daysSinceLast / 7))}/10 (${daysSinceLast}d)\n` +
+    `  behind (B/5):    ${Math.min(10, Math.floor(behind / 5))}/10 (${behind} commits)\n` +
+    `  ahead (A/10):    ${Math.min(5, Math.floor(ahead / 10))}/5 (${ahead} commits)`;
+  return (
+    <span
+      className="px-1.5 rounded"
+      title={tooltipText}
+      aria-label={`Rot risk score ${score} out of 25: ${label}`}
+      style={{
+        fontSize: 9,
+        fontFamily: "var(--rs-mono)",
+        letterSpacing: "0.02em",
+        color,
+        background: `color-mix(in oklab, var(--rs-bg-elevated), ${color} 14%)`,
+        border: `1px solid color-mix(in oklab, var(--rs-border), ${color} 40%)`,
+        flexShrink: 0,
+      }}
+    >
+      {score}pt
+    </span>
+  );
+}
+
+/**
+ * Single branch card in the group panel.
+ */
+function BranchGroupCard({
+  entry,
+  onSelectRef,
+}: {
+  entry: GroupedBranchEntry;
+  onSelectRef: (ref: string) => void;
+}) {
+  const { ref, ahead, behind, daysSinceLast, rotScore } = entry;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelectRef(ref.name)}
+      className="mx-1 rounded-md text-left"
+      style={{
+        padding: "6px 8px",
+        background: "var(--rs-bg-canvas)",
+        border: "1px solid var(--rs-border)",
+        marginBottom: 4,
+        cursor: "pointer",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLElement).style.borderColor =
+          "color-mix(in oklab, var(--rs-border), var(--rs-accent) 40%)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLElement).style.borderColor = "var(--rs-border)";
+      }}
+    >
+      <div className="flex items-center gap-1.5" style={{ marginBottom: 4 }}>
+        <span
+          className="flex-1 truncate"
+          title={ref.shortName}
+          style={{ fontSize: 11, fontFamily: "var(--rs-mono)", color: "var(--rs-text-primary)" }}
+        >
+          {ref.shortName}
+        </span>
+        <RotScoreBadge
+          score={rotScore}
+          ahead={ahead}
+          behind={behind}
+          daysSinceLast={daysSinceLast}
+        />
+      </div>
+      <div
+        className="flex items-center gap-3"
+        style={{ fontSize: 10, color: "var(--rs-text-secondary)", fontFamily: "var(--rs-mono)" }}
+      >
+        <span
+          title={`${ahead} commits ahead of base`}
+          style={{ color: ahead > 0 ? "var(--rs-accent)" : "var(--rs-text-muted)" }}
+        >
+          +{ahead}
+        </span>
+        <span
+          title={`${behind} commits behind base`}
+          style={{ color: behind > 0 ? "var(--rs-git-deleted)" : "var(--rs-text-muted)" }}
+        >
+          −{behind}
+        </span>
+        <span
+          title={`Last commit ${daysSinceLast} days ago`}
+          style={{ color: "var(--rs-text-muted)" }}
+        >
+          {daysSinceLast}d
+        </span>
+      </div>
+    </button>
+  );
+}
+
+/**
+ * Group panel content: prefix settings + cards sorted by rotScore descending.
+ *
+ * Data source: uses existing `allBranches` (GitRef[]) and `driftMap` from the
+ * sidebar — no additional API call. `daysSinceLast` is derived from `updatedAt`
+ * (committerdate ISO string from `for-each-ref`) which is an observed value.
+ */
+function BranchGroupPanel({
+  allBranches,
+  driftMap,
+  branchGroupPrefix,
+  onSetBranchGroupPrefix,
+  onSelectRef,
+}: {
+  allBranches: GitRef[];
+  driftMap?: Map<string, RefDriftSummary>;
+  branchGroupPrefix: string | null;
+  onSetBranchGroupPrefix?: (prefix: string | null) => void;
+  onSelectRef: (ref: string) => void;
+}) {
+  const now = Date.now();
+
+  const groupEntries: GroupedBranchEntry[] = allBranches
+    .filter((ref) => (branchGroupPrefix ? ref.shortName.startsWith(branchGroupPrefix) : true))
+    .map((ref) => {
+      const drift = driftMap?.get(ref.name);
+      const ahead = drift?.ahead ?? 0;
+      const behind = drift?.behind ?? 0;
+      const daysSinceLast = ref.updatedAt
+        ? Math.max(0, Math.floor((now - Date.parse(ref.updatedAt)) / 86_400_000))
+        : 0;
+      return {
+        ref,
+        ahead,
+        behind,
+        daysSinceLast,
+        rotScore: computeRotScore(ahead, behind, daysSinceLast),
+      };
+    })
+    .sort((a, b) => b.rotScore - a.rotScore);
+
+  return (
+    <div className="flex flex-col">
+      <GroupPrefixBar prefix={branchGroupPrefix} onSetPrefix={onSetBranchGroupPrefix} />
+      {groupEntries.length > 0 ? (
+        <div className="flex flex-col pt-2 pb-1">
+          {groupEntries.map((entry) => (
+            <BranchGroupCard key={entry.ref.name} entry={entry} onSelectRef={onSelectRef} />
+          ))}
+        </div>
+      ) : (
+        <EmptyRow>
+          {branchGroupPrefix
+            ? `No branches matching "${branchGroupPrefix}"`
+            : "No branches"}
+        </EmptyRow>
+      )}
+    </div>
   );
 }

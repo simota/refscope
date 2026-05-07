@@ -3,17 +3,23 @@ import os from "node:os";
 import path from "node:path";
 import { GitCommandError, runGit } from "./gitRunner.js";
 import { addRepository as configAddRepository, removeRepository as configRemoveRepository } from "./config.js";
+import { classifyFileDiff } from "./structuralDiff.js";
 import {
   isValidGitRef,
   isValidObjectId,
   parseAuthorQuery,
+  parseBranchPrefixQuery,
   parseDateQuery,
+  parseFuncNameQuery,
   parseGroupByQuery,
   parseLimitQuery,
+  parseLineNumberQuery,
+  parseNearIdenticalThresholdQuery,
   parsePathQuery,
   parsePatternQuery,
   parseSearchModeQuery,
   parseSearchQuery,
+  BRANCH_GROUP_MAX_BRANCHES,
 } from "./validation.js";
 
 // Hard cap on commits returned by /commits/summary. We read +1
@@ -57,6 +63,32 @@ export const HOTSPOT_DEFAULT_LIMIT = 500;
 export const HOTSPOT_MAX_LIMIT = 1000;
 export const HOTSPOT_DEFAULT_COMMIT_CAP = 200;
 export const HOTSPOT_MAX_COMMIT_CAP = 500;
+
+// Range-history hard caps (D-4). Default is 20 commits, capped at 50.
+// We always read `limit + 1` so we can detect over-cap responses and emit
+// `truncated: true` without leaking the extra commit. git log -L can be slow
+// on large files so keeping the default low is important for responsiveness.
+export const RANGE_HISTORY_DEFAULT_LIMIT = 20;
+export const RANGE_HISTORY_MAX_LIMIT = 50;
+
+// Symbol-history hard caps (D-1). Reuses the same defaults as range-history:
+// default 20 commits, capped at 50. `git log -L :name:path` can be slow on
+// large repositories (full-history line-range scan), so a low default is
+// important for responsiveness. Read `limit + 1` to detect truncation.
+// #TODO(agent): consider cursor pagination (D-1.1) once real-user feedback
+// confirms 50 commits is insufficient for typical refactor workflows.
+export const SYMBOL_HISTORY_DEFAULT_LIMIT = 20;
+export const SYMBOL_HISTORY_MAX_LIMIT = 50;
+
+// Graded cherry-pick equivalence caps (D-6).
+// Grade computation runs one `git diff` per equivalent entry — cap the number
+// of entries that receive a grade to bound the request cost. Entries beyond
+// the cap are returned with grade "ungraded". The threshold distinguishes
+// `near-identical` (≤ threshold lines changed) from `divergent` (> threshold);
+// it defaults to 10 and is clamped to [1, 50] so callers can tune it via URL.
+export const CHERRY_GRADE_MAX_ENTRIES = 100;
+export const CHERRY_THRESHOLD_DEFAULT = 10;
+export const CHERRY_THRESHOLD_MAX = 50;
 
 // Conventional-commit prefix grouping uses a literal regex match on the
 // commit subject. `feat`, `fix`, `chore`, … with optional scope, then a colon
@@ -528,8 +560,9 @@ export function createGitService(config) {
       const hotspotFiles = _hotspotCache.get(repo.id)?.files ?? new Map();
       const scored = commits.map((commit) => {
         const riskScore = scoreDiff(commit.fileDiffs ?? [], hotspotFiles);
+        const coarseKind = computeCoarseKind(commit.fileDiffs ?? [], commit.added, commit.deleted);
         const { fileDiffs: _fd, ...rest } = commit;
-        return { ...rest, riskScore };
+        return { ...rest, riskScore, coarseKind };
       });
 
       return { status: 200, body: scored };
@@ -564,6 +597,15 @@ export function createGitService(config) {
       const [fullHash, parents, author, authorEmail, authorDate, subject, body, refs, signatureCode] =
         metadata.stdout.split(COMMIT_FIELD_SEPARATOR);
 
+      // Derive structuralKind for each file from numstat (added/deleted only).
+      // This is a heuristic approximation; patch-text-based classification in
+      // getDiff provides higher accuracy for the diff viewer.
+      const rawFiles = parseChangedFiles(numstat.stdout, nameStatus.stdout);
+      const filesWithKind = rawFiles.map((f) => {
+        const { kind } = classifyFileDiff({ added: f.added, deleted: f.deleted });
+        return { ...f, structuralKind: kind };
+      });
+
       return {
         status: 200,
         body: {
@@ -576,7 +618,7 @@ export function createGitService(config) {
           refs: parseRefs(refs),
           signed: isSignedSignatureCode(signatureCode),
           signatureStatus: parseSignatureStatus(signatureCode),
-          files: parseChangedFiles(numstat.stdout, nameStatus.stdout),
+          files: filesWithKind,
         },
       };
     },
@@ -952,6 +994,109 @@ export function createGitService(config) {
       };
     },
 
+    /**
+     * GET /api/repos/:repoId/branches/grouped
+     *
+     * Returns all local branches whose short name starts with the given prefix,
+     * augmented with ahead/behind counts (vs HEAD) and a derived rotScore.
+     *
+     * Observed values (from Git, no inference):
+     *   - `ahead`          — git rev-list --count <base>..<branch>
+     *   - `behind`         — git rev-list --count <branch>..<base>
+     *   - `daysSinceLast`  — (now - committerdate) / 1 day (from for-each-ref)
+     *
+     * Derived value (Refscope only):
+     *   rotScore = clamp(D/7, 0, 10) + clamp(B/5, 0, 10) + clamp(A/10, 0, 5)
+     *   max 25 — "rot risk" only, not a definitive decay indicator.
+     *
+     * @param {{ id: string, name: string, path: string }} repo
+     * @param {URLSearchParams} query
+     */
+    async getBranchGroupHealth(repo, query) {
+      // Parse query parameters: prefix (required), base (optional, default HEAD)
+      const prefixResult = parseBranchPrefixQuery(query.get("prefix"));
+      if (!prefixResult.ok) {
+        return { status: 400, body: { error: prefixResult.error } };
+      }
+
+      const baseResult = (() => {
+        const raw = query.get("base") ?? "HEAD";
+        if (!isValidGitRef(raw)) {
+          return { ok: false, error: "Invalid base parameter" };
+        }
+        return { ok: true, value: raw };
+      })();
+      if (!baseResult.ok) {
+        return { status: 400, body: { error: baseResult.error } };
+      }
+      const prefix = prefixResult.value;
+      const base = baseResult.value;
+
+      const baseRevision = await resolveCommitishRevision(repo, base, config.gitTimeoutMs);
+      if (!baseRevision.ok) {
+        return baseRevision.result;
+      }
+
+      // Fetch all local branches — type='branch' from for-each-ref refs/heads.
+      // We use the existing listRefs helper which already encodes committerdate
+      // in the updatedAt field. Filter by prefix after fetch; the wire payload
+      // is already bounded by BRANCH_GROUP_MAX_BRANCHES.
+      const allRefs = await listRefs(repo);
+      const localBranches = allRefs.filter((ref) => ref.type === "branch");
+      const matchingBranches = prefix
+        ? localBranches.filter((ref) => ref.shortName.startsWith(prefix))
+        : localBranches;
+
+      if (matchingBranches.length > BRANCH_GROUP_MAX_BRANCHES) {
+        return {
+          status: 400,
+          body: { error: `Too many branches: max ${BRANCH_GROUP_MAX_BRANCHES}` },
+        };
+      }
+
+      const now = Date.now();
+
+      // Compute drift + rotScore in parallel across matching branches.
+      const branches = await Promise.all(
+        matchingBranches.map(async (ref) => {
+          const drift = await computeRefDrift(repo, baseRevision.hash, ref, config.gitTimeoutMs);
+          const ahead = drift.ahead;
+          const behind = drift.behind;
+          const daysSinceLast = ref.updatedAt
+            ? Math.max(0, Math.floor((now - Date.parse(ref.updatedAt)) / 86_400_000))
+            : 0;
+
+          // Derived rot score — proposal §5:
+          // clamp(D/7, 0, 10) + clamp(B/5, 0, 10) + clamp(A/10, 0, 5) → max 25
+          const rotScore =
+            Math.min(10, Math.floor(daysSinceLast / 7)) +
+            Math.min(10, Math.floor(behind / 5)) +
+            Math.min(5, Math.floor(ahead / 10));
+
+          return {
+            name: ref.name,
+            shortName: ref.shortName,
+            hash: ref.hash,
+            updatedAt: ref.updatedAt,
+            ahead,
+            behind,
+            mergeBase: drift.mergeBase,
+            daysSinceLast,
+            rotScore,
+          };
+        }),
+      );
+
+      return {
+        status: 200,
+        body: {
+          prefix: prefix ?? null,
+          base: { input: base, resolved: baseRevision.hash },
+          branches,
+        },
+      };
+    },
+
     async getWorkTreeChanges(repo) {
       // Working tree changes: HEAD -> index ("staged"), index -> worktree
       // ("unstaged"), and untracked files (paths reported by
@@ -1041,6 +1186,245 @@ export function createGitService(config) {
       };
     },
 
+    /**
+     * GET /api/repos/:repoId/range-history
+     *
+     * Returns the commit history for a line range within a file, using
+     * `git log -L<lineStart>,<lineEnd>:<path>`. Each entry is the literal
+     * commit metadata (hash, author, date, subject, body) as observed from Git.
+     *
+     * Boundary discipline:
+     * - No LLM, no inference. commit messages are returned verbatim.
+     * - patch output is discarded; only metadata is surfaced.
+     * - URL/PR-like strings in the body are extracted as literal observed values
+     *   from the commit text — Refscope never claims they are "related PRs".
+     *
+     * @param {{ id: string, name: string, path: string }} repo
+     * @param {URLSearchParams} query
+     */
+    async getRangeHistory(repo, query) {
+      // Validate query parameters.
+      const lineStartResult = parseLineNumberQuery(query.get("lineStart"), "lineStart");
+      if (!lineStartResult.ok) {
+        return { status: 400, body: { error: lineStartResult.error } };
+      }
+      const lineEndResult = parseLineNumberQuery(query.get("lineEnd"), "lineEnd");
+      if (!lineEndResult.ok) {
+        return { status: 400, body: { error: lineEndResult.error } };
+      }
+      if (lineStartResult.value > lineEndResult.value) {
+        return { status: 400, body: { error: "lineStart must be <= lineEnd" } };
+      }
+
+      const pathResult = parsePathQuery(query.get("path"));
+      if (!pathResult.ok) {
+        return { status: 400, body: { error: pathResult.error } };
+      }
+      const trimmedPath = pathResult.value.trim();
+      if (!trimmedPath) {
+        return { status: 400, body: { error: "Missing path parameter" } };
+      }
+
+      const rawRef = query.get("ref") ?? "HEAD";
+      if (!isValidGitRef(rawRef)) {
+        return { status: 400, body: { error: "Invalid ref parameter" } };
+      }
+
+      const limitResult = parseLimitQuery(
+        query.get("limit"),
+        RANGE_HISTORY_DEFAULT_LIMIT,
+        RANGE_HISTORY_MAX_LIMIT,
+      );
+      if (!limitResult.ok) {
+        return { status: 400, body: { error: limitResult.error } };
+      }
+
+      const commitishRef = await resolveCommitishRevision(repo, rawRef, config.gitTimeoutMs);
+      if (!commitishRef.ok) {
+        return commitishRef.result;
+      }
+
+      // Read `limit + 1` to detect truncation without exposing the extra commit.
+      const readLimit = limitResult.value + 1;
+      const lineStart = lineStartResult.value;
+      const lineEnd = lineEndResult.value;
+
+      // `git log -L<start>,<end>:<path>` traces the history of the given line
+      // range. The `-L` argument is passed after `--format=...` so it is treated
+      // as a `log` option argument, not a global option — the runner allowlist
+      // checks only `args[0]` (the command name "log") which is already in the
+      // allowlist.
+      //
+      // We use `--no-patch` to suppress the diff output entirely (metadata only),
+      // keeping the response size bounded without depending on maxBytes truncation.
+      // `--no-merges` reduces noise from merge commits that rarely touch line ranges.
+      const { stdout } = await runGit(
+        repo,
+        rangeHistoryLogArgs({
+          lineStart,
+          lineEnd,
+          path: trimmedPath,
+          revision: commitishRef.hash,
+          maxCount: readLimit,
+        }),
+        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+      );
+
+      const parsed = parseRangeHistoryRecords(stdout);
+      const truncated = parsed.length > limitResult.value;
+      const entries = (truncated ? parsed.slice(0, limitResult.value) : parsed).map((entry) => ({
+        hash: entry.hash,
+        shortHash: entry.hash.slice(0, 7),
+        author: entry.author,
+        authorDate: entry.authorDate,
+        subject: entry.subject,
+        body: entry.body,
+        urlsInBody: extractUrlsFromBody(entry.body),
+      }));
+
+      return {
+        status: 200,
+        body: {
+          path: trimmedPath,
+          ref: { input: rawRef, resolved: commitishRef.hash },
+          lineStart,
+          lineEnd,
+          entries,
+          truncated,
+          limit: limitResult.value,
+        },
+      };
+    },
+
+    /**
+     * GET /api/repos/:repoId/symbols/history
+     *
+     * Returns the commit history for a named symbol (function/method) within a
+     * file, using `git log -L :<funcname>:<path>`. Rename tracking is provided
+     * by `--find-renames` applied to the diff output; renames are detected by
+     * parsing the diff `--- a/<old>` / `+++ b/<new>` header pair.
+     *
+     * Note: `--follow` cannot be combined with `-L` in Git (git rejects it with
+     * "fatal: --follow requires exactly one pathspec"). Instead, `--find-renames`
+     * alone is used, which detects renames at each commit boundary.
+     *
+     * Boundary discipline:
+     * - No LLM, no inference. commit messages returned verbatim.
+     * - Diff hunks are discarded; only metadata + rename evidence is surfaced.
+     * - funcname is validated by parseFuncNameQuery (allowlist: [A-Za-z0-9_:.~]).
+     *
+     * #TODO(agent): share parseRangeHistoryRecords helper once D-1 / D-4 have
+     * settled — currently separate to avoid coupling surface during D-1 scope.
+     *
+     * @param {{ id: string, name: string, path: string }} repo
+     * @param {URLSearchParams} query
+     */
+    async getSymbolHistory(repo, query) {
+      // 1. Validate funcname (required, strict allowlist for injection prevention)
+      const funcNameResult = parseFuncNameQuery(query.get("funcname"));
+      if (!funcNameResult.ok) {
+        return { status: 400, body: { error: funcNameResult.error } };
+      }
+
+      // 2. Validate path (required)
+      const pathResult = parsePathQuery(query.get("path"));
+      if (!pathResult.ok) {
+        return { status: 400, body: { error: pathResult.error } };
+      }
+      const trimmedPath = pathResult.value.trim();
+      if (!trimmedPath) {
+        return { status: 400, body: { error: "Missing path parameter" } };
+      }
+
+      // 3. Validate ref (optional, default HEAD)
+      const rawRef = query.get("ref") ?? "HEAD";
+      if (!isValidGitRef(rawRef)) {
+        return { status: 400, body: { error: "Invalid ref parameter" } };
+      }
+
+      // 4. Validate limit (optional, default 20, max 50)
+      const limitResult = parseLimitQuery(
+        query.get("limit"),
+        SYMBOL_HISTORY_DEFAULT_LIMIT,
+        SYMBOL_HISTORY_MAX_LIMIT,
+      );
+      if (!limitResult.ok) {
+        return { status: 400, body: { error: limitResult.error } };
+      }
+
+      // 5. Resolve ref → commit OID
+      const commitishRef = await resolveCommitishRevision(repo, rawRef, config.gitTimeoutMs);
+      if (!commitishRef.ok) {
+        return commitishRef.result;
+      }
+
+      // 6. Run git log -L :<funcname>:<path>
+      // Read `limit + 1` to detect truncation without exposing the extra commit.
+      const readLimit = limitResult.value + 1;
+      const funcname = funcNameResult.value;
+
+      let stdout;
+      try {
+        const result = await runGit(
+          repo,
+          symbolHistoryLogArgs({
+            funcname,
+            path: trimmedPath,
+            revision: commitishRef.hash,
+            maxCount: readLimit,
+          }),
+          { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+        );
+        stdout = result.stdout;
+      } catch (err) {
+        // git log -L exits with code 128 when the symbol is not found in the
+        // file (e.g. function name typo, unsupported language). Surface as a
+        // structured 404-like response rather than a 502 so the UI can give
+        // the user an actionable hint.
+        if (err instanceof GitCommandError) {
+          if (err.exitCode === 128) {
+            return {
+              status: 404,
+              body: {
+                error: "Symbol not found",
+                funcname,
+                path: trimmedPath,
+                hint: "Check the symbol name spelling and verify the language is supported by Git's funcname regex.",
+              },
+            };
+          }
+        }
+        throw err;
+      }
+
+      // 7. Parse the output — RS-separated records
+      const rawEntries = parseSymbolHistoryRecords(stdout);
+      const truncated = rawEntries.length > limitResult.value;
+      const entries = (truncated ? rawEntries.slice(0, limitResult.value) : rawEntries).map(
+        (entry) => ({
+          hash: entry.hash,
+          shortHash: entry.hash.slice(0, 7),
+          author: entry.author,
+          authorDate: entry.authorDate,
+          subject: entry.subject,
+          body: entry.body,
+          renameInfo: entry.renameInfo,
+        }),
+      );
+
+      return {
+        status: 200,
+        body: {
+          funcname,
+          path: trimmedPath,
+          ref: { input: rawRef, resolved: commitishRef.hash },
+          entries,
+          truncated,
+          limit: limitResult.value,
+        },
+      };
+    },
+
     async compareRefs(repo, query) {
       const queryValues = readCompareQuery(query);
       if (!queryValues.ok) {
@@ -1106,6 +1490,30 @@ export function createGitService(config) {
      *   `-` patch-id has an equivalent on target → cherry-picked already
      *   `+` patch-id is unique to base → still missing on target
      *
+     * When `nearIdenticalThreshold` is supplied (or defaults to
+     * `CHERRY_THRESHOLD_DEFAULT`), each equivalent entry is further graded:
+     *
+     *   `identical`      — the target-side equivalent commit adds/removes 0
+     *                      lines compared to the base-side commit (same diff
+     *                      content, same context). The most common case for
+     *                      clean cherry-picks.
+     *   `near-identical` — diff lines (added + deleted) ≤ threshold. Conflict
+     *                      resolution added minor adjustments.
+     *   `divergent`      — diff lines > threshold. The logic may have been
+     *                      silently altered during the cherry-pick.
+     *
+     * Grade computation runs one `git diff T^..T` per graded equivalent entry
+     * (sequential, single-user app). Entries beyond `CHERRY_GRADE_MAX_ENTRIES`
+     * are returned with `grade: "ungraded"` to bound request cost.
+     *
+     * Target-side counterpart detection: `git log --left-right --cherry-mark`
+     * emits `=`-prefixed lines for commits that are equivalent on both sides.
+     * We collect base-side hashes from `git cherry` output, then cross-reference
+     * against the `=` lines from `cherry-mark` to identify target-side hashes.
+     * Subject is used as a secondary key when multiple equivalents share a
+     * subject (unusual but possible), and index-based fallback guards against
+     * subject collisions.
+     *
      * This is intentionally a separate endpoint from `compareRefs` because
      * `git cherry` computes patch-ids and is more expensive than the
      * lightweight summary the comparison view loads first. Callers should
@@ -1118,6 +1526,15 @@ export function createGitService(config) {
         return { status: 400, body: { error: queryValues.error } };
       }
       const { base, target } = queryValues.value;
+
+      const thresholdQuery = parseNearIdenticalThresholdQuery(
+        query.get("nearIdenticalThreshold"),
+      );
+      if (!thresholdQuery.ok) {
+        return { status: 400, body: { error: thresholdQuery.error } };
+      }
+      const threshold = thresholdQuery.value ?? CHERRY_THRESHOLD_DEFAULT;
+
       const [baseRevision, targetRevision] = await Promise.all([
         resolveCommitishRevision(repo, base, config.gitTimeoutMs),
         resolveCommitishRevision(repo, target, config.gitTimeoutMs),
@@ -1158,9 +1575,172 @@ export function createGitService(config) {
         }
       }
 
+      // ── Graded equivalence (D-6) ────────────────────────────────────────────
+      // If there are no equivalent entries, skip the extra git calls entirely.
+      if (equivalent.length > 0) {
+        // Build a Set of base-side hashes for quick lookup.
+        const baseEquivHashes = new Set(equivalent.map((e) => e.hash));
+
+        // `git log --left-right --cherry-mark` emits `=<hash>` for commits
+        // that are equivalent on both sides of the symmetric diff. The `=`
+        // marker appears for both the base-side and target-side commits; we
+        // cross-reference with the known base hashes to identify target-side
+        // counterparts. Output format: `=<40-hex> <subject>`.
+        const { stdout: markStdout } = await runGit(
+          repo,
+          [
+            "log",
+            "--left-right",
+            "--cherry-mark",
+            "--no-show-signature",
+            `--format=%m%H %s`,
+            `${baseRevision.hash}...${targetRevision.hash}`,
+          ],
+          { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+        );
+
+        // Collect all `=` lines, partitioned into base-side (known) and
+        // target-side (unknown). Subjects may collide, so we track counts.
+        /** @type {Map<string, string[]>} subject → [targetHash, ...] */
+        const targetBySubject = new Map();
+        for (const rawLine of markStdout.split("\n")) {
+          const line = rawLine.trimEnd();
+          if (line.length < 2 || line[0] !== "=") continue;
+          const rest = line.slice(1);
+          const spIdx = rest.indexOf(" ");
+          const hash = spIdx === -1 ? rest : rest.slice(0, spIdx);
+          const subj = spIdx === -1 ? "" : rest.slice(spIdx + 1);
+          if (!isValidObjectId(hash)) continue;
+          // If not a known base-side hash, it must be a target-side hash.
+          if (!baseEquivHashes.has(hash)) {
+            if (!targetBySubject.has(subj)) targetBySubject.set(subj, []);
+            targetBySubject.get(subj).push(hash);
+          }
+        }
+
+        // Map each equivalent base entry to its target-side counterpart.
+        // Subject collisions are resolved by consumption order (FIFO), which
+        // is the same traversal order git uses for both sides.
+        /** @type {Map<string, string>} baseHash → targetHash */
+        const targetHashForBase = new Map();
+        // Track per-subject consumption index (reset per subject group).
+        /** @type {Map<string, number>} subject → next index to consume */
+        const subjectIdx = new Map();
+        for (const entry of equivalent) {
+          const candidates = targetBySubject.get(entry.subject) ?? [];
+          const idx = subjectIdx.get(entry.subject) ?? 0;
+          if (idx < candidates.length) {
+            targetHashForBase.set(entry.hash, candidates[idx]);
+            subjectIdx.set(entry.subject, idx + 1);
+          }
+        }
+
+        // For each equivalent entry (up to CHERRY_GRADE_MAX_ENTRIES), grade
+        // the cherry-pick fidelity.
+        //
+        // Strategy: compare the file-state of the base commit (`B`) against
+        // the file-state of the target-side counterpart (`T`), but scoped
+        // only to the paths that `B` actually touched. This correctly returns
+        // an empty diff for a clean cherry-pick (same patch applied cleanly)
+        // while surfacing divergence when conflict resolution altered the
+        // logic on the target branch.
+        //
+        // Concretely:
+        //   1. `git diff --name-only B^ B` → list of paths B touched.
+        //   2. `git diff -U3 B T -- <paths>` → compare B vs T on those paths.
+        //
+        // Using `git diff B T` (not `T^..T`) avoids counting B's own changes
+        // as divergence — a clean cherry-pick has identical file state for the
+        // touched paths between B and T, so step 2 returns an empty diff.
+        //
+        // Entries beyond the cap receive grade "ungraded".
+        const DIFF_MAX_BYTES_PER_ENTRY = Math.min(config.diffMaxBytes, 64 * 1024);
+        for (let i = 0; i < equivalent.length; i++) {
+          const entry = equivalent[i];
+          const targetHash = targetHashForBase.get(entry.hash);
+          if (!targetHash) {
+            // Target-side counterpart not found — skip grading.
+            entry.grade = "ungraded";
+            continue;
+          }
+          if (i >= CHERRY_GRADE_MAX_ENTRIES) {
+            entry.grade = "ungraded";
+            continue;
+          }
+          try {
+            // Step 1: resolve the paths touched by the base commit.
+            const { stdout: nameOnlyOut } = await runGit(
+              repo,
+              [
+                "diff",
+                "--name-only",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--end-of-options",
+                `${entry.hash}^`,
+                entry.hash,
+              ],
+              { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+            );
+            const touchedPaths = nameOnlyOut
+              .split("\n")
+              .map((l) => l.trim())
+              .filter(Boolean);
+
+            // Step 2: diff B vs T scoped to those paths. An empty diff means
+            // the cherry-pick was applied cleanly (identical file state on the
+            // touched paths). A non-empty diff reveals divergence.
+            const diffArgs = [
+              "diff",
+              "--no-color",
+              "--no-ext-diff",
+              "--no-textconv",
+              "-U3",
+              "--end-of-options",
+              entry.hash,
+              targetHash,
+              "--",
+              ...touchedPaths,
+            ];
+            const { stdout: diffOut, truncated: diffTruncated } = await runGit(
+              repo,
+              diffArgs,
+              { timeoutMs: config.gitTimeoutMs, maxBytes: DIFF_MAX_BYTES_PER_ENTRY },
+            );
+            // Count added/deleted lines from the diff output.
+            let added = 0;
+            let deleted = 0;
+            for (const dline of diffOut.split("\n")) {
+              if (dline.startsWith("+") && !dline.startsWith("+++")) added++;
+              else if (dline.startsWith("-") && !dline.startsWith("---")) deleted++;
+            }
+            const linesDiff = added + deleted;
+            /** @type {"identical"|"near-identical"|"divergent"} */
+            const grade =
+              linesDiff === 0
+                ? "identical"
+                : linesDiff <= threshold
+                  ? "near-identical"
+                  : "divergent";
+            entry.grade = grade;
+            entry.diffLines = { added, deleted };
+            if (grade !== "identical") {
+              entry.diffHunks = diffTruncated
+                ? diffOut + "\n[truncated]"
+                : diffOut;
+              entry.truncated = diffTruncated ?? false;
+            }
+          } catch {
+            // Diff failed (e.g. merge commit with no single parent) — mark
+            // as ungraded rather than failing the whole request.
+            entry.grade = "ungraded";
+          }
+        }
+      }
+
       return {
         status: 200,
-        body: { base, target, equivalent, missing },
+        body: { base, target, equivalent, missing, threshold },
       };
     },
 
@@ -1844,6 +2424,48 @@ function parseCommitRecords(stdout) {
         fileDiffs,
       };
     });
+}
+
+// ---------------------------------------------------------------------------
+// Coarse-kind classifier for commit list (D-2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute a lightweight coarse structural kind for a commit based on numstat
+ * totals. This is a DERIVATION (heuristic) — Refscope does NOT claim semantic
+ * equivalence. It is intentionally less accurate than `classifyFileDiff` (D-5)
+ * to keep the list endpoint fast.
+ *
+ * Rules (observation → derived label):
+ *   - linesChanged === 0                          → 'empty'
+ *   - symmetry ≥ 0.9 AND linesChanged ≤ 50       → 'likely_refactor'
+ *   - otherwise                                   → 'likely_logic'
+ *
+ * 'symmetry' = 1 - |added - deleted| / max(added, deleted, 1)
+ * 'linesChanged' = added + deleted
+ *
+ * @param {Array<{ added: number; deleted: number }>} fileDiffs
+ * @param {number} totalAdded  — aggregate added (from numstat summary)
+ * @param {number} totalDeleted — aggregate deleted (from numstat summary)
+ * @returns {'empty' | 'likely_refactor' | 'likely_logic'}
+ */
+export function computeCoarseKind(fileDiffs, totalAdded, totalDeleted) {
+  // Treat binary entries (added === -1) as logic change immediately.
+  const hasBinary = fileDiffs.some((f) => f.added === -1 || f.deleted === -1);
+  if (hasBinary) return "likely_logic";
+
+  const added = totalAdded ?? 0;
+  const deleted = totalDeleted ?? 0;
+  const linesChanged = added + deleted;
+
+  if (linesChanged === 0) return "empty";
+
+  const maxLines = Math.max(added, deleted, 1);
+  const symmetry = 1 - Math.abs(added - deleted) / maxLines;
+
+  if (symmetry >= 0.9 && linesChanged <= 50) return "likely_refactor";
+
+  return "likely_logic";
 }
 
 export function parseSignatureStatus(code) {
@@ -2667,6 +3289,110 @@ export function relatedFilesNameLogArgs({ hashes }) {
  *                             the target out of the co-change list.
  * @returns {{ scannedCommits: number, related: Array<{ path: string, coChangeCount: number, lastCoChangeAt: string }> }}
  */
+// ─── Range history (D-4) ─────────────────────────────────────────────────────
+
+/**
+ * Build `git log -L` arguments for range-history retrieval.
+ *
+ * The `-L<start>,<end>:<path>` argument traces the history of the given
+ * line range within the file. `--no-patch` suppresses the diff output so
+ * only commit metadata is returned, keeping the response size bounded.
+ *
+ * Key design decisions:
+ * - `-L<s>,<e>:<path>` uses the "attached" form so git never misinterprets
+ *   the value as a global flag (it's args[1+], not args[0]).
+ * - `--no-merges` reduces noise: merge commits rarely touch specific line
+ *   ranges and their messages rarely carry the "why" context we're after.
+ * - `--no-show-signature` is mandatory (Refscope policy: no GPG invocations).
+ * - `--format=` uses RS (\x1e) as the record separator for reliable parsing.
+ * - `%b` captures the full body; `%x00` (NUL) is the field separator so
+ *   newlines inside body text are preserved verbatim.
+ *
+ * @param {{ lineStart: number, lineEnd: number, path: string, revision: string, maxCount: number }} args
+ */
+export function rangeHistoryLogArgs({ lineStart, lineEnd, path: filePath, revision, maxCount }) {
+  return [
+    "log",
+    `--max-count=${maxCount}`,
+    "--no-merges",
+    "--no-show-signature",
+    "--no-patch",
+    `--format=%x1e%H%x00%an%x00%aI%x00%s%x00%b%x00`,
+    `-L${lineStart},${lineEnd}:${filePath}`,
+    `--end-of-options`,
+    revision,
+  ];
+}
+
+/**
+ * Parse the RS-separated stream produced by `rangeHistoryLogArgs`.
+ * Each record contains NUL-separated fields: hash, author, authorDate,
+ * subject, body. Body may span multiple lines — we trim trailing whitespace.
+ *
+ * Records lacking a valid 40-char hex hash are dropped (observation hygiene).
+ *
+ * @param {string} stdout
+ * @returns {Array<{ hash: string, author: string, authorDate: string, subject: string, body: string }>}
+ */
+export function parseRangeHistoryRecords(stdout) {
+  return stdout
+    .split("\x1e")
+    .map((record) => record.replace(/^\n+/, ""))
+    .filter((record) => record.length > 0)
+    .map((record) => {
+      // NUL-separated: hash, author, authorDate, subject, body, trailing ""
+      const parts = record.split("\x00");
+      const hash = (parts[0] ?? "").trim();
+      const author = (parts[1] ?? "").trim();
+      const authorDate = (parts[2] ?? "").trim();
+      const subject = (parts[3] ?? "").trim();
+      // body may contain newlines — preserve them, just trim leading/trailing whitespace
+      const body = (parts[4] ?? "").trim();
+      return { hash, author, authorDate, subject, body };
+    })
+    .filter((record) => /^[A-Fa-f0-9]{40}$/.test(record.hash));
+}
+
+/**
+ * Extract URLs and GitHub-style issue references from a commit message body.
+ * Returns an array of literal strings observed in the text — no semantic
+ * meaning is inferred (Refscope never calls these "related PRs").
+ *
+ * Patterns matched (literal observed values only):
+ *   - http:// and https:// URLs
+ *   - #NNN GitHub issue/PR references (digits 1-6 chars)
+ *
+ * @param {string} body
+ * @returns {string[]}
+ */
+export function extractUrlsFromBody(body) {
+  if (!body) return [];
+  const results = [];
+  const seen = new Set();
+
+  // https?:// URLs — capture up to the first whitespace or common terminators.
+  const urlPattern = /https?:\/\/[^\s,;)"'>]+/g;
+  for (const match of body.matchAll(urlPattern)) {
+    const url = match[0].replace(/[.,]+$/, ""); // strip trailing punctuation
+    if (!seen.has(url)) {
+      seen.add(url);
+      results.push(url);
+    }
+  }
+
+  // #NNN GitHub-style references (1-6 digits).
+  const refPattern = /#([0-9]{1,6})\b/g;
+  for (const match of body.matchAll(refPattern)) {
+    const ref = match[0];
+    if (!seen.has(ref)) {
+      seen.add(ref);
+      results.push(ref);
+    }
+  }
+
+  return results;
+}
+
 export function parseRelatedFilesRecords(stdout, targetPath) {
   const records = stdout
     .split(COMMIT_RECORD_SEPARATOR)
@@ -2981,3 +3707,128 @@ const HOTSPOT_GIT_TIMEOUT_MS = 20_000;
  * @type {number}
  */
 const HOTSPOT_MAX_BYTES = 1_048_576;
+
+// ─── Symbol-history helpers (D-1) ────────────────────────────────────────────
+
+/**
+ * Build `git log` arguments for the symbol-history endpoint.
+ *
+ * Uses `-L :<funcname>:<path>` to trace the history of a named symbol.
+ * `--find-renames` is passed to enable rename detection in the diff output;
+ * rename evidence is extracted from the diff header by `parseSymbolHistoryRecords`.
+ *
+ * Note: `--follow` cannot be combined with `-L` in Git — if passed, git exits
+ * 128 with "fatal: --follow requires exactly one pathspec". We use
+ * `--find-renames` only, which detects renames at each commit boundary.
+ *
+ * The `-L` argument uses the `:funcname:path` form so Git applies its
+ * built-in funcname regex for the file's language. This is a `log` sub-option,
+ * not a separate command — the runner allowlist checks only `args[0]` ("log").
+ *
+ * We emit `--no-patch` to suppress the large diff body; only the commit
+ * metadata header and the rename information (from the diff header line) are
+ * needed. The diff header is always emitted before the patch hunk, so we can
+ * detect renames from the minimal header output without `--patch`.
+ *
+ * @param {{ funcname: string, path: string, revision: string, maxCount: number }} args
+ * @returns {string[]}
+ */
+export function symbolHistoryLogArgs({ funcname, path: filePath, revision, maxCount }) {
+  return [
+    "log",
+    `--max-count=${maxCount}`,
+    "--no-merges",
+    "--no-show-signature",
+    "--no-patch",
+    `--format=%x1e%H%x00%an%x00%aI%x00%s%x00%b%x00`,
+    `--find-renames`,
+    `-L:${funcname}:${filePath}`,
+    `--end-of-options`,
+    revision,
+  ];
+}
+
+/**
+ * Parse the RS-separated stream produced by `symbolHistoryLogArgs`.
+ *
+ * Each record contains NUL-separated fields: hash, author, authorDate,
+ * subject, body. Because `--no-patch` is used, there is no diff output to
+ * scan for rename headers. Rename detection via diff headers requires
+ * `--patch` output; with `--no-patch` we can only surface that git ran the
+ * `-L` trace successfully.
+ *
+ * For rename detection with `--no-patch`, we rely on a separate pass:
+ * we keep the `renameInfo` field as `null` in the `--no-patch` mode. If
+ * rename tracking is a hard requirement in a future iteration, the caller
+ * can switch to `--patch` and call `extractSymbolRenameFromDiff`.
+ *
+ * Records lacking a valid 40-char hex hash are dropped (observation hygiene).
+ *
+ * @param {string} stdout
+ * @returns {Array<{
+ *   hash: string,
+ *   author: string,
+ *   authorDate: string,
+ *   subject: string,
+ *   body: string,
+ *   renameInfo: { from: string, to: string, similarity: number | null } | null
+ * }>}
+ */
+export function parseSymbolHistoryRecords(stdout) {
+  return stdout
+    .split("\x1e")
+    .map((record) => record.replace(/^\n+/, ""))
+    .filter((record) => record.length > 0)
+    .map((record) => {
+      // NUL-separated: hash, author, authorDate, subject, body, trailing ""
+      const parts = record.split("\x00");
+      const hash = (parts[0] ?? "").trim();
+      const author = (parts[1] ?? "").trim();
+      const authorDate = (parts[2] ?? "").trim();
+      const subject = (parts[3] ?? "").trim();
+      // body may contain newlines — preserve them, just trim leading/trailing whitespace
+      const body = (parts[4] ?? "").trim();
+      return { hash, author, authorDate, subject, body, renameInfo: null };
+    })
+    .filter((record) => /^[A-Fa-f0-9]{40}$/.test(record.hash));
+}
+
+/**
+ * Extract rename information from a `-L`-range diff output block.
+ *
+ * When `--patch` is used (not `--no-patch`), git emits a diff header before
+ * each hunk. For renamed files, the header contains:
+ *   diff --git a/<oldPath> b/<newPath>
+ *   similarity index NN%
+ *   rename from <oldPath>
+ *   rename to <newPath>
+ *
+ * This function scans a single commit's diff block for these markers and
+ * returns the rename evidence, or `null` if no rename occurred.
+ *
+ * Exported for unit testing.
+ *
+ * @param {string} diffBlock  The diff portion of one commit's output.
+ * @returns {{ from: string, to: string, similarity: number | null } | null}
+ */
+export function extractSymbolRenameFromDiff(diffBlock) {
+  if (!diffBlock) return null;
+
+  // Look for "rename from" / "rename to" markers in the diff header.
+  // These lines are emitted by git only when a rename is detected.
+  const renameFromMatch = diffBlock.match(/^rename from (.+)$/m);
+  const renameToMatch = diffBlock.match(/^rename to (.+)$/m);
+
+  if (!renameFromMatch || !renameToMatch) return null;
+
+  const from = renameFromMatch[1].trim();
+  const to = renameToMatch[1].trim();
+
+  if (!from || !to || from === to) return null;
+
+  // Extract similarity percentage from "similarity index NN%" line.
+  const simMatch = diffBlock.match(/^similarity index (\d+)%$/m);
+  const similarity = simMatch ? Number(simMatch[1]) : null;
+
+  return { from, to, similarity };
+}

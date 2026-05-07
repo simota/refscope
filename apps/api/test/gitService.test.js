@@ -1341,6 +1341,199 @@ test("getCompareCherry returns 400 for invalid base/target", async () => {
   assert.equal(result.status, 400);
 });
 
+test("getCompareCherry returns 400 for invalid nearIdenticalThreshold", async () => {
+  const service = createGitService({
+    repositories: new Map(),
+    gitTimeoutMs: 1000,
+    diffMaxBytes: 1024,
+  });
+  const result = await service.getCompareCherry(
+    { id: "demo", name: "demo", path: "/tmp/not-needed" },
+    new URLSearchParams({ base: "main", target: "release", nearIdenticalThreshold: "999" }),
+  );
+  assert.equal(result.status, 400);
+  assert.match(result.body.error, /nearIdenticalThreshold/);
+});
+
+test("getCompareCherry grades equivalent commits as identical on clean cherry-pick", async () => {
+  const repoPath = createTempPath("rtgv-cherry-grade-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "base\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "base commit");
+
+    // Create release branch with a diverging commit so cherry-pick produces
+    // a distinct SHA (required for patch-id correlation to have work to do).
+    git(repoPath, "checkout", "-b", "release");
+    fs.writeFileSync(path.join(repoPath, "release-only.txt"), "release-only\n");
+    git(repoPath, "add", "release-only.txt");
+    git(repoPath, "commit", "-m", "chore(release): branch off");
+    git(repoPath, "checkout", "main");
+
+    fs.writeFileSync(path.join(repoPath, "fix.txt"), "fix\n");
+    git(repoPath, "add", "fix.txt");
+    git(repoPath, "commit", "-m", "fix: critical bug");
+    const fixHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    git(repoPath, "checkout", "release");
+    git(repoPath, "cherry-pick", fixHash);
+    git(repoPath, "checkout", "main");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024 * 1024,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const result = await service.getCompareCherry(
+      repo,
+      new URLSearchParams({ base: "main", target: "release" }),
+    );
+    assert.equal(result.status, 200);
+    assert.equal(result.body.threshold, 10, "default threshold echoed");
+
+    // The fix was cleanly cherry-picked — no diff — so grade must be identical.
+    const fixEntry = result.body.equivalent.find((c) => c.hash === fixHash);
+    assert.ok(fixEntry, "fix commit should be in equivalent list");
+    assert.equal(fixEntry.grade, "identical", "clean cherry-pick should grade as identical");
+    assert.deepEqual(fixEntry.diffLines, { added: 0, deleted: 0 });
+    assert.equal(fixEntry.diffHunks, undefined, "identical entries carry no diffHunks");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getCompareCherry grades near-identical when only whitespace differs", async () => {
+  // `git patch-id` is whitespace-insensitive; a cherry-pick that adds or removes
+  // only leading spaces will still report `-` (equivalent) but `git diff B T --
+  // paths` will show the whitespace change. This is the primary real-world case
+  // for near-identical: conflict resolution changed indentation without altering
+  // logic, and git cherry still considers the commit equivalent.
+  const repoPath = createTempPath("rtgv-cherry-near-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "base\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "base commit");
+
+    git(repoPath, "checkout", "-b", "release");
+    fs.writeFileSync(path.join(repoPath, "release-only.txt"), "release-only\n");
+    git(repoPath, "add", "release-only.txt");
+    git(repoPath, "commit", "-m", "chore(release): branch off");
+    git(repoPath, "checkout", "main");
+
+    // Commit on main: add fix.txt with no leading whitespace.
+    fs.writeFileSync(path.join(repoPath, "fix.txt"), "return 1\n");
+    git(repoPath, "add", "fix.txt");
+    git(repoPath, "commit", "-m", "fix: add function");
+    const fixHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    // Cherry-pick to release, then amend with extra leading spaces only.
+    // `git patch-id` ignores whitespace so git cherry still marks it as `-`
+    // (equivalent). `git diff B T -- fix.txt` will show 1 deleted + 1 added
+    // line (the whitespace change).
+    git(repoPath, "checkout", "release");
+    git(repoPath, "cherry-pick", fixHash);
+    fs.writeFileSync(path.join(repoPath, "fix.txt"), "  return 1\n");
+    git(repoPath, "add", "fix.txt");
+    git(repoPath, "commit", "--amend", "--no-edit");
+    git(repoPath, "checkout", "main");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024 * 1024,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    // Use threshold=5 so 2 diff lines (1 deleted + 1 added) falls within it.
+    const result = await service.getCompareCherry(
+      repo,
+      new URLSearchParams({ base: "main", target: "release", nearIdenticalThreshold: "5" }),
+    );
+    assert.equal(result.status, 200);
+    assert.equal(result.body.threshold, 5, "custom threshold echoed");
+
+    const fixEntry = result.body.equivalent.find((c) => c.hash === fixHash);
+    assert.ok(fixEntry, "fix commit should be in equivalent list (patch-id matches despite whitespace)");
+    // Whitespace-only change: 1 deleted + 1 added = 2 total diff lines ≤ threshold 5.
+    assert.equal(fixEntry.grade, "near-identical");
+    assert.ok(fixEntry.diffLines, "diffLines should be present for near-identical");
+    assert.ok((fixEntry.diffLines.added + fixEntry.diffLines.deleted) > 0, "non-zero diff lines");
+    assert.ok(fixEntry.diffHunks, "diffHunks should be present for near-identical");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getCompareCherry grades divergent when whitespace diff exceeds threshold", async () => {
+  // Same whitespace-insensitive patch-id scenario as near-identical, but with
+  // enough lines changed (> threshold) to push the entry into "divergent".
+  const repoPath = createTempPath("rtgv-cherry-div-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "base\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "base commit");
+
+    git(repoPath, "checkout", "-b", "release");
+    fs.writeFileSync(path.join(repoPath, "release-only.txt"), "release-only\n");
+    git(repoPath, "add", "release-only.txt");
+    git(repoPath, "commit", "-m", "chore(release): branch off");
+    git(repoPath, "checkout", "main");
+
+    // Add a 20-line file on main (no leading whitespace).
+    const originalLines = Array.from({ length: 20 }, (_, i) => `line${i}`).join("\n") + "\n";
+    fs.writeFileSync(path.join(repoPath, "fix.txt"), originalLines);
+    git(repoPath, "add", "fix.txt");
+    git(repoPath, "commit", "-m", "fix: add file");
+    const fixHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    // Cherry-pick to release, then amend by adding 2-space indent to every
+    // line. `git patch-id` is whitespace-insensitive so git cherry still sees
+    // `-` (equivalent). The diff will show 20 deleted + 20 added = 40 lines,
+    // well above threshold=5 → divergent.
+    git(repoPath, "checkout", "release");
+    git(repoPath, "cherry-pick", fixHash);
+    const indentedLines = Array.from({ length: 20 }, (_, i) => `  line${i}`).join("\n") + "\n";
+    fs.writeFileSync(path.join(repoPath, "fix.txt"), indentedLines);
+    git(repoPath, "add", "fix.txt");
+    git(repoPath, "commit", "--amend", "--no-edit");
+    git(repoPath, "checkout", "main");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024 * 1024,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const result = await service.getCompareCherry(
+      repo,
+      new URLSearchParams({ base: "main", target: "release", nearIdenticalThreshold: "5" }),
+    );
+    assert.equal(result.status, 200);
+
+    const fixEntry = result.body.equivalent.find((c) => c.hash === fixHash);
+    assert.ok(fixEntry, "fix commit should be in equivalent list (patch-id matches despite whitespace)");
+    // 40 diff lines (20 deleted + 20 added) > threshold 5 → divergent.
+    assert.equal(fixEntry.grade, "divergent");
+    assert.ok(fixEntry.diffLines, "diffLines should be present for divergent");
+    assert.ok((fixEntry.diffLines.added + fixEntry.diffLines.deleted) > 5, "diff lines exceed threshold");
+    assert.ok(fixEntry.diffHunks, "diffHunks should be present for divergent");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("getCommitContainingRefs returns empty list for unreachable commit", async () => {
   const repoPath = createTempPath("rtgv-contains-empty-");
   try {

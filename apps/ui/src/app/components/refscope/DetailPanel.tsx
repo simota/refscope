@@ -1,19 +1,26 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
+  ChevronDown,
+  ChevronRight,
   Copy,
   ExternalLink,
   FileSearch,
   History,
+  Search,
   ShieldCheck,
 } from "lucide-react";
 import type { Commit, CommitDetail } from "./data";
 import type {
   ContainingRef,
   DiffPayload,
+  RangeHistoryEntry,
+  RangeHistoryResponse,
   WorkTreeResponse,
   WorkTreeUntrackedFile,
 } from "../../api";
+import { fetchRangeHistory } from "../../api";
 import { DiffViewer } from "./DiffViewer";
+import { StructuralDiffBadge } from "./StructuralDiffBadge";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -21,6 +28,12 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "../ui/context-menu";
+
+export type WhyPanelQuery = {
+  path: string;
+  lineStart: number;
+  lineEnd: number;
+};
 
 export function DetailPanel({
   commit,
@@ -38,6 +51,8 @@ export function DetailPanel({
   containingRefs,
   onOpenFileHistory,
   onFilterByPath,
+  whyPanelQuery,
+  onWhyPanelQueryChange,
 }: {
   commit: Commit | null;
   detail: CommitDetail | null;
@@ -60,6 +75,9 @@ export function DetailPanel({
   // Right-click action: pin a path into the global path filter so the
   // timeline narrows to commits that touched it.
   onFilterByPath?: (path: string) => void;
+  // "Why is this here?" panel query state (owned by App.tsx).
+  whyPanelQuery?: WhyPanelQuery | null;
+  onWhyPanelQueryChange?: (q: WhyPanelQuery | null) => void;
 }) {
   // Hooks must run unconditionally before any early return, otherwise React's
   // rules-of-hooks check trips and reorders break state. The previous version
@@ -306,6 +324,7 @@ export function DetailPanel({
                     >
                       {f.path}
                     </span>
+                    <StructuralDiffBadge kind={f.structuralKind} compact />
                     <span style={{ color: "var(--rs-git-added)" }}>+{f.added}</span>
                     <span style={{ color: "var(--rs-git-deleted)" }}>-{f.deleted}</span>
                     <button
@@ -371,6 +390,13 @@ export function DetailPanel({
             <Empty>{loading ? "Loading diff…" : "No diff returned for this commit."}</Empty>
           )}
         </Section>
+
+        <WhyPanel
+          repoId={repoId}
+          changedFiles={files.map((f) => f.path)}
+          query={whyPanelQuery ?? null}
+          onQueryChange={onWhyPanelQueryChange ?? (() => {})}
+        />
       </div>
     </PanelShell>
   );
@@ -898,6 +924,441 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
       </dt>
       <dd style={{ color: "var(--rs-text-primary)", fontSize: 12 }}>{children}</dd>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "Why is this here?" panel
+// ---------------------------------------------------------------------------
+
+/**
+ * WhyPanel — lets the user query `git log -L` for a line range in a file that
+ * was modified in the selected commit. All displayed text is the literal output
+ * from Git; no inference is performed.
+ */
+function WhyPanel({
+  repoId,
+  changedFiles,
+  query,
+  onQueryChange,
+}: {
+  repoId: string;
+  changedFiles: string[];
+  query: WhyPanelQuery | null;
+  onQueryChange: (q: WhyPanelQuery | null) => void;
+}) {
+  const [localPath, setLocalPath] = useState(query?.path ?? "");
+  const [localStart, setLocalStart] = useState(query?.lineStart ? String(query.lineStart) : "");
+  const [localEnd, setLocalEnd] = useState(query?.lineEnd ? String(query.lineEnd) : "");
+  const [result, setResult] = useState<RangeHistoryResponse | null>(null);
+  const [fetchError, setFetchError] = useState("");
+  const [fetching, setFetching] = useState(false);
+  const [middleExpanded, setMiddleExpanded] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      const start = parseInt(localStart, 10);
+      const end = parseInt(localEnd, 10);
+      if (!localPath || !Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < start) {
+        setFetchError("Please enter a valid path and line range (start ≤ end, both ≥ 1).");
+        return;
+      }
+      const q: WhyPanelQuery = { path: localPath, lineStart: start, lineEnd: end };
+      onQueryChange(q);
+      setFetchError("");
+      setResult(null);
+      setMiddleExpanded(false);
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      setFetching(true);
+      try {
+        const data = await fetchRangeHistory(repoId, { path: q.path, lineStart: q.lineStart, lineEnd: q.lineEnd }, ctrl.signal);
+        if (!ctrl.signal.aborted) {
+          setResult(data);
+        }
+      } catch (err) {
+        if (!ctrl.signal.aborted) {
+          setFetchError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (!ctrl.signal.aborted) {
+          setFetching(false);
+        }
+      }
+    },
+    [localPath, localStart, localEnd, repoId, onQueryChange],
+  );
+
+  // When a file from the context menu is selected, pre-fill the path.
+  const handleFileSelect = (path: string) => {
+    setLocalPath(path);
+  };
+
+  const entries = result?.entries ?? [];
+  const oldest = entries.length > 0 ? entries[entries.length - 1] : null;
+  const newest = entries.length > 0 ? entries[0] : null;
+  const middle = entries.length > 2 ? entries.slice(1, entries.length - 1) : [];
+
+  return (
+    <div style={{ borderBottom: "1px solid var(--rs-border)" }}>
+      {/* Section header */}
+      <div
+        className="px-4 flex items-center gap-2"
+        style={{
+          height: 30,
+          fontSize: 10,
+          letterSpacing: "0.08em",
+          fontWeight: 600,
+          color: "var(--rs-text-muted)",
+          background: "var(--rs-bg-canvas)",
+          borderBottom: "1px solid var(--rs-border)",
+        }}
+      >
+        <Search size={10} aria-hidden />
+        <span>WHY IS THIS HERE?</span>
+      </div>
+
+      {/* Query form */}
+      <form onSubmit={(e) => void handleSubmit(e)} className="px-3 py-2" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {/* File path — datalist from changed files */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <label
+            htmlFor="why-path"
+            style={{ fontSize: 10, letterSpacing: "0.06em", color: "var(--rs-text-muted)" }}
+          >
+            FILE PATH
+          </label>
+          <input
+            id="why-path"
+            list="why-path-list"
+            value={localPath}
+            onChange={(e) => setLocalPath(e.target.value)}
+            placeholder="path/to/file.ts"
+            autoComplete="off"
+            style={{
+              fontSize: 11,
+              fontFamily: "var(--rs-mono)",
+              background: "var(--rs-bg-elevated)",
+              color: "var(--rs-text-primary)",
+              border: "1px solid var(--rs-border)",
+              borderRadius: 4,
+              padding: "3px 6px",
+              outline: "none",
+              width: "100%",
+            }}
+          />
+          {changedFiles.length > 0 ? (
+            <datalist id="why-path-list">
+              {changedFiles.map((p) => (
+                <option key={p} value={p} />
+              ))}
+            </datalist>
+          ) : null}
+        </div>
+
+        {/* Line range */}
+        <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
+            <label
+              htmlFor="why-start"
+              style={{ fontSize: 10, letterSpacing: "0.06em", color: "var(--rs-text-muted)" }}
+            >
+              LINE START
+            </label>
+            <input
+              id="why-start"
+              type="number"
+              min={1}
+              max={99999}
+              value={localStart}
+              onChange={(e) => setLocalStart(e.target.value)}
+              placeholder="1"
+              style={{
+                fontSize: 11,
+                fontFamily: "var(--rs-mono)",
+                background: "var(--rs-bg-elevated)",
+                color: "var(--rs-text-primary)",
+                border: "1px solid var(--rs-border)",
+                borderRadius: 4,
+                padding: "3px 6px",
+                outline: "none",
+                width: "100%",
+              }}
+            />
+          </div>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
+            <label
+              htmlFor="why-end"
+              style={{ fontSize: 10, letterSpacing: "0.06em", color: "var(--rs-text-muted)" }}
+            >
+              LINE END
+            </label>
+            <input
+              id="why-end"
+              type="number"
+              min={1}
+              max={99999}
+              value={localEnd}
+              onChange={(e) => setLocalEnd(e.target.value)}
+              placeholder="1"
+              style={{
+                fontSize: 11,
+                fontFamily: "var(--rs-mono)",
+                background: "var(--rs-bg-elevated)",
+                color: "var(--rs-text-primary)",
+                border: "1px solid var(--rs-border)",
+                borderRadius: 4,
+                padding: "3px 6px",
+                outline: "none",
+                width: "100%",
+              }}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={fetching || !repoId}
+            style={{
+              fontSize: 11,
+              padding: "4px 10px",
+              borderRadius: 4,
+              background: "var(--rs-accent)",
+              color: "#fff",
+              border: "none",
+              cursor: fetching ? "wait" : "pointer",
+              opacity: fetching ? 0.6 : 1,
+              whiteSpace: "nowrap",
+              alignSelf: "flex-end",
+            }}
+          >
+            {fetching ? "Loading…" : "Search"}
+          </button>
+        </div>
+
+        {/* Quick-fill chips from changed files */}
+        {changedFiles.length > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {changedFiles.map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => handleFileSelect(p)}
+                title={`Use ${p}`}
+                style={{
+                  fontSize: 10,
+                  fontFamily: "var(--rs-mono)",
+                  padding: "1px 6px",
+                  borderRadius: 99,
+                  background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 10%)",
+                  color: "var(--rs-text-secondary)",
+                  border: "1px solid var(--rs-border)",
+                  cursor: "pointer",
+                  maxWidth: 180,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {p.split("/").pop()}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </form>
+
+      {/* Results */}
+      {fetchError ? (
+        <div className="px-3 pb-3" style={{ fontSize: 11, color: "var(--rs-git-deleted)" }}>
+          {fetchError}
+        </div>
+      ) : null}
+
+      {result !== null && entries.length === 0 ? (
+        <Empty>No commits found for this line range.</Empty>
+      ) : null}
+
+      {result !== null && entries.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {/* Newest commit */}
+          {newest !== null ? (
+            <WhyEntry entry={newest} label="LATEST CHANGE" />
+          ) : null}
+
+          {/* Middle history (collapsible) */}
+          {middle.length > 0 ? (
+            <div>
+              <button
+                type="button"
+                onClick={() => setMiddleExpanded((v) => !v)}
+                className="px-3 flex items-center gap-1"
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  fontSize: 10,
+                  letterSpacing: "0.06em",
+                  color: "var(--rs-text-muted)",
+                  background: "var(--rs-bg-canvas)",
+                  border: "none",
+                  borderTop: "1px solid color-mix(in oklab, var(--rs-border), transparent 40%)",
+                  borderBottom: "1px solid color-mix(in oklab, var(--rs-border), transparent 40%)",
+                  cursor: "pointer",
+                  padding: "4px 12px",
+                  gap: 4,
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
+                {middleExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                {middle.length} more commit{middle.length === 1 ? "" : "s"} in between
+              </button>
+              {middleExpanded
+                ? middle.map((e) => <WhyEntry key={e.hash} entry={e} />)
+                : null}
+            </div>
+          ) : null}
+
+          {/* Oldest commit — the likely introducing commit */}
+          {oldest !== null && oldest !== newest ? (
+            <WhyEntry entry={oldest} label="OLDEST (INTRODUCED HERE?)" />
+          ) : null}
+
+          {/* Footer note */}
+          <div
+            className="px-3 py-2"
+            style={{
+              fontSize: 10,
+              color: "var(--rs-text-muted)",
+              borderTop: "1px solid var(--rs-border)",
+              fontStyle: "italic",
+            }}
+          >
+            Literal commit messages from Git — no LLM inference used.
+            {result.truncated ? ` Showing first ${result.limit} of more results.` : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Single commit entry within the WhyPanel result list. */
+function WhyEntry({
+  entry,
+  label,
+}: {
+  entry: RangeHistoryEntry;
+  label?: string;
+}) {
+  return (
+    <div
+      style={{
+        borderTop: "1px solid color-mix(in oklab, var(--rs-border), transparent 40%)",
+        padding: "6px 12px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 2,
+      }}
+    >
+      {label ? (
+        <span
+          style={{
+            fontSize: 9,
+            letterSpacing: "0.08em",
+            fontWeight: 700,
+            color: "var(--rs-accent)",
+            textTransform: "uppercase",
+          }}
+        >
+          {label}
+        </span>
+      ) : null}
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <span
+          style={{
+            fontSize: 10,
+            fontFamily: "var(--rs-mono)",
+            color: "var(--rs-text-muted)",
+            flexShrink: 0,
+          }}
+        >
+          {entry.shortHash}
+        </span>
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: "var(--rs-text-primary)",
+            lineHeight: 1.4,
+          }}
+        >
+          {entry.subject}
+        </span>
+      </div>
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--rs-text-secondary)",
+          display: "flex",
+          gap: 6,
+        }}
+      >
+        <span>{entry.author}</span>
+        <span style={{ color: "var(--rs-text-muted)" }}>·</span>
+        <span>{formatDate(entry.authorDate)}</span>
+      </div>
+      {entry.body ? (
+        <p
+          style={{
+            fontSize: 11,
+            color: "var(--rs-text-secondary)",
+            lineHeight: 1.5,
+            marginTop: 2,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {entry.body}
+        </p>
+      ) : null}
+      {entry.urlsInBody.length > 0 ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
+          {entry.urlsInBody.map((url, i) => (
+            url.startsWith("http") ? (
+              <a
+                // eslint-disable-next-line react/no-array-index-key
+                key={i}
+                href={url}
+                target="_blank"
+                rel="noreferrer noopener"
+                style={{
+                  fontSize: 10,
+                  fontFamily: "var(--rs-mono)",
+                  color: "var(--rs-accent)",
+                  textDecoration: "underline",
+                  wordBreak: "break-all",
+                }}
+              >
+                {url}
+              </a>
+            ) : (
+              <span
+                // eslint-disable-next-line react/no-array-index-key
+                key={i}
+                style={{
+                  fontSize: 10,
+                  fontFamily: "var(--rs-mono)",
+                  color: "var(--rs-text-muted)",
+                }}
+              >
+                {url}
+              </span>
+            )
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

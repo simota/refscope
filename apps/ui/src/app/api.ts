@@ -75,6 +75,8 @@ type CommitResponse = {
   deleted?: number;
   fileCount?: number;
   riskScore?: number;
+  /** Lightweight coarse structural classification (D-2). Present when API ≥ 0.9. */
+  coarseKind?: "empty" | "likely_refactor" | "likely_logic";
 };
 
 export type ViewerEvent =
@@ -285,10 +287,29 @@ export async function compareRefs(repoId: string, base: string, target: string) 
   return getJson<CompareResult>(`/api/repos/${encodeURIComponent(repoId)}/compare?${params}`);
 }
 
+/** Grade assigned to an equivalent cherry-pick entry (D-6). */
+export type CherryGrade =
+  | "identical"       // no diff lines between base commit and target equivalent
+  | "near-identical"  // diff lines ≤ nearIdenticalThreshold
+  | "divergent"       // diff lines > nearIdenticalThreshold
+  | "ungraded";       // grade not computed (cap exceeded or target counterpart not found)
+
 export type CherryEntry = {
   hash: string;
   shortHash: string;
   subject: string;
+  // Graded equivalence fields (present only on `equivalent` entries, absent on `missing`).
+  grade?: CherryGrade;
+  /** Added and deleted line counts from `git diff T^..T` on the target-side commit. */
+  diffLines?: { added: number; deleted: number };
+  /**
+   * Raw unified-diff output (-U3) for the target-side commit. Only present
+   * when grade is `near-identical` or `divergent`. May include a `[truncated]`
+   * suffix when the diff exceeded the server byte cap.
+   */
+  diffHunks?: string;
+  /** True when the diff output was truncated by the server-side byte cap. */
+  truncated?: boolean;
 };
 
 export type CompareCherryResult = {
@@ -300,20 +321,32 @@ export type CompareCherryResult = {
   // Base commits with no patch-id match on target — still missing from
   // the release.
   missing: CherryEntry[];
+  /**
+   * The `nearIdenticalThreshold` that was used for grading (lines added +
+   * deleted). Echoed back so the UI can display the active threshold.
+   */
+  threshold: number;
 };
 
 /**
  * Lazy fetch for cherry-pick equivalence between two refs. Heavier than
  * the regular compare summary (computes patch-ids) so callers should only
  * trigger it when the user explicitly asks for cherry-pick status.
+ *
+ * @param nearIdenticalThreshold Lines-changed threshold for `near-identical`
+ *   grade (default 10 server-side, clamped to [1, 50]).
  */
 export async function compareCherry(
   repoId: string,
   base: string,
   target: string,
+  nearIdenticalThreshold?: number,
   signal?: AbortSignal,
 ): Promise<CompareCherryResult> {
   const params = new URLSearchParams({ base, target });
+  if (nearIdenticalThreshold !== undefined) {
+    params.set("nearIdenticalThreshold", String(nearIdenticalThreshold));
+  }
   return getJson<CompareCherryResult>(
     `/api/repos/${encodeURIComponent(repoId)}/compare/cherry?${params}`,
     signal,
@@ -426,6 +459,56 @@ export async function fetchRelatedFiles(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Range history ("Why is this here?" panel)
+// GET /api/repos/:repoId/files/range-history
+// ---------------------------------------------------------------------------
+
+export type RangeHistoryEntry = {
+  hash: string;
+  shortHash: string;
+  author: string;
+  authorDate: string;
+  subject: string;
+  body: string;
+  urlsInBody: string[];
+};
+
+/**
+ * Wire shape for `GET /api/repos/:repoId/files/range-history`. `entries` are
+ * the commits that last touched the given line range, ordered newest-first.
+ * `truncated` is true when the repo has more matching commits than `limit`
+ * allowed us to surface.
+ */
+export type RangeHistoryResponse = {
+  path: string;
+  ref: { input: string; resolved: string };
+  lineStart: number;
+  lineEnd: number;
+  entries: RangeHistoryEntry[];
+  truncated: boolean;
+  limit: number;
+};
+
+export async function fetchRangeHistory(
+  repoId: string,
+  params: { path: string; lineStart: number; lineEnd: number; ref?: string; limit?: number },
+  signal?: AbortSignal,
+): Promise<RangeHistoryResponse> {
+  const search = new URLSearchParams();
+  search.set("path", params.path);
+  search.set("lineStart", String(params.lineStart));
+  search.set("lineEnd", String(params.lineEnd));
+  if (params.ref) search.set("ref", params.ref);
+  if (typeof params.limit === "number" && Number.isFinite(params.limit)) {
+    search.set("limit", String(params.limit));
+  }
+  return getJson<RangeHistoryResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/files/range-history?${search}`,
+    signal,
+  );
+}
+
 /**
  * Working-tree changes payload. The API returns the literal `git diff` /
  * `git diff --cached` output; the UI feeds each side's `diff` straight into
@@ -528,6 +611,124 @@ export async function fetchCommitsSummary(
   if (params.ref) search.set("ref", params.ref);
   return getJson<CommitsSummary>(
     `/api/repos/${encodeURIComponent(repoId)}/commits/summary?${search}`,
+    signal,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Branch group health fetch
+// ---------------------------------------------------------------------------
+
+/**
+ * A single branch entry returned by the group-health endpoint.
+ * Observed fields (raw Git data): ahead, behind, daysSinceLast, updatedAt.
+ * Derived field (Refscope): rotScore = clamp(D/7,0,10)+clamp(B/5,0,10)+clamp(A/10,0,5).
+ */
+export type BranchGroupEntry = {
+  name: string;
+  shortName: string;
+  hash: string;
+  updatedAt: string | null;
+  ahead: number;
+  behind: number;
+  mergeBase: string | null;
+  daysSinceLast: number;
+  /** Derived rot-risk score 0–25. See API docs for formula. */
+  rotScore: number;
+};
+
+export type BranchGroupHealthResponse = {
+  prefix: string | null;
+  base: { input: string; resolved: string };
+  branches: BranchGroupEntry[];
+};
+
+export async function fetchBranchGroupHealth(
+  repoId: string,
+  params?: { prefix?: string; base?: string },
+  signal?: AbortSignal,
+): Promise<BranchGroupHealthResponse> {
+  const search = new URLSearchParams();
+  if (params?.prefix) search.set("prefix", params.prefix);
+  if (params?.base) search.set("base", params.base);
+  const querySuffix = search.toString();
+  return getJson<BranchGroupHealthResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/branches/grouped${querySuffix ? `?${querySuffix}` : ""}`,
+    signal,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Symbol history fetch (D-1)
+// GET /api/repos/:repoId/symbols/history
+// ---------------------------------------------------------------------------
+
+/**
+ * Rename evidence for a symbol-history entry.
+ * When the file containing the symbol was renamed at this commit, Git reports
+ * the old and new paths. `similarity` is the rename percentage as computed by
+ * Git (never inferred by Refscope).
+ */
+export type SymbolRenameInfo = {
+  from: string;
+  to: string;
+  /** Similarity percentage [0, 100] reported by Git, or null if not available. */
+  similarity: number | null;
+};
+
+/**
+ * One commit entry in a symbol-history response.
+ * `renameInfo` is non-null only when the file was renamed at this commit.
+ */
+export type SymbolHistoryEntry = {
+  hash: string;
+  shortHash: string;
+  author: string;
+  authorDate: string;
+  subject: string;
+  body: string;
+  renameInfo: SymbolRenameInfo | null;
+};
+
+/**
+ * Wire shape for `GET /api/repos/:repoId/symbols/history`.
+ * `truncated` is true when the repo has more matching commits than `limit`.
+ */
+export type SymbolHistoryResponse = {
+  funcname: string;
+  path: string;
+  ref: { input: string; resolved: string };
+  entries: SymbolHistoryEntry[];
+  truncated: boolean;
+  limit: number;
+};
+
+/**
+ * Fetch the commit history for a named symbol (function/method).
+ *
+ * Uses `git log -L :<funcname>:<path>` under the hood. Symbol not found
+ * (typo or unsupported language) rejects with an Error containing a `hint`
+ * field; callers should surface this to the user.
+ *
+ * @param params.path     - File path relative to the repo root.
+ * @param params.funcname - Symbol name (function, method, constant).
+ * @param params.ref      - Git ref to start history from (default HEAD).
+ * @param params.limit    - Max commits to return (default 20, max 50).
+ */
+export async function fetchSymbolHistory(
+  repoId: string,
+  params: { path: string; funcname: string; ref?: string; limit?: number },
+  signal?: AbortSignal,
+): Promise<SymbolHistoryResponse> {
+  const search = new URLSearchParams();
+  search.set("path", params.path);
+  search.set("funcname", params.funcname);
+  if (params.ref) search.set("ref", params.ref);
+  if (typeof params.limit === "number" && Number.isFinite(params.limit)) {
+    search.set("limit", String(params.limit));
+  }
+  return getJson<SymbolHistoryResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/symbols/history?${search}`,
     signal,
   );
 }
@@ -691,6 +892,7 @@ function toCommit(commit: CommitResponse): Commit {
     parents: commit.parents,
     lane: commit.isMerge ? 1 : 0,
     riskScore: commit.riskScore,
+    coarseKind: commit.coarseKind,
   };
 }
 

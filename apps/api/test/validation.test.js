@@ -9,6 +9,7 @@ import {
   parseFleetWindowQuery,
   parseGroupByQuery,
   parseHost,
+  parseNearIdenticalThresholdQuery,
   parsePatternQuery,
   parseSearchModeQuery,
 } from "../src/validation.js";
@@ -375,4 +376,31 @@ test("parseHost accepts any non-localhost address when RTGV_BIND_PUBLIC=1", () =
   assert.deepEqual(parseHost("::", env), { accepted: true, escapeHatchUsed: true });
   assert.deepEqual(parseHost("192.168.1.5", env), { accepted: true, escapeHatchUsed: true });
   assert.deepEqual(parseHost("8.8.8.8", env), { accepted: true, escapeHatchUsed: true });
+});
+
+// ─── parseNearIdenticalThresholdQuery ───────────────────────────────────────
+
+test("parseNearIdenticalThresholdQuery treats null, undefined, empty as unspecified", () => {
+  assert.deepEqual(parseNearIdenticalThresholdQuery(null), { ok: true, value: null });
+  assert.deepEqual(parseNearIdenticalThresholdQuery(undefined), { ok: true, value: null });
+  assert.deepEqual(parseNearIdenticalThresholdQuery(""), { ok: true, value: null });
+  assert.deepEqual(parseNearIdenticalThresholdQuery("   "), { ok: true, value: null });
+});
+
+test("parseNearIdenticalThresholdQuery accepts valid integers in [1, 50]", () => {
+  assert.deepEqual(parseNearIdenticalThresholdQuery("1"), { ok: true, value: 1 });
+  assert.deepEqual(parseNearIdenticalThresholdQuery("10"), { ok: true, value: 10 });
+  assert.deepEqual(parseNearIdenticalThresholdQuery("50"), { ok: true, value: 50 });
+});
+
+test("parseNearIdenticalThresholdQuery rejects values outside [1, 50]", () => {
+  assert.equal(parseNearIdenticalThresholdQuery("0").ok, false);
+  assert.equal(parseNearIdenticalThresholdQuery("51").ok, false);
+  assert.equal(parseNearIdenticalThresholdQuery("999").ok, false);
+});
+
+test("parseNearIdenticalThresholdQuery rejects non-integer strings", () => {
+  assert.equal(parseNearIdenticalThresholdQuery("abc").ok, false);
+  assert.equal(parseNearIdenticalThresholdQuery("1.5").ok, false);
+  assert.equal(parseNearIdenticalThresholdQuery("-5").ok, false);
 });

@@ -1,3 +1,15 @@
+/**
+ * Lightweight coarse structural classification for the commit list (D-2).
+ * DERIVATION — numstat-based heuristic, NOT a semantic guarantee.
+ * Less accurate than the per-file `StructuralKind` (D-5) but computed without
+ * patch text so the list endpoint stays fast.
+ *
+ * - 'empty'           — no lines changed (e.g. mode-only change)
+ * - 'likely_refactor' — high symmetry (≥ 90%) AND small diff (≤ 50 lines)
+ * - 'likely_logic'    — asymmetric or large change, or contains binary files
+ */
+export type CoarseKind = "empty" | "likely_refactor" | "likely_logic";
+
 export type Commit = {
   hash: string;
   shortHash?: string;
@@ -20,6 +32,11 @@ export type Commit = {
   lane: number;
   /** Risky Diff Detector score (0 = no risk, 1-49 = warning, 50+ = danger). */
   riskScore?: number;
+  /**
+   * Lightweight coarse structural classification (D-2).
+   * DERIVATION — see CoarseKind docs. Absent on legacy API responses.
+   */
+  coarseKind?: CoarseKind;
 };
 
 export type SignatureStatus =
@@ -33,11 +50,29 @@ export type SignatureStatus =
   | "unsigned"
   | "unknown";
 
+/**
+ * Structural classification of a changed file (D-5).
+ * DERIVATION — heuristic estimate from line symmetry and token preservation.
+ * Refscope does NOT claim semantic equivalence.
+ */
+export type StructuralKind =
+  | "whitespace_only"  // all changes are whitespace/formatting
+  | "comment_only"     // all changes are comments or blank lines
+  | "rename_only"      // very high token overlap + symmetric line counts
+  | "symmetric"        // structurally close (high token similarity ≥ 0.80)
+  | "logic_change"     // low token similarity (< 0.50), significant change
+  | "mixed";           // medium similarity or indeterminate
+
 export type ChangedFile = {
   status: string;
   path: string;
   added: number;
   deleted: number;
+  /**
+   * Heuristic structural classification (D-5, Option A).
+   * Absent when the API did not compute it (older server or binary file).
+   */
+  structuralKind?: StructuralKind;
 };
 
 export type Repository = {
