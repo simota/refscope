@@ -4,6 +4,7 @@ import path from "node:path";
 
 const ALLOWED_GIT_COMMANDS = new Set([
   "cat-file",
+  "cherry",
   "diff",
   "for-each-ref",
   "log",
