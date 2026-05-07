@@ -21,7 +21,6 @@ import {
   type StashEntry,
 } from '../../api';
 import type { Commit } from './data';
-import { RiskBadge } from './RiskBadge';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -268,9 +267,6 @@ function AheadColumn({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
               <span style={{ ...CARD_TITLE_STYLE, flex: 1 }}>{c.subject}</span>
-              {c.riskScore != null && c.riskScore > 0 && (
-                <RiskBadge score={c.riskScore} />
-              )}
             </div>
             <div style={CARD_META_STYLE}>
               <span style={{ fontFamily: 'var(--rs-mono)' }}>{c.shortHash ?? c.hash.slice(0, 7)}</span>

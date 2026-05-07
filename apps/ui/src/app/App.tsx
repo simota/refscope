@@ -335,33 +335,6 @@ export default function App() {
   const [recentFileHistoryPaths, setRecentFileHistoryPaths] = useState<string[]>(
     () => loadRecentFileHistoryPaths(),
   );
-  // Risky Diff Detector — muted state persisted to localStorage.
-  // Key: refscope.riskDetector.v1, value: { muted: boolean }
-  const [riskMuted, setRiskMuted] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      const raw = window.localStorage.getItem("refscope.riskDetector.v1");
-      if (!raw) return false;
-      const parsed: unknown = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && "muted" in parsed) {
-        return Boolean((parsed as { muted: unknown }).muted);
-      }
-    } catch {
-      // corrupted storage → default to false
-    }
-    return false;
-  });
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        "refscope.riskDetector.v1",
-        JSON.stringify({ muted: riskMuted }),
-      );
-    } catch {
-      // quota exceeded / private mode → skip persistence
-    }
-  }, [riskMuted]);
-
   // Stash + linked-worktree listings live alongside refs because the sidebar
   // renders them next to branches / tags. They re-fetch on repo change but
   // not on every commit selection — they're slow-moving observation facts.
@@ -1483,8 +1456,6 @@ export default function App() {
                 setAuthor(value);
                 setSelected("");
               }}
-              riskMuted={riskMuted}
-              onToggleRiskMute={() => setRiskMuted((prev) => !prev)}
             />
           </div>
         </ResizablePanel>

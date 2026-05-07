@@ -23,7 +23,6 @@ import {
   type HotspotFileEntry,
 } from '../../api';
 import type { Commit } from './data';
-import { RiskBadge } from './RiskBadge';
 import type { LensId } from './LensSwitcher';
 
 // ---------------------------------------------------------------------------
@@ -310,9 +309,6 @@ function RiskyCommitsPane({
               {c.shortHash ?? c.hash.slice(0, 7)}
             </span>
             <span style={LABEL_STYLE}>{c.subject}</span>
-            {c.riskScore != null && c.riskScore > 0 && (
-              <RiskBadge score={c.riskScore} />
-            )}
           </div>
         ))
       )}

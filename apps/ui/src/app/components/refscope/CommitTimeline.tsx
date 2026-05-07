@@ -12,7 +12,6 @@ import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import type { Commit, CompareResult, GitRef } from "./data";
 import type { WorkTreeResponse } from "../../api";
-import { RiskBadge } from "./RiskBadge";
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -65,8 +64,6 @@ export function CommitTimeline({
   onSetCommitAsCompareBase,
   onSetCommitAsCompareTarget,
   onFilterByAuthor,
-  riskMuted = false,
-  onToggleRiskMute,
 }: {
   commits: Commit[];
   selected: string;
@@ -110,8 +107,6 @@ export function CommitTimeline({
   onSetCommitAsCompareBase?: (hash: string) => void;
   onSetCommitAsCompareTarget?: (hash: string) => void;
   onFilterByAuthor?: (author: string) => void;
-  riskMuted?: boolean;
-  onToggleRiskMute?: () => void;
 }) {
   const emptyState = activeFilters?.length
     ? {
@@ -188,9 +183,6 @@ export function CommitTimeline({
                 onRefresh={onRefreshWorkTree}
               />
             ) : null}
-            {onToggleRiskMute ? (
-              <RiskMuteBar muted={riskMuted} onToggle={onToggleRiskMute} />
-            ) : null}
             {commits.map((c, i) => (
               <CommitRow
                 key={c.hash}
@@ -202,7 +194,6 @@ export function CommitTimeline({
                 onSetAsCompareBase={onSetCommitAsCompareBase}
                 onSetAsCompareTarget={onSetCommitAsCompareTarget}
                 onFilterByAuthor={onFilterByAuthor}
-                riskMuted={riskMuted}
               />
             ))}
           </ul>
@@ -858,33 +849,6 @@ function StateMessage({ title, message }: { title: string; message: string }) {
   );
 }
 
-function RiskMuteBar({ muted, onToggle }: { muted: boolean; onToggle: () => void }) {
-  return (
-    <li
-      role="presentation"
-      style={{
-        listStyle: "none",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "flex-end",
-        padding: "4px 16px",
-        borderBottom: "1px solid color-mix(in oklab, var(--rs-border), transparent 40%)",
-        background: "var(--rs-bg-panel)",
-      }}
-    >
-      <button
-        type="button"
-        className="rs-compact-button"
-        onClick={onToggle}
-        style={{ fontSize: 10, opacity: muted ? 1 : 0.65 }}
-        title={muted ? "Risk highlights muted — click to show" : "Click to mute risk highlights"}
-      >
-        {muted ? "Risk: muted" : "Risk: on"}
-      </button>
-    </li>
-  );
-}
-
 function CommitRow({
   commit,
   prev,
@@ -894,7 +858,6 @@ function CommitRow({
   onSetAsCompareBase,
   onSetAsCompareTarget,
   onFilterByAuthor,
-  riskMuted = false,
 }: {
   commit: Commit;
   prev?: Commit;
@@ -904,7 +867,6 @@ function CommitRow({
   onSetAsCompareBase?: (hash: string) => void;
   onSetAsCompareTarget?: (hash: string) => void;
   onFilterByAuthor?: (author: string) => void;
-  riskMuted?: boolean;
 }) {
   const laneColor = LANE_COLORS[commit.lane] ?? LANE_COLORS[0];
   const fileCount = commit.fileCount ?? commit.files.length;
@@ -1009,7 +971,6 @@ function CommitRow({
       </div>
 
       <div className="self-center flex items-center gap-2">
-        <RiskBadge score={commit.riskScore} muted={riskMuted} />
         <span
           className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
           style={{ fontSize: 11, color: "var(--rs-text-muted)", fontFamily: "var(--rs-mono)" }}
