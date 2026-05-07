@@ -146,8 +146,18 @@ export function createRequestHandler(config, gitService, fleetService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "commitsContaining") {
+        const result = await gitService.getCommitContainingRefs(repo.value, route.params.hash);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "compare") {
         const result = await gitService.compareRefs(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "compareCherry") {
+        const result = await gitService.getCompareCherry(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
         return;
       }
@@ -264,6 +274,12 @@ function matchRoute(method, pathname) {
   }
   if (parts.length === 4 && parts[3] === "commits") return { name: "commits", params: { repoId } };
   if (parts.length === 4 && parts[3] === "compare") return { name: "compare", params: { repoId } };
+  // Cherry-pick equivalence panel: GET /api/repos/:id/compare/cherry
+  // Same query contract as /compare but exposes patch-id correlation
+  // (`git cherry`). Read-only, opt-in fetch — heavier than the summary.
+  if (parts.length === 5 && parts[3] === "compare" && parts[4] === "cherry") {
+    return { name: "compareCherry", params: { repoId } };
+  }
   // `/commits/summary` is matched before the generic `/commits/:hash` route so
   // the literal path segment cannot be misread as a commit hash.
   if (parts.length === 5 && parts[3] === "commits" && parts[4] === "summary") {
@@ -281,6 +297,13 @@ function matchRoute(method, pathname) {
   // the handler to keep matchRoute pure.
   if (parts.length === 6 && parts[3] === "commits" && parts[5] === "risk") {
     return { name: "commitsRisk", params: { repoId, hash: parts[4] } };
+  }
+  // Reachability: GET /api/repos/:id/commits/:sha/refs
+  // Returns public refs (heads/tags/remotes) whose history reaches the
+  // given commit. Same matching shape as /risk so the literal trailing
+  // segment cannot be misread as a hash.
+  if (parts.length === 6 && parts[3] === "commits" && parts[5] === "refs") {
+    return { name: "commitsContaining", params: { repoId, hash: parts[4] } };
   }
   // File-history view: `/files/history` is a literal sub-path so the file path
   // itself stays in the query string (where validation owns the contract).

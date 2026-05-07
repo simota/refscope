@@ -1195,3 +1195,187 @@ test("listCommits rejects duplicate mode parameter before running git", async ()
     body: { error: "Duplicate mode parameter" },
   });
 });
+
+test("getCommitContainingRefs rejects malformed hash before running git", async () => {
+  const service = createGitService({
+    repositories: new Map(),
+    gitTimeoutMs: 1000,
+    diffMaxBytes: 1024,
+  });
+
+  const result = await service.getCommitContainingRefs(
+    { id: "demo", name: "demo", path: "/tmp/not-needed" },
+    "not-a-hash",
+  );
+
+  assert.deepEqual(result, {
+    status: 400,
+    body: { error: "Invalid commit hash" },
+  });
+});
+
+test("getCommitContainingRefs returns refs whose history reaches the commit", async () => {
+  const repoPath = createTempPath("rtgv-contains-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "base\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "base commit");
+    const baseHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    // main advances; release/2026.05 forks from base; feature/x is unrelated.
+    git(repoPath, "checkout", "-b", "release/2026.05");
+    git(repoPath, "checkout", "main");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "base\nmain advance\n");
+    git(repoPath, "commit", "-am", "advance main");
+    const mainTipHash = git(repoPath, "rev-parse", "HEAD").trim();
+    git(repoPath, "tag", "v0.1.0");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    // Base commit reaches main, release/2026.05, and tag v0.1.0 only via main.
+    const baseResult = await service.getCommitContainingRefs(repo, baseHash);
+    assert.equal(baseResult.status, 200);
+    const baseShortNames = baseResult.body.refs.map((r) => r.shortName).sort();
+    assert.deepEqual(baseShortNames, ["main", "release/2026.05", "v0.1.0"]);
+
+    // Tip commit on main is not on release/2026.05 (which forked at base).
+    const tipResult = await service.getCommitContainingRefs(repo, mainTipHash);
+    assert.equal(tipResult.status, 200);
+    const tipShortNames = tipResult.body.refs.map((r) => r.shortName).sort();
+    assert.deepEqual(tipShortNames, ["main", "v0.1.0"]);
+
+    // Refs carry type metadata so the UI can group branches vs tags.
+    const types = new Map(tipResult.body.refs.map((r) => [r.shortName, r.type]));
+    assert.equal(types.get("main"), "branch");
+    assert.equal(types.get("v0.1.0"), "tag");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getCompareCherry separates patch-id equivalent commits from missing ones", async () => {
+  const repoPath = createTempPath("rtgv-cherry-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "base\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "base commit");
+
+    // Branch off `release`, give it a release-only commit, then back to
+    // main. This is critical for the cherry-pick test: if release stays at
+    // base when we cherry-pick, the cherry-picked commit ends up with the
+    // *same* hash as on main (same tree + same parent), and `git cherry`
+    // only flags commits that are in head-not-upstream *by hash*. The
+    // release-only commit makes the cherry-pick produce a distinct SHA so
+    // patch-id correlation has work to do.
+    git(repoPath, "checkout", "-b", "release");
+    fs.writeFileSync(path.join(repoPath, "release-only.txt"), "release-only\n");
+    git(repoPath, "add", "release-only.txt");
+    git(repoPath, "commit", "-m", "chore(release): branch off");
+    git(repoPath, "checkout", "main");
+
+    fs.writeFileSync(path.join(repoPath, "fix.txt"), "fix\n");
+    git(repoPath, "add", "fix.txt");
+    git(repoPath, "commit", "-m", "fix: critical bug");
+
+    fs.writeFileSync(path.join(repoPath, "feature.txt"), "feature\n");
+    git(repoPath, "add", "feature.txt");
+    git(repoPath, "commit", "-m", "feat: new thing");
+
+    const fixHash = git(repoPath, "rev-parse", "HEAD~1").trim();
+    const featureHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    git(repoPath, "checkout", "release");
+    git(repoPath, "cherry-pick", fixHash);
+    git(repoPath, "checkout", "main");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const result = await service.getCompareCherry(
+      repo,
+      new URLSearchParams({ base: "main", target: "release" }),
+    );
+    assert.equal(result.status, 200);
+
+    const equivalentHashes = result.body.equivalent.map((c) => c.hash).sort();
+    const missingHashes = result.body.missing.map((c) => c.hash).sort();
+
+    // The fix commit was cherry-picked → equivalent. The feature commit
+    // was not → missing.
+    assert.deepEqual(equivalentHashes, [fixHash].sort());
+    assert.deepEqual(missingHashes, [featureHash].sort());
+    // Subjects flow through so the UI can render them without an extra
+    // round-trip per row.
+    const fixEntry = result.body.equivalent.find((c) => c.hash === fixHash);
+    assert.equal(fixEntry?.subject, "fix: critical bug");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getCompareCherry returns 400 for invalid base/target", async () => {
+  const service = createGitService({
+    repositories: new Map(),
+    gitTimeoutMs: 1000,
+    diffMaxBytes: 1024,
+  });
+  const result = await service.getCompareCherry(
+    { id: "demo", name: "demo", path: "/tmp/not-needed" },
+    new URLSearchParams({ base: "refs/heads/x.", target: "main" }),
+  );
+  assert.equal(result.status, 400);
+});
+
+test("getCommitContainingRefs returns empty list for unreachable commit", async () => {
+  const repoPath = createTempPath("rtgv-contains-empty-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "first\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "first");
+    const reachableHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    // Make a dangling commit (no ref points to it / no ref reaches it).
+    fs.writeFileSync(path.join(repoPath, "README.md"), "second\n");
+    git(repoPath, "add", "README.md");
+    const danglingTreeHash = git(repoPath, "write-tree").trim();
+    const danglingHash = git(
+      repoPath,
+      "commit-tree",
+      danglingTreeHash,
+      "-p",
+      reachableHash,
+      "-m",
+      "dangling",
+    ).trim();
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const result = await service.getCommitContainingRefs(repo, danglingHash);
+    assert.deepEqual(result, { status: 200, body: { refs: [] } });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});

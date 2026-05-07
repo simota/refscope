@@ -672,6 +672,58 @@ export function createGitService(config) {
       };
     },
 
+    /**
+     * List public refs whose history reaches the given commit (reachability).
+     * Powers the DetailPanel "Contained in" section so users can answer
+     * "is this fix in release/* yet?" without dropping to the CLI.
+     *
+     * Returns refs sorted newest-first by committer date so tags surface in
+     * release order. UI is responsible for any further grouping (e.g.
+     * branches vs tags). Empty array is a valid response — the commit may
+     * exist but not yet be reachable from any public ref (e.g. a fresh local
+     * commit before push).
+     */
+    async getCommitContainingRefs(repo, hash) {
+      if (!isValidObjectId(hash)) {
+        return { status: 400, body: { error: "Invalid commit hash" } };
+      }
+      const commitObject = await validateCommitObject(repo, hash, config.gitTimeoutMs);
+      if (!commitObject.ok) {
+        return commitObject.result;
+      }
+
+      const { stdout } = await runGit(
+        repo,
+        [
+          "for-each-ref",
+          "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(committerdate:iso-strict)",
+          "--sort=-committerdate",
+          `--contains=${hash}`,
+          "refs/heads",
+          "refs/tags",
+          "refs/remotes",
+        ],
+        { timeoutMs: config.gitTimeoutMs },
+      );
+
+      const refs = stdout
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [name, objectHash, peeledHash, updatedAt] = line.split(COMMIT_FIELD_SEPARATOR);
+          return {
+            name,
+            shortName: shortRefName(name),
+            hash: peeledHash || objectHash,
+            type: refType(name),
+            updatedAt: updatedAt || null,
+          };
+        });
+
+      return { status: 200, body: { refs } };
+    },
+
     async summarizeCommits(repo, query) {
       const queryValues = readSummaryQuery(query);
       if (!queryValues.ok) {
@@ -1039,6 +1091,76 @@ export function createGitService(config) {
             diff: `git diff ${base} ${target}`,
           },
         },
+      };
+    },
+
+    /**
+     * Cherry-pick equivalence detection for a base/target compare.
+     *
+     * Surfaces the SRE / release-engineer answer to "is this fix already on
+     * the release branch?" — even when the cherry-pick produced a different
+     * SHA. Internally runs `git cherry -v <target> <base>`, which tags each
+     * base commit (in `base` but not in `target` by hash) with one of two
+     * markers based on patch-id correlation:
+     *
+     *   `-` patch-id has an equivalent on target → cherry-picked already
+     *   `+` patch-id is unique to base → still missing on target
+     *
+     * This is intentionally a separate endpoint from `compareRefs` because
+     * `git cherry` computes patch-ids and is more expensive than the
+     * lightweight summary the comparison view loads first. Callers should
+     * fetch this lazily (e.g. when the user opens a "cherry-pick status"
+     * panel).
+     */
+    async getCompareCherry(repo, query) {
+      const queryValues = readCompareQuery(query);
+      if (!queryValues.ok) {
+        return { status: 400, body: { error: queryValues.error } };
+      }
+      const { base, target } = queryValues.value;
+      const [baseRevision, targetRevision] = await Promise.all([
+        resolveCommitishRevision(repo, base, config.gitTimeoutMs),
+        resolveCommitishRevision(repo, target, config.gitTimeoutMs),
+      ]);
+      if (!baseRevision.ok) {
+        return baseRevision.result;
+      }
+      if (!targetRevision.ok) {
+        return targetRevision.result;
+      }
+
+      // `git cherry [-v] <upstream> <head>` — note positional order: the
+      // upstream is the side we're checking *against*. Asking "is each
+      // main commit already on release?" → upstream=release, head=main.
+      const { stdout } = await runGit(
+        repo,
+        ["cherry", "-v", targetRevision.hash, baseRevision.hash],
+        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+      );
+
+      const equivalent = [];
+      const missing = [];
+      for (const rawLine of stdout.split("\n")) {
+        const line = rawLine.trimEnd();
+        if (line.length < 2) continue;
+        const marker = line[0];
+        // Format: "<marker> <hash>[ <subject>]"
+        const rest = line.slice(2);
+        const spaceIdx = rest.indexOf(" ");
+        const hash = spaceIdx === -1 ? rest : rest.slice(0, spaceIdx);
+        const subject = spaceIdx === -1 ? "" : rest.slice(spaceIdx + 1);
+        if (!isValidObjectId(hash)) continue;
+        const entry = { hash, shortHash: hash.slice(0, 7), subject };
+        if (marker === "-") {
+          equivalent.push(entry);
+        } else if (marker === "+") {
+          missing.push(entry);
+        }
+      }
+
+      return {
+        status: 200,
+        body: { base, target, equivalent, missing },
       };
     },
 
