@@ -1450,6 +1450,7 @@ export default function App() {
               liveAnnouncement={liveAnnouncement}
               activeFilters={activeFilters(search, author, path, searchMode, searchPattern)}
               refs={refs}
+              repoId={selectedRepo}
               selectedRef={selectedRef}
               selectedCommit={current}
               selectionNotice={selectionNotice}

@@ -8,10 +8,14 @@ import {
   GitCompareArrows,
   User,
 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Commit, CompareResult, GitRef } from "./data";
-import type { WorkTreeResponse } from "../../api";
+import {
+  compareCherry as fetchCompareCherry,
+  type CompareCherryResult,
+  type WorkTreeResponse,
+} from "../../api";
 import { parseConventionalCommit } from "../../lib/conventionalCommit";
 import {
   Collapsible,
@@ -41,6 +45,7 @@ export function CommitTimeline({
   liveAnnouncement,
   activeFilters,
   refs,
+  repoId,
   selectedRef,
   selectedCommit,
   selectionNotice,
@@ -78,6 +83,7 @@ export function CommitTimeline({
   liveAnnouncement: string;
   activeFilters?: string[];
   refs: GitRef[];
+  repoId: string;
   selectedRef: string;
   selectedCommit: Commit | null;
   selectionNotice: string;
@@ -150,6 +156,7 @@ export function CommitTimeline({
       </div>
       <CompareBarCollapsible
         refs={refs}
+        repoId={repoId}
         selectedRef={selectedRef}
         selectedCommit={selectedCommit}
         compareBase={compareBase}
@@ -446,6 +453,7 @@ function GraphMetric({
 
 function CompareBar({
   refs,
+  repoId,
   selectedRef,
   selectedCommit,
   base,
@@ -459,6 +467,7 @@ function CompareBar({
   onClear,
 }: {
   refs: GitRef[];
+  repoId: string;
   selectedRef: string;
   selectedCommit: Commit | null;
   base: string;
@@ -472,6 +481,30 @@ function CompareBar({
   onClear: () => void;
 }) {
   const active = Boolean(base || target);
+  // Cherry-pick equivalence is opt-in: it computes patch-ids server-side and
+  // is heavier than the regular ahead/behind summary, so we only fetch when
+  // the user clicks the button. State resets when base/target change so the
+  // panel never shows results from a previous compare config.
+  const [cherry, setCherry] = useState<CompareCherryResult | null>(null);
+  const [cherryLoading, setCherryLoading] = useState(false);
+  const [cherryError, setCherryError] = useState<string>("");
+  useEffect(() => {
+    setCherry(null);
+    setCherryError("");
+  }, [base, target]);
+  async function loadCherry() {
+    if (!repoId || !base || !target) return;
+    setCherryLoading(true);
+    setCherryError("");
+    try {
+      const data = await fetchCompareCherry(repoId, base, target);
+      setCherry(data);
+    } catch (err) {
+      setCherryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCherryLoading(false);
+    }
+  }
   return (
     <section
       className="px-3 py-2"
@@ -511,7 +544,20 @@ function CompareBar({
             <CopyCommand label="Copy log" command={result.commands.log} />
             <CopyCommand label="Copy stat" command={result.commands.stat} />
             <CopyCommand label="Copy diff" command={result.commands.diff} />
+            <button
+              type="button"
+              className="rs-compact-button"
+              onClick={loadCherry}
+              disabled={cherryLoading || !base || !target}
+              title="Detect cherry-pick equivalents (patch-id correlation, opt-in)"
+            >
+              {cherryLoading ? "Checking…" : "Cherry-pick status"}
+            </button>
           </div>
+          {cherryError ? (
+            <CompareSummary>Cherry-pick check failed: {cherryError}</CompareSummary>
+          ) : null}
+          {cherry ? <CherryStatus cherry={cherry} /> : null}
         </>
       ) : active ? (
         <CompareSummary>Choose both base and target to compare.</CompareSummary>
@@ -524,6 +570,7 @@ function CompareBar({
 
 function CompareBarCollapsible({
   refs,
+  repoId,
   selectedRef,
   selectedCommit,
   compareBase,
@@ -539,6 +586,7 @@ function CompareBarCollapsible({
   onToggle,
 }: {
   refs: GitRef[];
+  repoId: string;
   selectedRef: string;
   selectedCommit: Commit | null;
   compareBase: string;
@@ -604,6 +652,7 @@ function CompareBarCollapsible({
         >
           <CompareBar
             refs={refs}
+            repoId={repoId}
             selectedRef={selectedRef}
             selectedCommit={selectedCommit}
             base={compareBase}
@@ -619,6 +668,91 @@ function CompareBarCollapsible({
         </div>
       </CollapsibleContent>
     </Collapsible>
+  );
+}
+
+function CherryStatus({ cherry }: { cherry: CompareCherryResult }) {
+  // Bound the rendered list — large compares can produce thousands of lines
+  // and we'd freeze the panel. The user already sees the full count so
+  // truncation is honest, not silent.
+  const CAP = 50;
+  return (
+    <div className="mt-3" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <CherryList
+        title="Equivalent on target"
+        hint="Already cherry-picked (patch-id match)."
+        accent="var(--rs-git-added)"
+        entries={cherry.equivalent}
+        cap={CAP}
+      />
+      <CherryList
+        title="Missing on target"
+        hint="Base has these, target does not."
+        accent="var(--rs-git-deleted)"
+        entries={cherry.missing}
+        cap={CAP}
+      />
+    </div>
+  );
+}
+
+function CherryList({
+  title,
+  hint,
+  accent,
+  entries,
+  cap,
+}: {
+  title: string;
+  hint: string;
+  accent: string;
+  entries: CompareCherryResult["equivalent"];
+  cap: number;
+}) {
+  const visible = entries.slice(0, cap);
+  return (
+    <div
+      style={{
+        border: `1px solid color-mix(in oklab, var(--rs-border), ${accent} 30%)`,
+        borderRadius: "var(--rs-radius-sm)",
+        background: `color-mix(in oklab, var(--rs-bg-elevated), ${accent} 6%)`,
+        padding: "6px 8px",
+      }}
+    >
+      <div className="flex items-baseline justify-between mb-1">
+        <span style={{ fontSize: 11, fontWeight: 650, color: accent }}>
+          {title} ({entries.length})
+        </span>
+        <span style={{ fontSize: 10, color: "var(--rs-text-muted)" }}>{hint}</span>
+      </div>
+      {entries.length === 0 ? (
+        <span style={{ fontSize: 11, color: "var(--rs-text-muted)" }}>None.</span>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          {visible.map((entry) => (
+            <li
+              key={entry.hash}
+              className="truncate"
+              style={{
+                fontSize: 11,
+                fontFamily: "var(--rs-mono)",
+                color: "var(--rs-text-primary)",
+                lineHeight: 1.6,
+              }}
+              title={`${entry.hash} ${entry.subject}`}
+            >
+              <span style={{ color: "var(--rs-text-muted)" }}>{entry.shortHash}</span>{" "}
+              {entry.subject}
+            </li>
+          ))}
+          {entries.length > cap ? (
+            <li style={{ fontSize: 10, color: "var(--rs-text-muted)", marginTop: 4 }}>
+              … {entries.length - cap} more not shown
+            </li>
+          ) : null}
+        </ul>
+      )}
+    </div>
   );
 }
 

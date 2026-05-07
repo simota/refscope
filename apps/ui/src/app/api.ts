@@ -285,6 +285,41 @@ export async function compareRefs(repoId: string, base: string, target: string) 
   return getJson<CompareResult>(`/api/repos/${encodeURIComponent(repoId)}/compare?${params}`);
 }
 
+export type CherryEntry = {
+  hash: string;
+  shortHash: string;
+  subject: string;
+};
+
+export type CompareCherryResult = {
+  base: string;
+  target: string;
+  // Base commits whose patch-id has an equivalent on target — i.e. already
+  // cherry-picked (or otherwise applied) to the release branch.
+  equivalent: CherryEntry[];
+  // Base commits with no patch-id match on target — still missing from
+  // the release.
+  missing: CherryEntry[];
+};
+
+/**
+ * Lazy fetch for cherry-pick equivalence between two refs. Heavier than
+ * the regular compare summary (computes patch-ids) so callers should only
+ * trigger it when the user explicitly asks for cherry-pick status.
+ */
+export async function compareCherry(
+  repoId: string,
+  base: string,
+  target: string,
+  signal?: AbortSignal,
+): Promise<CompareCherryResult> {
+  const params = new URLSearchParams({ base, target });
+  return getJson<CompareCherryResult>(
+    `/api/repos/${encodeURIComponent(repoId)}/compare/cherry?${params}`,
+    signal,
+  );
+}
+
 export type CommitsSummaryGroup = {
   kind: "prefix" | "path" | "author";
   key: string;
