@@ -46,6 +46,45 @@ export type RefDriftSummary = {
   mergeBase: string | null;
 };
 
+export type BranchHealth = "active" | "stale" | "merged" | "diverged";
+
+// 90-day default mirrors the demand AC. Tunable via UI in a follow-up; for
+// now it's the load-bearing default everyone agrees on for "stale".
+const STALE_THRESHOLD_MS = 90 * 24 * 60 * 60 * 1000;
+
+/**
+ * Classify a branch into one of four health buckets so SREs and OSS
+ * maintainers can filter the sidebar to "the work that matters now"
+ * vs "the graveyard". Decision order:
+ *   1. Stale: last commit older than the threshold (regardless of drift).
+ *   2. Merged: zero unique commits on this branch — fully reachable from
+ *      base. Safe to delete.
+ *   3. Diverged: both sides have unique commits — needs reconciliation.
+ *   4. Active: the default — recent and not yet merged.
+ *
+ * `drift` is optional because the drift fetch can be in flight when we
+ * render; missing drift falls back to "active" rather than locking the
+ * sidebar behind the network.
+ */
+export function computeBranchHealth(
+  ref: GitRef,
+  drift: RefDriftSummary | null | undefined,
+  now: number = Date.now(),
+  staleThresholdMs: number = STALE_THRESHOLD_MS,
+): BranchHealth {
+  if (ref.updatedAt) {
+    const ts = Date.parse(ref.updatedAt);
+    if (Number.isFinite(ts) && now - ts > staleThresholdMs) {
+      return "stale";
+    }
+  }
+  if (drift) {
+    if (drift.ahead === 0 && drift.behind > 0) return "merged";
+    if (drift.ahead > 0 && drift.behind > 0) return "diverged";
+  }
+  return "active";
+}
+
 export function BranchSidebar({
   repoId,
   refs,
@@ -98,9 +137,28 @@ export function BranchSidebar({
   // pins to deleted branches degrade to "not shown" rather than rendering
   // dangling rows.
   const pinnedRefs = refs.filter((ref) => isPinned(ref.name));
-  const branches = refs.filter((ref) => ref.type === "branch");
+  const allBranches = refs.filter((ref) => ref.type === "branch");
   const tags = refs.filter((ref) => ref.type === "tag");
   const remotes = refs.filter((ref) => ref.type === "remote");
+  // Branch health filter — narrows the BRANCHES section without touching
+  // pinned / remotes / tags. Health is computed once per render so we don't
+  // recompute it inside both the filter and the row badge.
+  const [healthFilter, setHealthFilter] = useState<"all" | BranchHealth>("all");
+  const branchHealth = new Map<string, BranchHealth>();
+  for (const ref of allBranches) {
+    branchHealth.set(ref.name, computeBranchHealth(ref, driftMap?.get(ref.name)));
+  }
+  const branches =
+    healthFilter === "all"
+      ? allBranches
+      : allBranches.filter((ref) => branchHealth.get(ref.name) === healthFilter);
+  const branchHealthCounts = {
+    active: 0,
+    stale: 0,
+    merged: 0,
+    diverged: 0,
+  } as Record<BranchHealth, number>;
+  for (const value of branchHealth.values()) branchHealthCounts[value]++;
   // Halo bars are normalised against the largest observed ahead+behind across
   // currently-visible drift entries. We compute it once at the sidebar level
   // so every halo in branches + remotes shares a single scale; otherwise a
@@ -159,6 +217,12 @@ export function BranchSidebar({
       </Section>
 
       <Section icon={<GitBranch size={11} />} title="BRANCHES">
+        <BranchHealthFilter
+          value={healthFilter}
+          onChange={setHealthFilter}
+          counts={branchHealthCounts}
+          total={allBranches.length}
+        />
         {branches.length ? (
           branches.map((ref) => (
             <BranchRow
@@ -171,6 +235,7 @@ export function BranchSidebar({
               drift={driftMap?.get(ref.name) ?? null}
               driftScale={driftScale}
               baseLabel={baseLabel}
+              health={branchHealth.get(ref.name)}
               onClick={() => onSelectRef(ref.name)}
               onSetCompareBase={onSetRefAsCompareBase}
               onSetCompareTarget={onSetRefAsCompareTarget}
@@ -179,7 +244,11 @@ export function BranchSidebar({
             />
           ))
         ) : (
-          <EmptyRow>No branches</EmptyRow>
+          <EmptyRow>
+            {healthFilter === "all"
+              ? "No branches"
+              : `No ${healthFilter} branches`}
+          </EmptyRow>
         )}
       </Section>
 
@@ -742,6 +811,7 @@ function BranchRow({
   drift,
   driftScale,
   baseLabel,
+  health,
   onClick,
   onSetCompareBase,
   onSetCompareTarget,
@@ -757,6 +827,7 @@ function BranchRow({
   drift?: RefDriftSummary | null;
   driftScale?: number;
   baseLabel?: string;
+  health?: BranchHealth;
   onClick?: () => void;
   onSetCompareBase?: (refName: string) => void;
   onSetCompareTarget?: (refName: string) => void;
@@ -798,6 +869,7 @@ function BranchRow({
       {isPinned ? (
         <Pin size={9} aria-label="Pinned" style={{ color: "var(--rs-accent)" }} />
       ) : null}
+      {health && health !== "active" ? <HealthBadge health={health} /> : null}
       {drift ? (
         <DriftHalo
           ahead={drift.ahead}
@@ -1004,6 +1076,112 @@ function DriftHalo({
  * total drift in this view". A floor of 1 keeps division well-defined when
  * every visible ref is exactly at base.
  */
+// Color tokens reused so the badge agrees with the underlying meaning:
+// stale = warning amber, merged = "this is done" green, diverged = the
+// modified-color (drift). Active is implicit (no badge).
+const HEALTH_COLORS: Record<BranchHealth, string> = {
+  active: "var(--rs-accent)",
+  stale: "var(--rs-warning)",
+  merged: "var(--rs-git-added)",
+  diverged: "var(--rs-git-modified)",
+};
+
+function HealthBadge({ health }: { health: BranchHealth }) {
+  const tint = HEALTH_COLORS[health];
+  const label = HEALTH_FILTER_LABELS[health];
+  return (
+    <span
+      className="px-1.5 rounded"
+      title={`Branch health: ${label}`}
+      aria-label={`Branch health: ${label}`}
+      style={{
+        fontSize: 9,
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        color: tint,
+        background: `color-mix(in oklab, var(--rs-bg-elevated), ${tint} 14%)`,
+        border: `1px solid color-mix(in oklab, var(--rs-border), ${tint} 40%)`,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+const HEALTH_FILTER_LABELS: Record<BranchHealth | "all", string> = {
+  all: "All",
+  active: "Active",
+  stale: "Stale",
+  merged: "Merged",
+  diverged: "Diverged",
+};
+
+const HEALTH_FILTER_ORDER: ("all" | BranchHealth)[] = [
+  "all",
+  "active",
+  "stale",
+  "merged",
+  "diverged",
+];
+
+function BranchHealthFilter({
+  value,
+  onChange,
+  counts,
+  total,
+}: {
+  value: "all" | BranchHealth;
+  onChange: (next: "all" | BranchHealth) => void;
+  counts: Record<BranchHealth, number>;
+  total: number;
+}) {
+  // Hide the entire filter row when there's nothing to filter — sub-3
+  // branches makes the chips noisier than useful.
+  if (total < 3) return null;
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Filter branches by health"
+      className="flex flex-wrap gap-1 px-2 py-1.5"
+      style={{ borderBottom: "1px solid var(--rs-border)" }}
+    >
+      {HEALTH_FILTER_ORDER.map((option) => {
+        const isActive = value === option;
+        const optionCount = option === "all" ? total : counts[option];
+        // Disable buckets that have zero matches so the user doesn't enter
+        // a dead state. "All" is always enabled.
+        const disabled = option !== "all" && optionCount === 0;
+        const tint = option === "all" ? "var(--rs-text-muted)" : HEALTH_COLORS[option as BranchHealth];
+        return (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={isActive}
+            disabled={disabled}
+            onClick={() => onChange(option)}
+            className="px-1.5 rounded"
+            style={{
+              fontSize: 10,
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+              cursor: disabled ? "default" : "pointer",
+              opacity: disabled ? 0.35 : 1,
+              color: isActive ? "var(--rs-text-primary)" : tint,
+              background: isActive
+                ? `color-mix(in oklab, var(--rs-bg-elevated), ${tint} 28%)`
+                : "transparent",
+              border: `1px solid color-mix(in oklab, var(--rs-border), ${tint} ${isActive ? 60 : 30}%)`,
+            }}
+          >
+            {HEALTH_FILTER_LABELS[option]} {optionCount > 0 ? optionCount : ""}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function computeDriftScale(driftMap?: Map<string, RefDriftSummary>) {
   if (!driftMap || driftMap.size === 0) return 1;
   let max = 1;
