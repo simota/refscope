@@ -126,6 +126,12 @@ export function DiffViewer({
   const exitFullscreenButtonRef = useRef<HTMLButtonElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
+  // Scroll memory for the diff body. Reviewers in OSS / large-PR workflows
+  // bounce between commits and expect to land back on the line they were
+  // reading. We persist scrollTop per commit so navigating A → B → A
+  // restores rather than scrolling to the top.
+  const diffScrollRef = useRef<HTMLDivElement | null>(null);
+  const previousCommitHashRef = useRef<string>(commitHash);
 
   // Reset transient state when the underlying commit changes. Fullscreen is
   // also closed on commit change — opening a new commit while still in
@@ -159,6 +165,52 @@ export function DiffViewer({
     // Only react to commit changes — controlled / uncontrolled both want this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commitHash]);
+
+  // Save the previous commit's scroll position before swapping in the new
+  // commit's content; then restore the new commit's saved position (if any)
+  // after the DOM updates. sessionStorage scopes the memory to the tab so
+  // it doesn't leak across browser sessions or share with other tabs.
+  useEffect(() => {
+    const previousHash = previousCommitHashRef.current;
+    const node = diffScrollRef.current;
+    if (previousHash && previousHash !== commitHash && node) {
+      // Saving on hash transition keeps us out of the "save on every scroll
+      // event" rabbit hole — the only meaningful checkpoint is right before
+      // we leave a commit.
+      try {
+        window.sessionStorage.setItem(
+          `rs-diff-scroll:${previousHash}`,
+          String(node.scrollTop),
+        );
+      } catch {
+        // sessionStorage may throw in restricted contexts (private mode,
+        // strict iframe policies). Falling back to "no memory" is fine.
+      }
+    }
+    previousCommitHashRef.current = commitHash;
+  }, [commitHash]);
+
+  useEffect(() => {
+    // Defer the read+write to a frame so the new commit's content has been
+    // committed and laid out — restoring scrollTop on a 0-height container
+    // would silently be a no-op.
+    const handle = requestAnimationFrame(() => {
+      const node = diffScrollRef.current;
+      if (!node) return;
+      let raw: string | null = null;
+      try {
+        raw = window.sessionStorage.getItem(`rs-diff-scroll:${commitHash}`);
+      } catch {
+        return;
+      }
+      if (raw === null) return;
+      const value = Number(raw);
+      if (Number.isFinite(value) && value >= 0) {
+        node.scrollTop = value;
+      }
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [commitHash, parsed]);
 
   // Body scroll lock and focus management while the overlay is open.
   useEffect(() => {
@@ -409,6 +461,7 @@ export function DiffViewer({
           onFilterByPath={onFilterByPath}
         />
         <div
+          ref={diffScrollRef}
           className={fullscreen ? "flex-1 overflow-auto" : "flex-1 overflow-x-auto"}
           style={{ minWidth: 0, borderLeft: "1px solid var(--rs-border)" }}
         >
