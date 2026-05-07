@@ -5,7 +5,9 @@ import {
   parseDateQuery,
   parseFleetIncludeQuery,
   parseFleetWindowQuery,
+  parseFuncNameQuery,
   parseLimitQuery,
+  parsePathQuery,
   parsePostBodyJson,
   validateRepoAddInput,
 } from "./validation.js";
@@ -14,6 +16,10 @@ import {
   HOTSPOT_DEFAULT_LIMIT,
   HOTSPOT_MAX_COMMIT_CAP,
   HOTSPOT_MAX_LIMIT,
+  RANGE_HISTORY_DEFAULT_LIMIT,
+  RANGE_HISTORY_MAX_LIMIT,
+  SYMBOL_HISTORY_DEFAULT_LIMIT,
+  SYMBOL_HISTORY_MAX_LIMIT,
 } from "./gitService.js";
 
 export function createRequestHandler(config, gitService, fleetService) {
@@ -121,6 +127,11 @@ export function createRequestHandler(config, gitService, fleetService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "branchesGrouped") {
+        const result = await gitService.getBranchGroupHealth(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "commits") {
         const result = await gitService.listCommits(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
@@ -163,6 +174,46 @@ export function createRequestHandler(config, gitService, fleetService) {
       }
       if (route.name === "fileHistory") {
         const result = await gitService.getFileHistory(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "rangeHistory") {
+        const result = await gitService.getRangeHistory(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "symbolHistory") {
+        // Validate funcname and path before delegating to gitService.
+        // parseFuncNameQuery enforces the strict allowlist (Architecture Review flag).
+        const funcNameResult = parseFuncNameQuery(url.searchParams.get("funcname"));
+        if (!funcNameResult.ok) {
+          sendJson(res, 400, { error: funcNameResult.error });
+          return;
+        }
+        const pathResult = parsePathQuery(url.searchParams.get("path"));
+        if (!pathResult.ok) {
+          sendJson(res, 400, { error: pathResult.error });
+          return;
+        }
+        if (!pathResult.value.trim()) {
+          sendJson(res, 400, { error: "Missing path parameter" });
+          return;
+        }
+        const refRaw = url.searchParams.get("ref") ?? "HEAD";
+        if (!isValidGitRef(refRaw)) {
+          sendJson(res, 400, { error: "Invalid ref parameter" });
+          return;
+        }
+        const limitResult = parseLimitQuery(
+          url.searchParams.get("limit"),
+          SYMBOL_HISTORY_DEFAULT_LIMIT,
+          SYMBOL_HISTORY_MAX_LIMIT,
+        );
+        if (!limitResult.ok) {
+          sendJson(res, 400, { error: limitResult.error });
+          return;
+        }
+        const result = await gitService.getSymbolHistory(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
         return;
       }
@@ -310,6 +361,18 @@ function matchRoute(method, pathname) {
   if (parts.length === 5 && parts[3] === "files" && parts[4] === "history") {
     return { name: "fileHistory", params: { repoId } };
   }
+  // Range-history (Why panel): `/files/range-history` so the line range and
+  // path stay in the query string, matching the validation contract exactly.
+  if (parts.length === 5 && parts[3] === "files" && parts[4] === "range-history") {
+    return { name: "rangeHistory", params: { repoId } };
+  }
+  // Symbol-history (D-1): GET /api/repos/:id/symbols/history
+  // Path and funcname stay in the query string so validation owns the contract.
+  // The `/symbols/history` sub-path is distinct from `/files/*` to signal that
+  // this endpoint traces a named symbol (not a file-level history).
+  if (parts.length === 5 && parts[3] === "symbols" && parts[4] === "history") {
+    return { name: "symbolHistory", params: { repoId } };
+  }
   // Related files (co-change) view: same `/files/<verb>` shape as
   // `/files/history`. The target path stays in the query string so validation
   // (`parsePathQuery`) is the single contract authority for path inputs.
@@ -330,6 +393,11 @@ function matchRoute(method, pathname) {
     return { name: "workTree", params: { repoId } };
   }
   if (parts.length === 4 && parts[3] === "events") return { name: "events", params: { repoId } };
+  // Branch group health: GET /api/repos/:id/branches/grouped
+  // Returns branches filtered by prefix with ahead/behind/rotScore fields.
+  if (parts.length === 5 && parts[3] === "branches" && parts[4] === "grouped") {
+    return { name: "branchesGrouped", params: { repoId } };
+  }
   return null;
 }
 
