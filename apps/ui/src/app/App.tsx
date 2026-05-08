@@ -2275,6 +2275,61 @@ function RefScopeTokens() {
         --rs-git-modified: oklch(68% 0.05 175);
         --rs-git-merge:   oklch(70% 0.04 200);
       }
+      /* D5 a11y — prefers-reduced-motion CSS floor.
+         data-quiet already zeros animations when useQuietMode unions
+         user toggle and OS reduced-motion. This @media block is the
+         CSS-level floor that guarantees motion is suppressed even
+         before React hydrates and sets data-quiet, and survives any
+         future regression where the attribute fails to propagate. */
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition-duration: 0.001ms !important;
+          transition-delay: 0ms !important;
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          animation-delay: 0ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+      /* D5 a11y — forced-colors fallback (Windows High Contrast Mode etc).
+         The UA strips author background/foreground colors, so surfaces
+         that signal meaning via background color alone would lose
+         information. We:
+         - Replace focus-visible outline (currently var(--rs-accent),
+           which the UA rewrites) with the system Highlight color so
+           keyboard focus stays visible. The author rule above keeps the
+           accent cyan in non-forced-colors environments — both branches
+           coexist via media-query specificity.
+         - Add a CanvasText border to rs-chip / rs-compact-button /
+           rs-compare-select / rs-btn so the chrome of action surfaces
+           remains identifiable when their background is stripped.
+         - Use Highlight on rs-btn--accent to mark it as the primary
+           action affordance in forced-colors mode (replaces the
+           accent fill that the UA removes).
+         forced-color-adjust is left at the default value (auto) — we
+         never opt out of the UA's contrast guarantees, only ensure
+         that each meaningful surface keeps a visible boundary the UA
+         can render. */
+      @media (forced-colors: active) {
+        *:focus-visible {
+          outline: 2px solid Highlight !important;
+          outline-offset: 2px;
+        }
+        .rs-chip,
+        .rs-compact-button,
+        .rs-compare-select,
+        .rs-btn {
+          border: 1px solid CanvasText;
+        }
+        .rs-btn--accent {
+          border: 2px solid Highlight;
+        }
+        .rs-btn--warning {
+          border: 2px solid CanvasText;
+        }
+      }
     `}</style>
   );
 }

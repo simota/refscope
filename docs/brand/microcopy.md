@@ -9,10 +9,15 @@ Convention:
 - **JA** = Japanese counterpart.
 - Strings in `code` are literal UI text. Strings in {curly braces} are interpolated values.
 - A11y notes mark anything a screen reader will announce.
+- **Tag** — every section is marked with one of:
+  - `[obs]` — observation phrase (a fact read directly from Git: hash, count, ref name, timestamp). See `voice-and-tone.md` §7.
+  - `[interp]` — interpretation phrase (a pattern, label, or recovery hint inferred from observations). Must use an interpretation marker (§7.3 of the voice guide) and sit adjacent to its evidence (§7.4).
+  - `[ui]` — neutral UI scaffolding (button labels, navigation, empty-state instructions, error recovery steps). Not a claim, so neither obs nor interp.
+- Strings within a section may carry their own tag in brackets when the section mixes types. New strings added to this deck must carry one of these tags before they merge (governed by `voice-and-tone.md` §8).
 
 ---
 
-## 1. Empty states
+## 1. Empty states `[ui]`
 
 ### 1.1 No commits returned for the selected ref
 - **EN — Title:** `No commits to show`
@@ -40,46 +45,48 @@ Convention:
 
 ---
 
-## 2. Status badges
+## 2. Status badges `[interp]` (with `[obs]` exceptions noted)
 
 These labels are normalized vocabulary. Do not invent synonyms in code.
 
-| Label (EN) | Label (JA) | When it shows | A11y announcement (EN) |
-|------------|-----------|---------------|------------------------|
-| `New` | `新規` | A ref appeared since this session began. | `New ref` |
-| `Rewritten` | `書き換え` | The ref's tip changed AND the previous tip is no longer reachable from the new tip. | `History rewritten` |
-| `Force-pushed` | `force-push` | Same as Rewritten, **and** the source-of-detection was a remote update event. Use only when this evidence exists. | `Force pushed` |
-| `Merge` | `merge` | Commit has 2+ parents. | `Merge commit` |
-| `Signature unknown` | `署名未確認` | Refscope does not verify signatures. Default for every commit. | `Signature not verified` |
-| `Error` | `エラー` | Last operation on this row failed. Pair with a tooltip that states what failed. | `Error` |
+These status badges are short-form **interpretation phrases** with a special exemption: they are typographically separated from running text (badge surface, distinct color/border), and they sit adjacent to their evidence row (the commit hash, the ref tip, the parent count). Outside a status-badge surface, the same words must follow `voice-and-tone.md` §7 (use `Pattern matches: rewritten`, not bare `rewritten`).
+
+| Label (EN) | Label (JA) | When it shows | Tag | A11y announcement (EN) |
+|------------|-----------|---------------|-----|------------------------|
+| `New` | `新規` | A ref appeared since this session began. | `[obs]` (session-relative observation) | `New ref` |
+| `Rewritten` | `書き換え` | The ref's tip changed AND the previous tip is no longer reachable from the new tip. | `[interp]` — evidence: prev hash + reachability check | `History rewritten` |
+| `Force-pushed` | `force-push` | Same as Rewritten, **and** the source-of-detection was a remote update event. Use only when this evidence exists. | `[interp]` — evidence: prev/curr hash + SSE remote-update source | `Force pushed` |
+| `Merge` | `merge` | Commit has 2+ parents. | `[obs]` (parent count is directly read) | `Merge commit` |
+| `Signature unknown` | `署名未確認` | Refscope does not verify signatures. Default for every commit. | `[obs]` (literal absence of verification) | `Signature not verified` |
+| `Error` | `エラー` | Last operation on this row failed. Pair with a tooltip that states what failed. | `[ui]` (state indicator, paired with what-failed evidence in tooltip) | `Error` |
 
 Note on `rewritten` vs `force-pushed`: `Rewritten` is the safe default. Promote to `Force-pushed` only when the API has direct evidence (e.g., the SSE source was a remote ref-update event). When in doubt, stay at `Rewritten`.
 
 ---
 
-## 3. Rewrite notice (banner / detail panel / observation log)
+## 3. Rewrite notice (banner / detail panel / observation log) `[mixed]`
 
-The product never says "alert". The pattern is: state the observation, then label it, then offer the recoverable hash.
+The product never says "alert". The pattern is: state the observation, then label it, then offer the recoverable hash. This section is the canonical example of `voice-and-tone.md` §7's separation rule — observations and interpretations occupy distinct rows / labels.
 
 ### 3.1 Sidebar banner (single ref)
-- **EN — Heading:** `History rewritten on {refName}`
-- **EN — Body:** `Previous tip {prevShort} is no longer reachable from {currentShort}. Observed at {timestamp}.`
-- **JA — Heading:** `{refName} の履歴を書き換え`
-- **JA — Body:** `以前の tip `{prevShort}` は `{currentShort}` から到達できません。観測時刻: {timestamp}。`
+- **EN — Heading:** `History rewritten on {refName}` `[interp]` — exempt as normalized headline phrase per §2; evidence is in the body row immediately below.
+- **EN — Body:** `Previous tip {prevShort} is no longer reachable from {currentShort}. Observed at {timestamp}.` `[obs]`
+- **JA — Heading:** `{refName} の履歴を書き換え` `[interp]`
+- **JA — Body:** `以前の tip `{prevShort}` は `{currentShort}` から到達できません。観測時刻: {timestamp}。` `[obs]`
 
 ### 3.2 Detail panel (after the user opens the rewritten ref)
-- **EN — Section title:** `Observation log`
-- **EN — Fact rows (label / value):**
+- **EN — Section title:** `Observation log` `[ui]`
+- **EN — Fact rows (label / value):** `[obs]` (every row in this group)
   - `Ref` / `{refName}`
   - `Previous tip` / `{prevHash}`
   - `Current tip` / `{currentHash}`
   - `Observed` / `{timestamp}`
   - `Source` / `{sourceLabel}`
-- **EN — Inferred label:** `Pattern matches: history rewritten`
-- **EN — Recovery hint:** `The previous tip {prevShort} is still in this repository's reflog. Run \`git reflog show {refName}\` to inspect.`
-- **JA — Section title:** `観測ログ`
-- **JA — Inferred label:** `観測パターン: 履歴の書き換え`
-- **JA — Recovery hint:** `以前の tip `{prevShort}` は reflog に残っています。`git reflog show {refName}` で確認できます。`
+- **EN — Inferred label:** `Pattern matches: history rewritten` `[interp]` — adjacency: directly below the fact rows above (§7.4 satisfied).
+- **EN — Recovery hint:** `The previous tip {prevShort} is still in this repository's reflog. Run \`git reflog show {refName}\` to inspect.` `[interp]` — adjacency: same panel, evidence is `{prevShort}` from the fact rows.
+- **JA — Section title:** `観測ログ` `[ui]`
+- **JA — Inferred label:** `観測パターン: 履歴の書き換え` `[interp]`
+- **JA — Recovery hint:** `以前の tip `{prevShort}` は reflog に残っています。`git reflog show {refName}` で確認できます。` `[interp]`
 
 A11y note: the section uses `aria-labelledby` pointing to the section title; do not put the long observation text in `aria-label`.
 
@@ -89,7 +96,9 @@ A11y note: the section uses `aria-labelledby` pointing to the section title; do 
 
 ---
 
-## 4. Error messages (What / Why / Next)
+## 4. Error messages (What / Why / Next) `[ui]` — body fragments are `[obs]`
+
+Each error pairs a **What** clause (observation: which call, which endpoint, which input) with a **Next** clause (UI affordance: retry, restart, change config). The body's "What" half is `[obs]`; the "Next" half is `[ui]`. No interpretation is permitted — error copy must not infer a cause beyond what the failing call directly reported.
 
 Five canonical errors. Each has the structure: one sentence stating what was attempted and what blocked it, then one sentence with the next step.
 
@@ -127,7 +136,7 @@ Five canonical errors. Each has the structure: one sentence stating what was att
 
 ---
 
-## 5. CORS / allowlist rescue copy (Mina's biggest pain point)
+## 5. CORS / allowlist rescue copy (Mina's biggest pain point) `[ui]`
 
 When the UI detects a CORS or allowlist failure, surface a guided panel rather than a raw error.
 
@@ -146,31 +155,33 @@ A11y: the steps are an `<ol>`; the heading is the panel's accessible name via `a
 
 ---
 
-## 6. Pause / Resume
+## 6. Pause / Resume `[mixed]`
 
-### 6.1 Buttons
+### 6.1 Buttons `[ui]`
 - **EN:** `Pause live updates` / `Resume live updates`
 - **JA:** `live 更新を一時停止` / `live 更新を再開`
 
-### 6.2 Inline status
+### 6.2 Inline status `[obs]`
 - **EN — When paused:** `Live updates paused. New observations will appear when you resume.`
 - **JA — When paused:** `live 更新を一時停止しています。再開すると新しい観測が表示されます。`
 
-### 6.3 Live region announcements (aria-live="polite")
-- **EN — On pause:** `Live updates paused.`
-- **EN — On resume:** `Live updates resumed.`
-- **EN — On new commit while live:** `New commit on {refName}.`
-- **EN — On rewrite while live:** `History rewritten on {refName}.`
-- **JA — On pause:** `live 更新を一時停止しました。`
-- **JA — On resume:** `live 更新を再開しました。`
-- **JA — On new commit while live:** `{refName} に新しい commit。`
-- **JA — On rewrite while live:** `{refName} の履歴が書き換えられました。`
+### 6.3 Live region announcements (aria-live="polite") `[obs]` (announcements 1-3) / `[interp]` (announcement 4 — exempt as normalized phrase per §2)
+- **EN — On pause:** `Live updates paused.` `[obs]`
+- **EN — On resume:** `Live updates resumed.` `[obs]`
+- **EN — On new commit while live:** `New commit on {refName}.` `[obs]`
+- **EN — On rewrite while live:** `History rewritten on {refName}.` `[interp]` — exempt (normalized phrase, evidence in expanded panel).
+- **JA — On pause:** `live 更新を一時停止しました。` `[obs]`
+- **JA — On resume:** `live 更新を再開しました。` `[obs]`
+- **JA — On new commit while live:** `{refName} に新しい commit。` `[obs]`
+- **JA — On rewrite while live:** `{refName} の履歴が書き換えられました。` `[interp]` — see EN equivalent.
+
+> **JA tag check (§7.6):** `書き換えられました` reads more declarative than EN `rewritten`. The exemption holds only because the live-region phrase is a session-scoped announcement that the user can drill into for evidence (the rewrite-rescue panel) — the announcement on its own would otherwise need a hedge marker in JA per §7.3.
 
 A11y: do **not** announce pause/resume in `aria-live="assertive"` — these are not interruptions.
 
 ---
 
-## 7. Command palette (Cmd/Ctrl+K)
+## 7. Command palette (Cmd/Ctrl+K) `[ui]`
 
 ### 7.1 Placeholder
 - **EN:** `Type a command, ref, or hash`
@@ -200,7 +211,7 @@ A11y: each command row uses `aria-labelledby` pointing to the label; the descrip
 
 ---
 
-## 8. First-run welcome message
+## 8. First-run welcome message `[ui]`
 
 Two short paragraphs. No bullet points, no exclamation marks, no marketing.
 
@@ -215,14 +226,14 @@ Two short paragraphs. No bullet points, no exclamation marks, no marketing.
 
 ---
 
-## 9. Footer / About
+## 9. Footer / About `[ui]`
 
 - **EN:** `Refscope — a quiet observatory for Git refs and history. Local-first, read-only, allowlist-scoped.`
 - **JA:** `Refscope — Git の ref と history を静かに観測する観測所。local-first、read-only、allowlist でスコープを限定。`
 
 ---
 
-## 10. CLI / README / GitHub description (one-liner)
+## 10. CLI / README / GitHub description (one-liner) `[ui]`
 
 Used in the GitHub repository description field, package descriptions, and the README first line. Must fit GitHub's 350-character description limit; aim for under 120.
 
@@ -231,7 +242,7 @@ Used in the GitHub repository description field, package descriptions, and the R
 
 ---
 
-## 11. Naming conventions — feature names (EN/JA fixed translations)
+## 11. Naming conventions — feature names (EN/JA fixed translations) `[ui]`
 
 These names are fixed. Do not paraphrase them in any UI surface.
 
@@ -279,6 +290,39 @@ This is the migration list. Each row is a string that exists in `apps/ui/src/app
 
 ---
 
+## 13. Tag distribution (audit summary, 2026-05-08)
+
+Section-level tags applied per `voice-and-tone.md` §7. This summary is the snapshot at the time of the round-7 designer-lens audit; new sections must update it before they merge.
+
+| Section | Dominant tag | Notes |
+|---------|--------------|-------|
+| §1 Empty states | `[ui]` | Pure UI scaffolding — no claims about Git facts beyond "the result set is empty". |
+| §2 Status badges | `[interp]` (with §2-exemption) | Headline labels are short-form interpretations exempted from the §7 hedge requirement *because* they are typographically separated and sit adjacent to evidence. `New`, `Merge`, `Signature unknown` are `[obs]` — exceptions noted inline. |
+| §3 Rewrite notice | `[mixed]` | Canonical example of obs/interp separation. Headings: `[interp]`. Fact rows: `[obs]`. Inferred labels & recovery hints: `[interp]` adjacent to fact rows (§7.4). |
+| §4 Errors | `[ui]` | "What" fragments are `[obs]` (which call / endpoint failed). "Next" fragments are `[ui]` (recovery affordance). No `[interp]` permitted — error copy must not infer causes. |
+| §5 CORS rescue | `[ui]` | All steps are remediation actions. The panel heading describes the *current observed state* of the API/origin handshake — `[obs]`. |
+| §6 Pause / Resume | `[mixed]` | Buttons / inline status: `[ui]` / `[obs]`. Live-region announcements 1-3 are `[obs]`. The `History rewritten on {refName}` announcement is `[interp]` exempted (normalized phrase per §2). |
+| §7 Command palette | `[ui]` | All scaffolding. |
+| §8 First-run welcome | `[ui]` | Welcome / orientation. |
+| §9 Footer / About | `[ui]` | Brand declaration. |
+| §10 CLI / README one-liner | `[ui]` | Marketing-adjacent description. |
+| §11 Naming conventions | `[ui]` | Glossary. |
+
+### Open audit findings (gaps to address in subsequent passes)
+
+These are violations or ambiguities surfaced during the round-7 audit. They are not merged into the §12 replacement mapping yet because their fix requires a follow-up pass coordinated with implementation.
+
+| # | Location | Issue | Fix direction |
+|---|----------|-------|---------------|
+| A1 | §6.3 JA — `{refName} の履歴が書き換えられました。` | JA past-tense `書き換えられました` reads more declarative than EN `rewritten` (§7.6 failure mode: localized bare past tense). | Add a hedge marker (`〜のように見えます (根拠: prev=…)`) when the announcement is detached from its detail panel, or restrict to surfaces where `[interp]` exemption (§2) holds. |
+| A2 | Existing TSX strings in `apps/ui/src/app/components/refscope/` | Many strings predate this tag system (no inline `[obs]`/`[interp]`/`[ui]` marker in code comments). | When a component is touched in a future pass, add the tag in a single-line comment next to non-trivial strings (>1-word labels). Bulk retrofit is not required. |
+| A3 | `Recommended` cells in §12 do not declare a tag for the new string. | Without a tag, lint can't enforce §7.5 on migrated strings. | Add a `Tag` column to §12 in the next replacement-mapping pass. |
+| A4 | Inferred-label JA in §3.2 (`観測パターン: 履歴の書き換え`) is correct, but no "interpretation marker" appears in §6.3 JA live-region announcement. | §6.3 JA leans on the §2 exemption; if that exemption is later narrowed (per §7.6), §6.3 needs a per-event hedged form. | Track as a candidate for the next JA voice review; do not migrate yet. |
+
+A1 and A4 are the same root cause (JA declarative drift) and can be addressed in one pass. A2/A3 are mechanical and best handled when components / mappings are touched anyway.
+
+---
+
 ## Appendix — readability and review checklist
 
 Before merging any UI string change:
@@ -289,3 +333,4 @@ Before merging any UI string change:
 4. Check screen-reader output: does the announcement still parse without surrounding visual context?
 5. Confirm the Japanese counterpart exists in this file. If absent, add it before merging.
 6. Verify no banned word from `voice-and-tone.md` §6 appears in either language.
+7. Tag the string with `[obs]`, `[interp]`, or `[ui]` per `voice-and-tone.md` §7. If `[interp]`, confirm the evidence is adjacent (§7.4).

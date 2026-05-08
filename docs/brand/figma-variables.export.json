@@ -1,0 +1,1645 @@
+{
+  "$meta": {
+    "generatedAt": "2026-05-08T02:48:46.442Z",
+    "generatedFrom": "docs/brand/tokens.json",
+    "generator": "scripts/tokens/export-figma-variables.mjs",
+    "sourceVersion": "2025.10",
+    "collectionName": "Refscope Tokens",
+    "modes": [
+      "Light",
+      "Dark"
+    ],
+    "notes": [
+      "OKLCH → sRGB conversion uses Björn Ottosson's OKLab matrices.",
+      "Single-mode color tokens (neutral/accent/semantic-role) write the same value to both modes.",
+      "Two-mode color tokens (semantic.warning|error|success|info.{light,dark}) collapse the .light/.dark suffix into mode entries.",
+      "Skipped tokens are listed under $meta.skipped and are not exported (shadows, cubicBezier arrays, fontFamily arrays)."
+    ],
+    "skipped": [
+      {
+        "name": "typography/font-family/ui",
+        "reason": "fontFamily arrays are not Figma variables"
+      },
+      {
+        "name": "typography/font-family/mono",
+        "reason": "fontFamily arrays are not Figma variables"
+      },
+      {
+        "name": "motion/easing/standard",
+        "reason": "cubic-bezier arrays are not Figma variables"
+      },
+      {
+        "name": "motion/easing/decelerate",
+        "reason": "cubic-bezier arrays are not Figma variables"
+      },
+      {
+        "name": "motion/easing/accelerate",
+        "reason": "cubic-bezier arrays are not Figma variables"
+      },
+      {
+        "name": "motion/easing/spring",
+        "reason": "cubic-bezier arrays are not Figma variables"
+      },
+      {
+        "name": "elevation/none",
+        "reason": "multi-stop shadow strings are not Figma variables"
+      },
+      {
+        "name": "elevation/subtle",
+        "reason": "multi-stop shadow strings are not Figma variables"
+      },
+      {
+        "name": "elevation/overlay",
+        "reason": "multi-stop shadow strings are not Figma variables"
+      },
+      {
+        "name": "elevation/subtle-dark",
+        "reason": "multi-stop shadow strings are not Figma variables"
+      },
+      {
+        "name": "elevation/overlay-dark",
+        "reason": "multi-stop shadow strings are not Figma variables"
+      }
+    ]
+  },
+  "variableCollections": [
+    {
+      "name": "Refscope Tokens",
+      "modes": [
+        {
+          "name": "Light"
+        },
+        {
+          "name": "Dark"
+        }
+      ]
+    }
+  ],
+  "variables": [
+    {
+      "name": "color/neutral/50",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Lightest surface. Not pure white — faint cool tint. Light bg.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9690965436500004,
+          "g": 0.9822346488664698,
+          "b": 0.9964315791770614,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.9690965436500004,
+          "g": 0.9822346488664698,
+          "b": 0.9964315791770614,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/100",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Subtle surface tint. Hover bg in light mode.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9301072384119375,
+          "g": 0.9475097274485925,
+          "b": 0.9663004740738294,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.9301072384119375,
+          "g": 0.9475097274485925,
+          "b": 0.9663004740738294,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/200",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Disabled surface, input bg.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.8772322193278005,
+          "g": 0.8987753579234193,
+          "b": 0.9220175975414087,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.8772322193278005,
+          "g": 0.8987753579234193,
+          "b": 0.9220175975414087,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/300",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Decorative borders, dividers. Light mode.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.8006790627527993,
+          "g": 0.8218647596089783,
+          "b": 0.8447156365575827,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.8006790627527993,
+          "g": 0.8218647596089783,
+          "b": 0.8447156365575827,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/400",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Placeholder text, muted icons.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.6761168563903345,
+          "g": 0.6966632995387066,
+          "b": 0.7188135121093082,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.6761168563903345,
+          "g": 0.6966632995387066,
+          "b": 0.7188135121093082,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/500",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Mid gray. Subtle foreground.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.5087370830146521,
+          "g": 0.5282742677369721,
+          "b": 0.5493159777414902,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.5087370830146521,
+          "g": 0.5282742677369721,
+          "b": 0.5493159777414902,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/600",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Secondary text. Both modes capable.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.3508051235594872,
+          "g": 0.3691476777544671,
+          "b": 0.3888726749975197,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.3508051235594872,
+          "g": 0.3691476777544671,
+          "b": 0.3888726749975197,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/700",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Strong secondary text.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.2245062926585572,
+          "g": 0.241600158780009,
+          "b": 0.2599415089530832,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.2245062926585572,
+          "g": 0.241600158780009,
+          "b": 0.2599415089530832,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/800",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Near-dark. Dark mode surface raised.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.12074098476027265,
+          "g": 0.13323613646813906,
+          "b": 0.14662516818614735,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.12074098476027265,
+          "g": 0.13323613646813906,
+          "b": 0.14662516818614735,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/900",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Body text in light mode. Dark surface base.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.046124056675234386,
+          "g": 0.057432713331993325,
+          "b": 0.06948698846443668,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.046124056675234386,
+          "g": 0.057432713331993325,
+          "b": 0.06948698846443668,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/neutral/950",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Darkest surface. Dark mode bg.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.012571507398437713,
+          "g": 0.0168684745156318,
+          "b": 0.02226565088135148,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.012571507398437713,
+          "g": 0.0168684745156318,
+          "b": 0.02226565088135148,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/accent/300",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Light tint for accent backgrounds in dark mode.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.36554517986866364,
+          "g": 0.8532952038535322,
+          "b": 0.8788316737576737,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.36554517986866364,
+          "g": 0.8532952038535322,
+          "b": 0.8788316737576737,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/accent/400",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Accent hover in dark mode.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0,
+          "g": 0.7538027394563127,
+          "b": 0.7880886368448983,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0,
+          "g": 0.7538027394563127,
+          "b": 0.7880886368448983,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/accent/500",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Primary accent. Focus rings light mode, selection highlight.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0,
+          "g": 0.6389545387268412,
+          "b": 0.6816069124550294,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0,
+          "g": 0.6389545387268412,
+          "b": 0.6816069124550294,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/accent/600",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Accent pressed/active.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0,
+          "g": 0.4968410571977126,
+          "b": 0.5350150104049995,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0,
+          "g": 0.4968410571977126,
+          "b": 0.5350150104049995,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/accent/700",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Deep accent, text on light accent bg.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0,
+          "g": 0.35925165549753335,
+          "b": 0.3912369163235238,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0,
+          "g": 0.35925165549753335,
+          "b": 0.3912369163235238,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/warning/bg",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Warning surface in light mode.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.996428609697969,
+          "g": 0.9391145608941848,
+          "b": 0.8633828073467421,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.20537545586354755,
+          "g": 0.11883726452203047,
+          "b": 0.023761501389196877,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/warning/fg",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Warning text/icon. Ensures ≥4.5:1 on warning.bg.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.4441818782846688,
+          "g": 0.24751034488618184,
+          "b": 0,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.933340228621547,
+          "g": 0.725050744785803,
+          "b": 0.4819452499286399,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/warning/border",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Warning border.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.8655659527605104,
+          "g": 0.6805175055796052,
+          "b": 0.46609603935082905,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.5021574058813166,
+          "g": 0.3206987811798956,
+          "b": 0.12003647068688408,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/error/bg",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Error surface light.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9999999999999999,
+          "g": 0.9298188992700962,
+          "b": 0.9331812294450059,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.22443690293692437,
+          "g": 0.07653903578008117,
+          "b": 0.09470052266475354,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/error/fg",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Error text light. ≥4.5:1 on error.bg.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.48550533610798347,
+          "g": 0.10852937394974047,
+          "b": 0.14983495368169217,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.9909752259460002,
+          "g": 0.6299174673732886,
+          "b": 0.6286472242261486,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/error/border",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Error border light.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9203927317340328,
+          "g": 0.5061879365705422,
+          "b": 0.5114983808618456,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.54322243847443,
+          "g": 0.22749312764543927,
+          "b": 0.2661062049655801,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/success/bg",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Success surface light.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9094287056097263,
+          "g": 0.9649174582852585,
+          "b": 0.9254256131825147,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.05148951853784325,
+          "g": 0.15644115277319487,
+          "b": 0.09368300885807282,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/success/fg",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Success text light. ≥4.5:1 on success.bg.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.02813708527731174,
+          "g": 0.31317665607766987,
+          "b": 0.17312600135116613,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.5700547061464207,
+          "g": 0.8094741742886968,
+          "b": 0.6507439165351505,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/success/border",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Success border light.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.5204219772732567,
+          "g": 0.7266335739912902,
+          "b": 0.5892342756404242,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.20936510624149096,
+          "g": 0.3907011483999689,
+          "b": 0.2770552619373715,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/info/bg",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Info surface light.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9262060654077919,
+          "g": 0.9435949888514815,
+          "b": 0.9623709232413925,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.1115617086409911,
+          "g": 0.12393373235982316,
+          "b": 0.13718521607714398,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/info/fg",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Info text light.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.24489235329074394,
+          "g": 0.26221348988391496,
+          "b": 0.28080736708305754,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.7503864144832967,
+          "g": 0.7713233919276954,
+          "b": 0.7939017750584535,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic/info/border",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Info border light.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.7007134882743585,
+          "g": 0.7213925725223168,
+          "b": 0.7436882526152335,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.31837218332941947,
+          "g": 0.33642609037833365,
+          "b": 0.3558320095301672,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/bg/base",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Primary app background. Slightly cool tinted.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9690965436500004,
+          "g": 0.9822346488664698,
+          "b": 0.9964315791770614,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.9690965436500004,
+          "g": 0.9822346488664698,
+          "b": 0.9964315791770614,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/bg/raised",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Elevated panel, card.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9301072384119375,
+          "g": 0.9475097274485925,
+          "b": 0.9663004740738294,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.9301072384119375,
+          "g": 0.9475097274485925,
+          "b": 0.9663004740738294,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/bg/sunken",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Input field, inset well.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.8772322193278005,
+          "g": 0.8987753579234193,
+          "b": 0.9220175975414087,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.8772322193278005,
+          "g": 0.8987753579234193,
+          "b": 0.9220175975414087,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/bg/overlay",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Modal/popover bg (light). Use elevation shadow to differentiate.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9690965436500004,
+          "g": 0.9822346488664698,
+          "b": 0.9964315791770614,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.9690965436500004,
+          "g": 0.9822346488664698,
+          "b": 0.9964315791770614,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/fg/base",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Body text. ≥7:1 on bg.base.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.046124056675234386,
+          "g": 0.057432713331993325,
+          "b": 0.06948698846443668,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.046124056675234386,
+          "g": 0.057432713331993325,
+          "b": 0.06948698846443668,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/fg/subtle",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Secondary/helper text. ≥4.5:1.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.3508051235594872,
+          "g": 0.3691476777544671,
+          "b": 0.3888726749975197,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.3508051235594872,
+          "g": 0.3691476777544671,
+          "b": 0.3888726749975197,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/fg/muted",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Placeholder, disabled. Decorative only — do not use for meaningful text.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.6761168563903345,
+          "g": 0.6966632995387066,
+          "b": 0.7188135121093082,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.6761168563903345,
+          "g": 0.6966632995387066,
+          "b": 0.7188135121093082,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/fg/onAccent",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Text/icon on accent-colored surface.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.012571507398437713,
+          "g": 0.0168684745156318,
+          "b": 0.02226565088135148,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.012571507398437713,
+          "g": 0.0168684745156318,
+          "b": 0.02226565088135148,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/border/base",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Default border. ≥3:1 decorative.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.8006790627527993,
+          "g": 0.8218647596089783,
+          "b": 0.8447156365575827,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.8006790627527993,
+          "g": 0.8218647596089783,
+          "b": 0.8447156365575827,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/border/subtle",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Hairline divider.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.8772322193278005,
+          "g": 0.8987753579234193,
+          "b": 0.9220175975414087,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.8772322193278005,
+          "g": 0.8987753579234193,
+          "b": 0.9220175975414087,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/border/strong",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Emphasized separator.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.5087370830146521,
+          "g": 0.5282742677369721,
+          "b": 0.5493159777414902,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.5087370830146521,
+          "g": 0.5282742677369721,
+          "b": 0.5493159777414902,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/border/focus",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Focus ring. 2px solid + 2px offset. Accent only.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0,
+          "g": 0.6389545387268412,
+          "b": 0.6816069124550294,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0,
+          "g": 0.6389545387268412,
+          "b": 0.6816069124550294,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/surface/selected",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Selected row/item tint at 12% opacity.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0,
+          "g": 0.6389545387268412,
+          "b": 0.6816069124550294,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0,
+          "g": 0.6389545387268412,
+          "b": 0.6816069124550294,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/surface/hover",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Row hover.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.9301072384119375,
+          "g": 0.9475097274485925,
+          "b": 0.9663004740738294,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.9301072384119375,
+          "g": 0.9475097274485925,
+          "b": 0.9663004740738294,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "color/semantic-role/surface/active",
+      "resolvedType": "COLOR",
+      "scopes": [
+        "ALL_FILLS",
+        "STROKE_COLOR"
+      ],
+      "description": "Row pressed.",
+      "valuesByMode": {
+        "Light": {
+          "r": 0.8772322193278005,
+          "g": 0.8987753579234193,
+          "b": 0.9220175975414087,
+          "a": 1
+        },
+        "Dark": {
+          "r": 0.8772322193278005,
+          "g": 0.8987753579234193,
+          "b": 0.9220175975414087,
+          "a": 1
+        }
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/font-size/xs",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Caption, badge, timestamp label. (12px)",
+      "valuesByMode": {
+        "Light": 12,
+        "Dark": 12
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/font-size/sm",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Secondary text, sidebar labels. (13px)",
+      "valuesByMode": {
+        "Light": 13,
+        "Dark": 13
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/font-size/base",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Body text. Primary UI size. (14px)",
+      "valuesByMode": {
+        "Light": 14,
+        "Dark": 14
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/font-size/md",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Slightly emphasized body, dialog title. (15px)",
+      "valuesByMode": {
+        "Light": 15,
+        "Dark": 15
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/font-size/lg",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Section header, modal title. Rare. (17px)",
+      "valuesByMode": {
+        "Light": 17,
+        "Dark": 17
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/font-size/mono-xs",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Hash/OID display. tabular-nums. (12px)",
+      "valuesByMode": {
+        "Light": 12,
+        "Dark": 12
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/font-weight/regular",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Normal weight. Default body.",
+      "valuesByMode": {
+        "Light": 400,
+        "Dark": 400
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/font-weight/medium",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Emphasis. Labels, column headers.",
+      "valuesByMode": {
+        "Light": 500,
+        "Dark": 500
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/font-weight/bold",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Strong emphasis. Use sparingly — max 1-2 instances per view.",
+      "valuesByMode": {
+        "Light": 700,
+        "Dark": 700
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/line-height/tight",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Dense rows (28-32px target). Code blocks.",
+      "valuesByMode": {
+        "Light": 1.25,
+        "Dark": 1.25
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/line-height/snug",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "UI labels, single-line.",
+      "valuesByMode": {
+        "Light": 1.375,
+        "Dark": 1.375
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/line-height/normal",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Body paragraphs.",
+      "valuesByMode": {
+        "Light": 1.5,
+        "Dark": 1.5
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/letter-spacing/tight",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Display sizes (lg). Pull text closer. (-0.01em)",
+      "valuesByMode": {
+        "Light": -0.01,
+        "Dark": -0.01
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/letter-spacing/normal",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Default. Most UI text. (0em)",
+      "valuesByMode": {
+        "Light": 0,
+        "Dark": 0
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "typography/letter-spacing/wide",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Uppercase labels, badge text. (0.04em)",
+      "valuesByMode": {
+        "Light": 0.04,
+        "Dark": 0.04
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "spacing/0",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "No spacing.",
+      "valuesByMode": {
+        "Light": 0,
+        "Dark": 0
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "spacing/1",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Base unit. Tight inline padding.",
+      "valuesByMode": {
+        "Light": 4,
+        "Dark": 4
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "spacing/2",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Component internal padding.",
+      "valuesByMode": {
+        "Light": 8,
+        "Dark": 8
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "spacing/3",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Row vertical padding, small gap.",
+      "valuesByMode": {
+        "Light": 12,
+        "Dark": 12
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "spacing/4",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Standard section padding.",
+      "valuesByMode": {
+        "Light": 16,
+        "Dark": 16
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "spacing/6",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Panel padding, group gap.",
+      "valuesByMode": {
+        "Light": 24,
+        "Dark": 24
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "spacing/8",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Large section gap.",
+      "valuesByMode": {
+        "Light": 32,
+        "Dark": 32
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "spacing/row-height-min",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Dense row minimum height.",
+      "valuesByMode": {
+        "Light": 28,
+        "Dark": 28
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "spacing/row-height-max",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Dense row maximum height.",
+      "valuesByMode": {
+        "Light": 32,
+        "Dark": 32
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "border-radius/none",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "No radius. Tags, inline code chips.",
+      "valuesByMode": {
+        "Light": 0,
+        "Dark": 0
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "border-radius/xs",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Minimal rounding. Checkboxes, small badges.",
+      "valuesByMode": {
+        "Light": 2,
+        "Dark": 2
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "border-radius/sm",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Default radius. Buttons, inputs, cards.",
+      "valuesByMode": {
+        "Light": 4,
+        "Dark": 4
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "border-radius/md",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Slightly softer. Popovers, dropdowns.",
+      "valuesByMode": {
+        "Light": 6,
+        "Dark": 6
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "motion/duration/instant",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "No transition. State that must be immediate. (0ms)",
+      "valuesByMode": {
+        "Light": 0,
+        "Dark": 0
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "motion/duration/fast",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Micro-interactions: hover bg, checkbox toggle, icon swap. (120ms)",
+      "valuesByMode": {
+        "Light": 120,
+        "Dark": 120
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "motion/duration/normal",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Panel open/close, dropdown, row selection. (180ms)",
+      "valuesByMode": {
+        "Light": 180,
+        "Dark": 180
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "motion/duration/moderate",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Sidebar expand, dialog appear. (240ms)",
+      "valuesByMode": {
+        "Light": 240,
+        "Dark": 240
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "motion/duration/slow",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Full-page transitions, SSE pulse fade. (300ms)",
+      "valuesByMode": {
+        "Light": 300,
+        "Dark": 300
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "z-index/base",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Normal document flow.",
+      "valuesByMode": {
+        "Light": 0,
+        "Dark": 0
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "z-index/raised",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Sticky headers, row hover affordances.",
+      "valuesByMode": {
+        "Light": 10,
+        "Dark": 10
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "z-index/dropdown",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Dropdowns, context menus.",
+      "valuesByMode": {
+        "Light": 100,
+        "Dark": 100
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "z-index/sticky",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Sticky bars, persistent top bar.",
+      "valuesByMode": {
+        "Light": 200,
+        "Dark": 200
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "z-index/overlay",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Modal backdrop.",
+      "valuesByMode": {
+        "Light": 300,
+        "Dark": 300
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "z-index/modal",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Modal content.",
+      "valuesByMode": {
+        "Light": 400,
+        "Dark": 400
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "z-index/toast",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Notifications, toasts.",
+      "valuesByMode": {
+        "Light": 500,
+        "Dark": 500
+      },
+      "variableCollection": "Refscope Tokens"
+    },
+    {
+      "name": "z-index/tooltip",
+      "resolvedType": "FLOAT",
+      "scopes": [
+        "ALL_SCOPES"
+      ],
+      "description": "Tooltips — always on top.",
+      "valuesByMode": {
+        "Light": 600,
+        "Dark": 600
+      },
+      "variableCollection": "Refscope Tokens"
+    }
+  ]
+}

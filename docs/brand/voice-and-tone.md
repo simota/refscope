@@ -162,9 +162,81 @@ These words must not appear in product copy. Substitutions are listed in section
 
 ---
 
-## 7. Governance
+## 7. Observation phrase vs. interpretation phrase
 
-- Any new user-facing string must be checked against sections 3, 4, 5, and 6 before it ships.
+Principle 4 ("Honest, not alarmist") establishes the *what* — facts before meaning. This section codifies the *how* — the syntactic patterns that distinguish an observation phrase from an interpretation phrase, in both English and Japanese, so that any reviewer can tell at a glance which kind a given string is.
+
+Refscope's USP is that **observation and interpretation are visually and lexically separated**. If a string blurs the two, the USP leaks at the microcopy layer.
+
+### 7.1 The two phrase types
+
+| Type | What it claims | Required form (EN) | Required form (JA) | Required adjacency |
+|------|----------------|---------------------|---------------------|-------------------|
+| **Observation phrase** | A fact directly read from Git (hash, count, ref name, timestamp, parent count, exit code). | Plain declarative, present or simple past, no hedge. | 平叙文。体言止め可。推測語を含めない。 | None — stands alone. |
+| **Interpretation phrase** | A pattern, label, or recovery hint inferred from one or more observations. | Hedged: must use one of the *interpretation markers* (§7.3) **and** sit adjacent to its evidence row. | 推測マーカー (§7.3) を必ず付け、根拠の観測行と隣接させる。 | Required — never appears without the observation it derives from. |
+
+### 7.2 Examples (paired with the same evidence)
+
+| Evidence (observation) | Wrong (interpretation written as observation) | Right (interpretation marked) |
+|---|---|---|
+| `Previous tip a8f2... is not reachable from 9f3c1a2.` | ❌ `History was rewritten.` | ✅ `Pattern matches: history rewritten.` |
+| `Ref appeared at 12:04:33Z. Source: SSE remote-ref-update.` | ❌ `Force-pushed.` | ✅ `Pattern matches: force-pushed (source: remote update).` |
+| `12 commits ahead of \`main\`, 0 commits behind.` | ❌ `Branch is ready to merge.` | ✅ — (no interpretation; show the count and let the reader judge). |
+| 観測: `以前の tip a8f2 は 9f3c1a2 から到達できません。` | ❌ `履歴が書き換えられました。` | ✅ `観測パターン: 履歴の書き換え。` |
+
+### 7.3 Interpretation markers (the only allowed forms)
+
+Use one of these — never a bare declarative — to flag an inference.
+
+**English markers (in priority order):**
+1. `Pattern matches: …` — preferred. Names the inference category without claiming certainty about the cause.
+2. `This looks like … because <evidence>.` — when the cause must be named (e.g. "force-pushed").
+3. `Likely …` / `Appears to be …` — short variants for inline labels (≤ 4 words).
+
+Banned in interpretation: a bare past tense ("rewritten", "force-pushed") *unless* the surface is a normalized status badge from `microcopy.md` §2 — those badges are typographically separated from running text and rely on adjacency to the fact row.
+
+**Japanese markers (in priority order):**
+1. `観測パターン: 〜` — preferred (mirrors `Pattern matches`).
+2. `〜のように見えます (根拠: <observation>)` — when the cause must be named.
+3. `〜の可能性があります` / `〜と考えられます` — inline. Avoid stronger forms like `〜です`, `〜と判断しました`.
+
+Banned: 断定形 (「〜です」「〜が起きました」) を根拠なしに使う。「警告」「危険」は §6 の禁止語と二重で禁止。
+
+### 7.4 Evidence linking (interpretation strings)
+
+Every interpretation phrase must be **adjacent to a verifiable observation**. "Adjacent" means one of:
+
+- Same card / panel / list row, within 80 characters of vertical space.
+- Linked by `Based on:` / `Evidence:` / `根拠:` followed by hash, count, timestamp, or `git` command.
+- Inside a fact row whose siblings are pure observations (e.g. the `Observation log` panel in `microcopy.md` §3.2).
+
+If the surface cannot show the evidence, the string must downgrade from interpretation to observation, or it must not ship.
+
+### 7.5 Tag mark for review
+
+Every string in `microcopy.md` carries one of three tags so reviewers and lint rules can mechanically check it:
+
+- `[obs]` — observation phrase.
+- `[interp]` — interpretation phrase. Must include or link to its evidence (§7.4).
+- `[ui]` — neutral UI scaffolding (button labels, navigation, generic empty-state instructions). Not a claim, so neither obs nor interp.
+
+A new string may not be added to `microcopy.md` without one of these tags. The tag also appears in code comments next to the string in TSX, when the string is more than a single label, so reviewers can find evidence at the call site.
+
+### 7.6 Failure modes (where the rule has historically leaked)
+
+These are the patterns reviewers have caught after the fact; treat them as recurring red flags.
+
+- **Status badges drifting into running text** ("rewritten" written as a verb in a sentence rather than as the §2 status label).
+- **Inference disguised as a verb tense** ("history was rewritten" reads like an observation but the rewrite *judgment* is an inference from the prev/curr hash mismatch).
+- **Recovery hints that assume the cause** ("To undo the force-push, …") — name the recovery without naming the cause when the cause is inferred.
+- **Localized bare past tense** (Japanese 「書き換えました」 reads more declarative than English "rewritten" because the JA past tense lacks the EN passive-voice ambiguity — be stricter in JA).
+
+---
+
+## 8. Governance
+
+- Any new user-facing string must be checked against sections 3, 4, 5, 6, and 7 before it ships.
+- Every new string in `microcopy.md` must carry an `[obs]`, `[interp]`, or `[ui]` tag (§7.5). PRs that introduce untagged strings should be returned for re-tagging.
 - Status labels (`new`, `rewritten`, `force-pushed`, `merge`, `signature unknown`, `error`) are governed in `microcopy.md` section "Status badges". They are normalized vocabulary; do not invent synonyms in code.
 - When a string fails the voice check, propose the rewrite alongside the original; do not silently change strings that may be referenced elsewhere.
 - The replacement mapping at the end of `microcopy.md` is the canonical migration list for existing strings in `apps/ui/src/app/components/refscope/`.

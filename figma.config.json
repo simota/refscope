@@ -1,0 +1,13 @@
+{
+  "codeConnect": {
+    "include": [
+      "apps/ui/src/app/components/**/*.figma.tsx"
+    ],
+    "exclude": [
+      "**/node_modules/**",
+      "**/dist/**"
+    ],
+    "label": "Refscope React",
+    "parser": "react"
+  }
+}
