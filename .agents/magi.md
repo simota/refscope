@@ -291,3 +291,43 @@
 - v1.5+ Out-of-MVP scope (完全 CSRF token / in-UI git clone / path autocomplete / repos.json 暗号化 / Export-Import 機能)
 
 > 代筆: Sherpa-verify (Magi 不在の auto mode chain 中) — Magi 自身の 3 賢者 deliberation を経ていない、本 entry は Sherpa による情報整理のみ。次回実 Magi 招集時に formal verdict 補完が望ましい。
+
+## Round 7 (2026-05-08): デザイナー職能ペルソナ → positioning 4 件同時発生 pattern
+
+**Verdict file:** `docs/magi-verdict-2026-05-08-r7-designer.md`
+
+### 観察 1: 新職能ペルソナを入れた round は positioning 級判断が同時多発する
+
+- round 5 (ARI / AI agent persona) で初の positioning 級判断 (AI を first-class user とみなすか) が発生。
+- round 7 (デザイナー職能 6 ペルソナ) で同型構造の positioning 級判断が **4 件同時** に持ち上がった (P1 designer first-class / P2 brand doc 機械検証 / P3 Lens taxonomy 整理 / P4 LP drift 投資)。
+- 教訓: 「新職能 / 新存在 (人 / agent / 受信者)」を Plea ペルソナに混ぜたラウンドの直後は、Magi が positioning 級判断を **複数同時** に処理する preparation を要する。1 件ずつ次 round で消化すると round 数が指数化する。
+- 適用先: Plea round で「核ペルソナ三位一体の暗黙前提を 1 軸否定するペルソナ」を入れた次の Magi 招集は、最低 2 つの positioning challenge を同時 frame できる時間と confidence calibration を確保する。
+
+### 観察 2: positioning 級判断は "first-class 化 reject + selective adoption + filter 設計" の 3 軸で吸収できる
+
+- P1 (デザイナー first-class?) の verdict は 「positioning REJECT + selective APPROVE (engineer benefit フィルター)」 で 3 lens 中 2 lens が REJECT、1 lens が ABSTAIN という split を吸収した。
+- これは brand 軸を維持しつつ persona pain を殺さない pattern。今後同型の "新職能を first-class にするか" 議論で再利用可能と仮説。
+- 教訓: positioning REJECT 単独だと pathos pain を冷たく捨てる印象を生む。**REJECT の同 verdict 内に "selective adoption + filter 条件" を必ず併記** する pattern を default 化したい。
+- 適用先: round 5 ARI (AI agent first-class) を再評価する機会があれば、selective adoption + filter (例: 「dev tool として AI agent に開く面は MCP / JSON Schema 公開のみ、UI / brand voice は engineer 優先のまま」) で吸収できないか再検討。
+
+### 観察 3: 3-0 unanimity が複数件出るラウンドでは DA challenge の質が verdict 信頼度を決める
+
+- round 7 verdict は P2 / Cluster A / B / C 内 D6 / Cluster C 内 D2 / D3 の 5 件が 3-0 unanimity。
+- DA challenge を "subjective vs objective evidence" 軸でかけたが、より体系化するなら:
+  - subjective signal の **breadth** (何ペルソナで surface したか) を一軸目
+  - objective evidence の有無 (telemetry / past incident) を二軸目
+  - DA challenge ↔ Researcher calibration ゲートの組合せで「subjective でも 3 ペルソナ別言語 = signal、ただし real-user calibration 経由を verdict ゲートに」を制度化
+- 教訓: Plea round が「複数ペルソナが別言語で同じことを要求」型 input を返す場合、Magi の DA は **subjective signal を Researcher ゲートで objective 化する** という役割分担を明示すると verdict reliability が上がる。
+- 適用先: 次回以降、3-0 unanimity が 4 件以上出るラウンドは Researcher calibration を **Phase ゲートとして verdict 内に組込み** を default 化。R7-6 (synthetic without real-user calibration) を Severity H で登録した手続きを引き継ぐ。
+
+### 観察 4: Reversibility 二層管理 — positioning (LOW) と demand (MEDIUM) を同 verdict 内で分離
+
+- round 7 verdict は positioning 4 件 (LOW reversibility, brand 級) と demand 8 件 (MEDIUM reversibility, UI 級) を同一文書内で扱った。
+- Risk register / Retreat condition を **層別** に分けて記録 (R7-1/R7-5 = positioning retreat / R7-retreat-5/6 = implementation retreat) することで、6 ヶ月後の追跡 / 再 deliberation で「どの retreat が positioning 級でどれが UI 級か」が一目で読める。
+- 教訓: 同一 verdict 内で reversibility 層が混在する場合、retreat condition と risk register を **層別 prefix** で分けて記録。
+- 適用先: 今後の Magi verdict template に "positioning retreat" / "implementation retreat" の 2 セクションを default で持たせる。
+
+### Round 7 verdict が将来 round へ残した debt
+
+- **R7-6 (Severity H):** synthetic 8 demand すべてが real designer calibration 未実施。Phase 2 開始前ゲートで Researcher 必須。これを skip して Atlas / Vision に流すと round 5 ARI の "quietly 追加" anti-pattern と同型に陥る。
+- **P1 / P4 dissent (Pathos / Logos minority):** 6 ヶ月後の re-deliberation トリガー (R7-retreat-3 / R7-retreat-4) で必ず参照。dissent を持つ lens の予測がどちらが正しかったか calibration record として残す責務。

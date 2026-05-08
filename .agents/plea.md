@@ -55,3 +55,22 @@
 - 「AI agent を user として扱う」と決めた瞬間、surface 設計 (MCP / function calling)、auth model (token vs OAuth)、output format (JSON Schema 公開)、brand voice (LP / microcopy)、roadmap bandwidth 配分 にすべて波及する。技術的決定ではなく positioning 決定。
 - 教訓: AI agent ペルソナを Plea で扱う時は、handoff prompt で必ず Magi (positioning judgment) を経由するよう constraint に書く。Spark / Accord に直接渡すと positioning 決定を skip して実装議論に流れ、「AI 対応を quietly に追加」してから brand voice との不整合に後で気づくパターンに陥る。
 - 適用先: AI ペルソナを含む round の Output Routing には Magi を必ず含める。Acceptance Criteria の最後に「product positioning level の決定 (Magi review 推奨) を README / spec に書き下ろし」を入れる。
+
+## "実装者 = ユーザー" の暗黙前提を否定する職能ペルソナ群は positioning 圧を生む
+
+- 2026-05-08 (round 7、`docs/user-demand-report-2026-05-08-r7-designer.md`): デザイナー職能 (Mira / Devi / Saoirse / Theo / Iris / Jin) を一括投入したところ、core engineer ペルソナでは死角になっていた **4 surface (Lens taxonomy / token governance / microcopy 文体 / screenshot drift)** が同時に浮上した。とくに Iris (LP custodian / 月 1 リズム) と Jin (junior designer / Lens 命名 metaphor を共有しない) は、Refscope を「実装する人と使う人が同一」とする暗黙前提を真正面から否定した。
+- これは round 5 ARI (AI agent persona) と同型の positioning 圧: 「Refscope の第一級ユーザーは誰か」「実装者・観測者・観測対象・通り過ぎる人 (LP/SNS 越し) のどこに線を引くか」の brand 級判断を要求する。技術判断ではない。
+- 教訓: 職能を否定軸として混ぜると positioning 圧が生まれる。round 8 以降は次の 4 軸で否定ペルソナを並べると暗黙前提一覧の網羅性が一段上がる仮説:
+  1. **実装する人** (現状の core)
+  2. **設計する人** (デザイナー職能 — round 7 でカバー)
+  3. **観測する agent** (AI agent — round 5 ARI でカバー)
+  4. **観測される対象** (commit author / co-author / mention されている人 — 未カバー、次ラウンド候補)
+- 適用先: 職能否定ペルソナを含む round の Output Routing には Magi を必ず含める。Demand 単独で Spark / Accord に流すと positioning 決定を skip して "デザイナー対応を quietly に追加" → brand voice 不整合の round 5 ARI と同じパターンに陥る。
+
+## "観測 vs 解釈の分離" は実装層 4 surface に独立に漏れる、ラウンド横断の累進型死角
+
+- 2026-04-30 round 1 では observed Git facts vs inferred explanations の分離が要求された。
+- 2026-05-08 round 7 でデザイナー視点が同じ分離原則を **typography rhythm (Mira D2)** / **forced-colors fallback (Saoirse D5)** / **microcopy 文体 (Theo D6)** / **drift detection 通知 (Iris D7)** の 4 surface でそれぞれ別個に要求した。
+- visual-direction.md で原則化されていても、**実装層の 4 surface (visual / motion / textual / token) のいずれかで漏れる** という構造的死角。原則 → 実装 の "compliance" は機械検証しないと累進的に劣化する。
+- 教訓: 観測 vs 解釈分離を扱う round では、Cross-Persona Analysis セクションで必ず「この原則がどの実装 surface (visual / motion / textual / token / boundary-output) で実現されているか」を 5 軸で表化する。1 軸でも欠けていればその軸の demand を deliberately 1 つ追加する。
+- 適用先: handoff prompt の standard constraint に「brand axis (観測 vs 解釈) を visual / motion / textual / token / boundary-output の 5 surface すべてで機械検証しているか」を入れる。
