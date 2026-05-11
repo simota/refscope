@@ -6,17 +6,24 @@
  * - 周辺ノード = fetchRelatedFiles (top-K=20 ハードキャップ)
  * - エッジ太さ = coChangeCount (正規化)、ラベル = 件数
  * - ノードクリック → 中心入れ替え (再 fetch)
- * - ノードダブルクリック → onOpenFileHistory で詳細パネルへ
+ * - ノードダブルクリック / Space キー → onOpenFileHistory で詳細パネルへ
+ * - Enter キー → シングルクリック相当 (中心入れ替え)
  * - d3-force: manyBody + link + center の minimal セットアップ
+ *
+ * a11y: 各ノードに tabIndex + onKeyDown を設定。SVG 全体に role="img" と
+ * aria-describedby、視覚非表示の <ul> で SR 用テキスト経路を提供する。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import * as d3Force from 'd3-force';
 import {
   fetchRelatedFiles,
   fetchFileHotspot,
   type RelatedFileEntry,
 } from '../../api';
+import { LensHeader } from './LensHeader';
+import { EmptyStateCard, type LensEmptyReason, type EmptyStateMessage } from './EmptyStateCard';
+import type { LensId } from './LensSwitcher';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,6 +35,8 @@ export type CoChangeLensProps = {
   /** 選択中ファイルパス (App.tsx から受け取る; null なら Hotspot Top-1 でフォールバック) */
   selectedFilePath: string | null;
   onOpenFileHistory: (path: string) => void;
+  /** 他 Lens への遷移 (EmptyStateCard の relatedLenses 用) */
+  onChangeLens?: (lens: LensId) => void;
 };
 
 type GraphNode = d3Force.SimulationNodeDatum & {
@@ -49,6 +58,12 @@ type GraphLink = d3Force.SimulationLinkDatum<GraphNode> & {
   /** normalized 0–1 */
   strength: number;
 };
+
+/**
+ * Co-change 固有の空状態理由。共通の LensEmptyReason は使わず、独自 union を扱う。
+ * EmptyStateCard は messages prop で任意 reason をサポートするため互換。
+ */
+type CoChangeEmptyReason = 'no-center-file' | 'no-related' | 'no-hotspot';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -98,6 +113,37 @@ function computeScale(width: number, height: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// Help Popover content
+// ---------------------------------------------------------------------------
+
+function CoChangeHelpContent() {
+  return (
+    <>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+        Co-change グラフとは
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        中心ファイルと <strong>同じコミットで一緒に変更されたファイル</strong>を
+        top-{TOP_K} 件、関連の強さ順に表示します。
+        エッジ上の数字は <strong>共に変更されたコミット件数</strong> です。
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        操作
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        ・ノード <strong>クリック</strong> または <strong>Enter</strong>: 中心を入れ替え<br />
+        ・ノード <strong>ダブルクリック</strong> または <strong>Space</strong>: ファイル履歴を開く<br />
+        ・<strong>Tab</strong>: ノード間フォーカス移動
+      </div>
+      <div style={{ color: 'var(--rs-text-muted)', fontSize: 11 }}>
+        ※ co-change は相関であり因果ではありません。
+        ビルド設定ファイルなど構造由来の共変化が含まれることがあります。
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -106,6 +152,7 @@ export function CoChangeLens({
   selectedRef,
   selectedFilePath,
   onOpenFileHistory,
+  onChangeLens,
 }: CoChangeLensProps) {
   const [centerPath, setCenterPath] = useState<string | null>(selectedFilePath);
   const [nodes, setNodes] = useState<GraphNode[]>([]);
@@ -113,11 +160,15 @@ export function CoChangeLens({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [svgSize, setSvgSize] = useState({ w: 600, h: 400 });
+  const [emptyReason, setEmptyReason] = useState<CoChangeEmptyReason | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const lastClickTime = useRef<number>(0);
   const lastClickPath = useRef<string>('');
+  const focusedNodeRef = useRef<string | null>(null);
+
+  const srDescId = useId();
 
   // props の selectedFilePath が外から変わったら centerPath を同期する
   useEffect(() => {
@@ -154,8 +205,8 @@ export function CoChangeLens({
 
       setLoading(true);
       setError('');
-      setNodes([]);
-      setLinks([]);
+      setEmptyReason(null);
+      // T-A7: 旧グラフを即消去せず、新データ到着時に置換する (Loading 中はそのまま残す)
 
       fetchRelatedFiles(
         repoId,
@@ -164,6 +215,12 @@ export function CoChangeLens({
       )
         .then((res) => {
           if (controller.signal.aborted) return;
+          if (res.related.length === 0) {
+            setNodes([]);
+            setLinks([]);
+            setEmptyReason('no-related');
+            return;
+          }
           buildGraph(center, res.related, svgSize.w, svgSize.h, setNodes, setLinks);
         })
         .catch((err: unknown) => {
@@ -195,12 +252,16 @@ export function CoChangeLens({
 
     setLoading(true);
     setError('');
+    setEmptyReason(null);
 
     fetchFileHotspot(repoId, { ref: selectedRef, limit: 1 }, fallbackController.signal)
       .then((hotspot) => {
         if (fallbackController.signal.aborted) return;
         const top1 = hotspot.files[0];
         if (!top1) {
+          setNodes([]);
+          setLinks([]);
+          setEmptyReason('no-hotspot');
           setLoading(false);
           return;
         }
@@ -223,6 +284,18 @@ export function CoChangeLens({
   // Node interaction
   // ---------------------------------------------------------------------------
 
+  const handleNodeActivate = useCallback(
+    (path: string) => {
+      // シングルクリック相当: 周辺ノードを中心に入れ替え (中心ノードはスキップ)
+      const centerNode = nodes.find((n) => n.isCenter);
+      if (path !== centerNode?.path) {
+        focusedNodeRef.current = path;
+        setCenterPath(path);
+      }
+    },
+    [nodes],
+  );
+
   const handleNodeClick = useCallback(
     (path: string) => {
       const now = Date.now();
@@ -237,13 +310,22 @@ export function CoChangeLens({
         return;
       }
 
-      // シングルクリック: 周辺ノードを中心に入れ替え (中心ノードはスキップ)
-      const centerNode = nodes.find((n) => n.isCenter);
-      if (path !== centerNode?.path) {
-        setCenterPath(path);
+      handleNodeActivate(path);
+    },
+    [handleNodeActivate, onOpenFileHistory],
+  );
+
+  const handleNodeKeyDown = useCallback(
+    (e: KeyboardEvent<SVGGElement>, path: string) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleNodeActivate(path);
+      } else if (e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        onOpenFileHistory(path);
       }
     },
-    [nodes, onOpenFileHistory],
+    [handleNodeActivate, onOpenFileHistory],
   );
 
   // ---------------------------------------------------------------------------
@@ -251,6 +333,25 @@ export function CoChangeLens({
   // ---------------------------------------------------------------------------
 
   const isEmpty = !loading && !error && nodes.length === 0;
+  const isHotspotFallback = !selectedFilePath && centerPath !== null;
+
+  const emptyMessages: Partial<Record<CoChangeEmptyReason, EmptyStateMessage>> = {
+    'no-center-file': {
+      title: 'ファイルが未選択です',
+      body:
+        'Co-change グラフは中心となるファイルが必要です。Hotspot Lens から探索するか、ファイル履歴を開くと自動で中心に設定されます。',
+    },
+    'no-related': {
+      title: '共変化するファイルが見つかりません',
+      body:
+        `中心ファイル「${centerPath ?? ''}」と同じコミットで一緒に変更されたファイルが top-${TOP_K} 件以内に見つかりませんでした。別の中心ファイルで試すか、Hotspot Lens で活発に変更されているファイルを確認してください。`,
+    },
+    'no-hotspot': {
+      title: 'ホットスポットデータがありません',
+      body:
+        'このリポジトリには Hotspot Top-1 のフォールバック候補が見つかりませんでした。コミット履歴がまだ存在しないか、API がアクセスできません。',
+    },
+  };
 
   return (
     <div
@@ -264,56 +365,34 @@ export function CoChangeLens({
         background: 'var(--rs-bg-panel)',
       }}
     >
-      {/* Header strip */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 12px',
-          borderBottom: '1px solid var(--rs-border)',
-          fontSize: 11,
-          fontFamily: 'var(--rs-sans)',
-          color: 'var(--rs-text-secondary)',
-          flexShrink: 0,
-          minHeight: 32,
-        }}
-      >
-        {centerPath ? (
-          <span
-            title={centerPath}
-            style={{
-              fontFamily: 'var(--rs-mono)',
-              color: 'var(--rs-accent)',
-              fontSize: 11,
-              maxWidth: 360,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {centerPath}
-          </span>
-        ) : (
-          <span>Co-change Graph</span>
-        )}
-        <span style={{ marginLeft: 'auto' }}>
-          click = 中心入替 · dblclick = 詳細表示 · top-{TOP_K}
-        </span>
-      </div>
+      <LensHeader
+        title="Co-change Graph"
+        oneLiner={
+          centerPath
+            ? `中心: ${shortPath(centerPath)} と共変化する top-${TOP_K} ファイル`
+            : `選択ファイルと共変化するファイルを top-${TOP_K} 件まで表示`
+        }
+        helpContent={<CoChangeHelpContent />}
+      />
+
+      {/* T-B5 の領域 (フォールバックバナー) は PR-B で追加 */}
 
       {/* Loading */}
       {loading && (
         <div
+          role="status"
+          aria-live="polite"
           style={{
             position: 'absolute',
-            inset: 32,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            top: 56,
+            right: 16,
+            padding: '4px 10px',
+            background: 'color-mix(in oklab, var(--rs-bg-elevated), transparent 20%)',
+            border: '1px solid var(--rs-border)',
+            borderRadius: 'var(--rs-radius-sm)',
             color: 'var(--rs-text-secondary)',
             fontFamily: 'var(--rs-sans)',
-            fontSize: 13,
+            fontSize: 11,
             zIndex: 10,
             pointerEvents: 'none',
           }}
@@ -324,41 +403,80 @@ export function CoChangeLens({
 
       {/* Error */}
       {!loading && error && (
-        <div
-          style={{
-            display: 'flex',
-            flex: 1,
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--rs-git-deleted)',
-            fontFamily: 'var(--rs-sans)',
-            fontSize: 13,
-            padding: 24,
-            textAlign: 'center',
+        <EmptyStateCard
+          reason={'no-related' as LensEmptyReason}
+          messages={{
+            ['no-related' as LensEmptyReason]: {
+              title: 'データの取得に失敗しました',
+              body: error,
+            },
           }}
-        >
-          {error}
-        </div>
+          onChangeLens={onChangeLens}
+          relatedLenses={
+            onChangeLens
+              ? [
+                  { id: 'hotspot', label: 'Hotspot を開く' },
+                  { id: 'stream', label: 'Live を開く' },
+                ]
+              : undefined
+          }
+        />
       )}
 
       {/* Empty state */}
-      {isEmpty && (
-        <div
-          style={{
-            display: 'flex',
-            flex: 1,
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--rs-text-secondary)',
-            fontFamily: 'var(--rs-sans)',
-            fontSize: 13,
-          }}
-        >
-          {centerPath
-            ? 'No co-change data'
-            : 'ファイルを選択するか、ホットスポットデータが存在しません'}
-        </div>
+      {isEmpty && emptyReason && (
+        <EmptyStateCard
+          reason={emptyReason as unknown as LensEmptyReason}
+          messages={emptyMessages as Partial<Record<LensEmptyReason, EmptyStateMessage>>}
+          onChangeLens={onChangeLens}
+          relatedLenses={
+            onChangeLens
+              ? emptyReason === 'no-hotspot'
+                ? [{ id: 'stream', label: 'Live を開く' }]
+                : [
+                    { id: 'hotspot', label: 'Hotspot を開く' },
+                    { id: 'stream', label: 'Live を開く' },
+                  ]
+              : undefined
+          }
+        />
       )}
+
+      {/* SR-only graph description */}
+      <span
+        id={srDescId}
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+        }}
+      >
+        {centerPath && nodes.length > 0 ? (
+          <>
+            <p>
+              Co-change グラフ。中心ファイル: {centerPath}。関連ファイル {nodes.length - 1} 件。
+              {isHotspotFallback ? ' (Hotspot Top-1 から自動選択)' : ''}
+            </p>
+            <ul>
+              {nodes
+                .filter((n) => !n.isCenter)
+                .map((n) => (
+                  <li key={n.id}>
+                    {n.path}: {n.coChangeCount} 件の共変化
+                  </li>
+                ))}
+            </ul>
+          </>
+        ) : (
+          <p>Co-change グラフ: データなし</p>
+        )}
+      </span>
 
       {/* Graph SVG */}
       {!error && nodes.length > 0 && (() => {
@@ -376,8 +494,20 @@ export function CoChangeLens({
           width="100%"
           height="100%"
           viewBox={`0 0 ${svgSize.w} ${svgSize.h}`}
-          style={{ flex: 1, display: 'block', cursor: 'default' }}
-          aria-label="Co-change graph"
+          style={{
+            flex: 1,
+            display: 'block',
+            cursor: 'default',
+            opacity: loading ? 0.4 : 1,
+            transition: 'opacity 150ms ease-out',
+          }}
+          role="img"
+          aria-label={
+            centerPath
+              ? `Co-change グラフ。中心 ${shortPath(centerPath)}、関連 ${nodes.length - 1} 件。`
+              : 'Co-change グラフ'
+          }
+          aria-describedby={srDescId}
         >
           {/* Links */}
           <g>
@@ -443,16 +573,36 @@ export function CoChangeLens({
                   key={node.id}
                   transform={`translate(${node.x}, ${node.y})`}
                   onClick={() => handleNodeClick(node.path)}
-                  style={{ cursor: 'pointer' }}
+                  onKeyDown={(e) => handleNodeKeyDown(e, node.path)}
+                  tabIndex={0}
+                  className="rs-cochange-node"
+                  style={{
+                    cursor: node.isCenter ? 'default' : 'pointer',
+                    outline: 'none',
+                  }}
                   role="button"
-                  aria-label={node.path}
+                  aria-label={
+                    node.isCenter
+                      ? `中心ノード: ${node.path}。Space キーでファイル履歴を開く`
+                      : `${node.path}。${node.coChangeCount} 件の共変化。Enter で中心を入れ替え、Space で履歴を開く`
+                  }
                 >
+                  {/* Focus ring (SVG では outline が効かないため独自に描画) */}
+                  <circle
+                    r={r + 4}
+                    fill="none"
+                    stroke="var(--rs-accent)"
+                    strokeWidth={2}
+                    strokeOpacity={0}
+                    className="rs-cochange-focus-ring"
+                  />
                   <circle
                     r={r}
                     fill={fill}
                     stroke={stroke}
                     strokeWidth={node.isCenter ? 0 : 1.5}
-                    style={{ transition: 'r 150ms ease-out' }}
+                    className="rs-cochange-circle"
+                    style={{ transition: 'r 150ms ease-out, stroke-width 120ms ease-out' }}
                   />
                   {/* ノード内テキスト (中心のみ) */}
                   {node.isCenter && (
@@ -487,6 +637,17 @@ export function CoChangeLens({
         </svg>
         );
       })()}
+
+      {/* Node hover/focus visual feedback */}
+      <style>{`
+        .rs-cochange-node:not([aria-label^="中心ノード"]):hover .rs-cochange-circle {
+          stroke-width: 3 !important;
+          stroke: var(--rs-accent) !important;
+        }
+        .rs-cochange-node:focus-visible .rs-cochange-focus-ring {
+          stroke-opacity: 0.85;
+        }
+      `}</style>
     </div>
   );
 }
