@@ -1447,6 +1447,8 @@ export default function App() {
           <RiskHeatmapLens
             commits={commits}
             onSelectCommit={(hash) => { setSelected(hash); }}
+            onChangeLens={setActiveLens}
+            onSelectRange={(from, to) => setDateRangeFilter({ from, to })}
           />
         </div>
       )}

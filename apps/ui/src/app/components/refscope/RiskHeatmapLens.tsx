@@ -8,17 +8,37 @@
  *   - Y軸: 直近 7 日の日付
  *   - X軸: 0-23 時
  *
- * カラースケール:
- *   score=0    → 透明 (セルは枠のみ)
- *   1-49       → --rs-warning  (opacity 0.15 ~ 0.45)
- *   50+        → --rs-git-deleted (opacity 0.5 ~ 1.0)
+ * カラースケール (動的閾値対応 — Phase 1):
+ *   score < low   → 透明 (セルは枠のみ)
+ *   low ≤ s < high → --rs-warning  (opacity 0.15 ~ 0.45)
+ *   s ≥ high       → --rs-git-deleted (opacity 0.5 ~ 1.0)
  *
- * セル tooltip: title 属性で実装 (Radix 非依存)
- * セルクリック → onSelectCommit(hash)
+ * Tooltip: Radix HoverCard + RiskFactorsCard で Risk 系 Lens 統一表示。
+ * セルクリック → onSelectCommit(cell.topHash)
  */
 import { useMemo, useState, useCallback } from 'react';
 import type { Commit } from './data';
+import type { LensId } from './LensSwitcher';
 import { dayKey } from './dateKey';
+import { LensHeader, RiskScoreLegend } from './LensHeader';
+import {
+  EmptyStateCard,
+  RiskScoreLegendInline,
+  type LensEmptyReason,
+  type EmptyStateMessage,
+} from './EmptyStateCard';
+import {
+  ThresholdSelector,
+  useThresholdState,
+  computeThresholds,
+} from './lensThreshold';
+import {
+  RiskFactorsCard,
+  buildRiskFactor,
+  type RiskFactor,
+} from './RiskFactorsCard';
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +47,14 @@ import { dayKey } from './dateKey';
 export type RiskHeatmapLensProps = {
   commits: Commit[];
   onSelectCommit: (hash: string) => void;
+  /** Empty state の関連 Lens ボタン + HoverCard "Trend で見る" 用 */
+  onChangeLens?: (lens: LensId) => void;
+  /**
+   * セルの時間範囲を Trend Lens 等の dateRangeFilter に伝播するためのコールバック。
+   * 30d-author モードでは該当日の 24h 範囲、
+   * 7d-hour モードでは該当 1 時間範囲が渡される。
+   */
+  onSelectRange?: (fromTs: number, toTs: number) => void;
 };
 
 type HeatmapMode = '30d-author' | '7d-hour';
@@ -47,6 +75,22 @@ type CellData = {
 const TOP_N = 20; // 著者数上限
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** ローカル TZ 表示用ラベル — "Asia/Tokyo (UTC+9)" 形式 */
+const LOCAL_TZ_LABEL: string = (() => {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'local';
+    const offsetMin = -new Date().getTimezoneOffset();
+    const sign = offsetMin >= 0 ? '+' : '-';
+    const abs = Math.abs(offsetMin);
+    const oh = Math.floor(abs / 60);
+    const om = abs % 60;
+    const offsetStr = om === 0 ? `UTC${sign}${oh}` : `UTC${sign}${oh}:${String(om).padStart(2, '0')}`;
+    return `${tz} (${offsetStr})`;
+  } catch {
+    return 'local';
+  }
+})();
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -58,18 +102,24 @@ function parseDate(iso: string | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-/** score → [color string, opacity] */
-function scoreToStyle(score: number): { background: string; opacity: number } {
-  if (score <= 0) {
+/** 動的閾値対応の score → [color string, opacity] */
+function scoreToStyle(
+  score: number,
+  low: number,
+  high: number,
+): { background: string; opacity: number } {
+  if (score <= 0 || score < low) {
     return { background: 'transparent', opacity: 0 };
   }
-  if (score < 50) {
-    // warning: opacity 0.15 (score=1) → 0.45 (score=49)
-    const t = Math.min((score - 1) / 48, 1);
+  if (score < high) {
+    // warning gradient
+    const range = Math.max(1, high - low);
+    const t = Math.min((score - low) / range, 1);
     return { background: 'var(--rs-warning)', opacity: 0.15 + t * 0.3 };
   }
-  // danger: opacity 0.5 (score=50) → 1.0 (score=100+)
-  const t = Math.min((score - 50) / 50, 1);
+  // danger gradient
+  const denom = Math.max(high, 1);
+  const t = Math.min((score - high) / denom, 1);
   return { background: 'var(--rs-git-deleted)', opacity: 0.5 + t * 0.5 };
 }
 
@@ -78,6 +128,19 @@ function formatMD(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${m}/${dd}`;
+}
+
+/** YYYY/MM/DD HH:mm 形式 (HoverCard 用)。invalid input は空文字。 */
+function formatDateTime(iso: string | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}/${mm}/${dd} ${hh}:${mi}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,19 +247,30 @@ function buildDayHourMap(
 type HeatCellProps = {
   cell: CellData | undefined;
   onClick: (() => void) | undefined;
+  lowThreshold: number;
+  highThreshold: number;
+  /** HoverCard 用 — cell.topHash から作った RiskFactor (なければ HoverCard を出さない) */
+  factor?: RiskFactor;
+  /** セル位置の集約情報（HoverCard ヘッダに表示） */
+  cellLabel?: string;
+  /** "Trend で見る" ボタンのコールバック (provided 時のみボタン表示) */
+  onJumpToTrend?: () => void;
 };
 
-function HeatCell({ cell, onClick }: HeatCellProps) {
+function HeatCell({
+  cell,
+  onClick,
+  lowThreshold,
+  highThreshold,
+  factor,
+  cellLabel,
+  onJumpToTrend,
+}: HeatCellProps) {
   const score = cell?.avgScore ?? 0;
-  const style = scoreToStyle(score);
+  const style = scoreToStyle(score, lowThreshold, highThreshold);
 
-  const title = cell
-    ? `コミット: ${cell.count} / 平均 score: ${cell.avgScore.toFixed(1)} / 最大 score: ${cell.maxScore}`
-    : undefined;
-
-  return (
+  const cellInner = (
     <div
-      title={title}
       onClick={onClick}
       style={{
         width: '100%',
@@ -209,7 +283,6 @@ function HeatCell({ cell, onClick }: HeatCellProps) {
         overflow: 'hidden',
       }}
     >
-      {/* Background layer with color */}
       <div
         style={{
           position: 'absolute',
@@ -221,7 +294,98 @@ function HeatCell({ cell, onClick }: HeatCellProps) {
       />
     </div>
   );
+
+  if (!cell || !factor) {
+    return cellInner;
+  }
+
+  return (
+    <HoverCard openDelay={150} closeDelay={60}>
+      <HoverCardTrigger asChild>{cellInner}</HoverCardTrigger>
+      <HoverCardContent side="top" align="center" className="w-auto p-0 border-0 bg-transparent shadow-none">
+        <div
+          style={{
+            background: 'var(--rs-bg-elevated)',
+            border: '1px solid var(--rs-border)',
+            borderRadius: 'var(--rs-radius-sm)',
+            padding: '8px 10px 4px',
+            fontSize: 11,
+            fontFamily: 'var(--rs-sans)',
+            maxWidth: 320,
+          }}
+        >
+          {cellLabel && (
+            <div
+              style={{
+                fontFamily: 'var(--rs-mono)',
+                fontSize: 10,
+                color: 'var(--rs-text-secondary)',
+                marginBottom: 4,
+              }}
+            >
+              {cellLabel} · {cell.count} {cell.count === 1 ? 'commit' : 'commits'} ·
+              max <span style={{ color: 'var(--rs-text)' }}>{cell.maxScore}</span> ·
+              avg <span style={{ color: 'var(--rs-text)' }}>{cell.avgScore.toFixed(1)}</span>
+            </div>
+          )}
+        </div>
+        <RiskFactorsCard
+          factor={factor}
+          lowThreshold={lowThreshold}
+          highThreshold={highThreshold}
+          pointerEvents="auto"
+        />
+        {onJumpToTrend && (
+          <div
+            style={{
+              marginTop: 4,
+              padding: '6px 10px',
+              background: 'var(--rs-bg-elevated)',
+              border: '1px solid var(--rs-border)',
+              borderTop: 'none',
+              borderRadius: '0 0 var(--rs-radius-sm) var(--rs-radius-sm)',
+              display: 'flex',
+              justifyContent: 'flex-end',
+            }}
+          >
+            <button
+              type="button"
+              onClick={onJumpToTrend}
+              style={{
+                height: 22,
+                padding: '0 10px',
+                fontSize: 10,
+                fontFamily: 'var(--rs-sans)',
+                border: '1px solid var(--rs-border)',
+                borderRadius: 'var(--rs-radius-sm)',
+                background: 'transparent',
+                color: 'var(--rs-accent)',
+                cursor: 'pointer',
+              }}
+            >
+              Risk Trend で見る →
+            </button>
+          </div>
+        )}
+      </HoverCardContent>
+    </HoverCard>
+  );
 }
+
+/**
+ * dayKey "YYYY-MM-DD" を該当日のローカル midnight epoch ms に変換。
+ * 7d-hour モードでは hour offset を追加するため別途加算。
+ */
+function dayKeyToMidnightMs(dk: string): number | null {
+  const m = dk.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  return new Date(y, mo - 1, d).getTime();
+}
+
+const HOUR_MS = 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Mode toggle button
@@ -255,7 +419,7 @@ function ModeToggle({ mode, onToggle }: ModeToggleProps) {
   };
 
   return (
-    <div style={{ display: 'flex', gap: 4 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
       <button
         type="button"
         style={{ ...btnBase, ...(mode === '30d-author' ? active : inactive) }}
@@ -270,7 +434,86 @@ function ModeToggle({ mode, onToggle }: ModeToggleProps) {
       >
         7d × hour
       </button>
+      <ModeHelpPopover />
     </div>
+  );
+}
+
+/**
+ * Mode 切替の意味を伝える ? Popover (GAP-B)。
+ * 「同一データの 2 ビュー」を明示し、各モードの用途を 1-2 行で説明する。
+ */
+function ModeHelpPopover() {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="モードの説明を表示"
+          style={{
+            width: 20,
+            height: 20,
+            marginLeft: 2,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 'var(--rs-radius-sm)',
+            border: '1px solid var(--rs-border)',
+            background: 'transparent',
+            color: 'var(--rs-text-muted)',
+            fontFamily: 'var(--rs-sans)',
+            fontSize: 11,
+            cursor: 'pointer',
+          }}
+        >
+          ?
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 text-xs">
+        <div
+          style={{
+            fontFamily: 'var(--rs-sans)',
+            fontSize: 11,
+            lineHeight: 1.5,
+            color: 'var(--rs-text-secondary)',
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)', fontSize: 12 }}>
+            モードについて
+          </div>
+          <div style={{ marginBottom: 6 }}>
+            両モードは <b style={{ color: 'var(--rs-text)' }}>同じコミットデータの別ビュー</b> です。
+            切替で集計範囲・軸が変わるだけで、ベースになるコミット集合は共通。
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div>
+              <span style={{ fontFamily: 'var(--rs-mono)', color: 'var(--rs-text)' }}>
+                30d × author
+              </span>
+              : 直近 30 日、誰がいつリスク変更を入れたかを俯瞰
+            </div>
+            <div>
+              <span style={{ fontFamily: 'var(--rs-mono)', color: 'var(--rs-text)' }}>
+                7d × hour
+              </span>
+              : 直近 7 日、時間帯別パターン（リリース直前など）を確認
+            </div>
+          </div>
+          <div
+            style={{
+              marginTop: 8,
+              paddingTop: 6,
+              borderTop: '1px solid var(--rs-border)',
+              fontSize: 10,
+              color: 'var(--rs-text-muted)',
+            }}
+          >
+            <span style={{ fontFamily: 'var(--rs-mono)' }}>7d × hour</span> はローカルタイムゾーン
+            基準で時刻を解釈します。
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -278,7 +521,7 @@ function ModeToggle({ mode, onToggle }: ModeToggleProps) {
 // Legend
 // ---------------------------------------------------------------------------
 
-function HeatmapLegend() {
+function HeatmapLegend({ low, high }: { low: number; high: number }) {
   return (
     <div
       style={{
@@ -290,7 +533,7 @@ function HeatmapLegend() {
         color: 'var(--rs-text-secondary)',
       }}
     >
-      <span>risk:</span>
+      <span>avg risk:</span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span
           style={{
@@ -301,7 +544,7 @@ function HeatmapLegend() {
             borderRadius: 2,
           }}
         />
-        none
+        &lt; {low}
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span
@@ -314,7 +557,7 @@ function HeatmapLegend() {
             borderRadius: 2,
           }}
         />
-        1–49
+        {low}–{high - 1}
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span
@@ -327,7 +570,7 @@ function HeatmapLegend() {
             borderRadius: 2,
           }}
         />
-        50+
+        ≥ {high}
       </span>
     </div>
   );
@@ -337,12 +580,31 @@ function HeatmapLegend() {
 // Main component
 // ---------------------------------------------------------------------------
 
-export function RiskHeatmapLens({ commits, onSelectCommit }: RiskHeatmapLensProps) {
+export function RiskHeatmapLens({
+  commits,
+  onSelectCommit,
+  onChangeLens,
+  onSelectRange,
+}: RiskHeatmapLensProps) {
   const [mode, setMode] = useState<HeatmapMode>('30d-author');
 
   const handleModeToggle = useCallback((m: HeatmapMode) => {
     setMode(m);
   }, []);
+
+  // 共通 ThresholdSelector の state を Trend と共有 (refscope.risk.threshold)
+  const [threshold, setThreshold] = useThresholdState();
+  const { lowThreshold, highThreshold } = useMemo(
+    () => computeThresholds(threshold, commits.map((c) => c.riskScore ?? 0)),
+    [threshold, commits],
+  );
+
+  // hash → Commit のルックアップマップ (HoverCard 内 Risk Factors 構築用)
+  const commitByHash = useMemo(() => {
+    const map = new Map<string, Commit>();
+    for (const c of commits) map.set(c.hash, c);
+    return map;
+  }, [commits]);
 
   // --- 30d × author ---
   const thirtyDays = useMemo<string[]>(() => {
@@ -394,24 +656,37 @@ export function RiskHeatmapLens({ commits, onSelectCommit }: RiskHeatmapLensProp
   );
 
   // ---------------------------------------------------------------------------
-  // Empty state
+  // Empty state — reason を区別 (Phase 1)
   // ---------------------------------------------------------------------------
 
-  if (commits.length === 0) {
+  const emptyReason: LensEmptyReason | null = useMemo(() => {
+    if (commits.length === 0) return 'no-commits';
+    const hasValidDate = commits.some((c) => {
+      const d = parseDate(c.authorDate);
+      return d !== null;
+    });
+    if (!hasValidDate) return 'no-author-date';
+    return null;
+  }, [commits]);
+
+  if (emptyReason) {
     return (
       <div
         style={{
           display: 'flex',
-          flex: 1,
-          alignItems: 'center',
-          justifyContent: 'center',
+          flexDirection: 'column',
           height: '100%',
-          color: 'var(--rs-text-secondary)',
           fontFamily: 'var(--rs-sans)',
-          fontSize: 13,
         }}
       >
-        No commits to plot
+        <HeatmapLensHeader />
+        <EmptyStateCard
+          reason={emptyReason}
+          messages={HEATMAP_EMPTY_MESSAGES}
+          onChangeLens={onChangeLens}
+          relatedLenses={HEATMAP_RELATED_LENSES}
+          footer={<RiskScoreLegendInline />}
+        />
       </div>
     );
   }
@@ -434,6 +709,9 @@ export function RiskHeatmapLens({ commits, onSelectCommit }: RiskHeatmapLensProp
         fontFamily: 'var(--rs-sans)',
       }}
     >
+      {/* Lens self-explanation header (Phase 1) */}
+      <HeatmapLensHeader />
+
       {/* Toolbar */}
       <div
         style={{
@@ -445,8 +723,11 @@ export function RiskHeatmapLens({ commits, onSelectCommit }: RiskHeatmapLensProp
           gap: 8,
         }}
       >
-        <ModeToggle mode={mode} onToggle={handleModeToggle} />
-        <HeatmapLegend />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ModeToggle mode={mode} onToggle={handleModeToggle} />
+          <ThresholdSelector threshold={threshold} onChange={setThreshold} />
+        </div>
+        <HeatmapLegend low={lowThreshold} high={highThreshold} />
       </div>
 
       {/* Grid area */}
@@ -463,26 +744,83 @@ export function RiskHeatmapLens({ commits, onSelectCommit }: RiskHeatmapLensProp
             authors={topAuthors}
             remainingAuthors={remainingAuthors}
             cellMap={authorDayMap}
+            commitByHash={commitByHash}
             onSelectCommit={onSelectCommit}
+            onSelectRange={onSelectRange}
+            onChangeLens={onChangeLens}
             labelW={LABEL_W}
             cellH={CELL_H}
             headerH={HEADER_H}
+            lowThreshold={lowThreshold}
+            highThreshold={highThreshold}
           />
         ) : (
           <DayHourGrid
             days={sevenDays}
             hours={hours}
             cellMap={dayHourMap}
+            commitByHash={commitByHash}
             onSelectCommit={onSelectCommit}
+            onSelectRange={onSelectRange}
+            onChangeLens={onChangeLens}
             labelW={LABEL_W}
             cellH={CELL_H}
             headerH={HEADER_H}
+            lowThreshold={lowThreshold}
+            highThreshold={highThreshold}
           />
         )}
       </div>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Lens-specific header + empty messages
+// ---------------------------------------------------------------------------
+
+function HeatmapLensHeader() {
+  return (
+    <LensHeader
+      title="Risk Heatmap"
+      oneLiner="いつ誰がリスクの高い変更を入れたかを俯瞰する — 同一データの 2 ビュー"
+      helpAriaLabel="Risk Heatmap の意味を表示"
+      helpContent={
+        <>
+          <RiskScoreLegend />
+          <div
+            style={{
+              marginTop: 10,
+              paddingTop: 8,
+              borderTop: '1px solid var(--rs-border)',
+              color: 'var(--rs-text-secondary)',
+              fontSize: 11,
+            }}
+          >
+            セル色は同セル内コミットの <b>平均</b> riskScore を反映。クリックすると
+            該当セルで最も高 risk のコミット (cell.topHash) を選択。
+          </div>
+        </>
+      }
+    />
+  );
+}
+
+const HEATMAP_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> = {
+  'no-commits': {
+    title: '表示するコミットがありません',
+    body: '現在の選択範囲に該当するコミットがありません。ブランチ・期間フィルタを変更してみてください。',
+  },
+  'no-author-date': {
+    title: 'authorDate が取得できませんでした',
+    body: 'Heatmap は各コミットの authorDate が必要です。API の応答に authorDate が含まれているか確認してください。',
+  },
+};
+
+const HEATMAP_RELATED_LENSES = [
+  { id: 'risk-trend' as const, label: 'Risk Trend を開く' },
+  { id: 'hotspot' as const, label: 'Hotspot を開く' },
+];
 
 // ---------------------------------------------------------------------------
 // AuthorDayGrid
@@ -493,10 +831,15 @@ type AuthorDayGridProps = {
   authors: string[];
   remainingAuthors: number;
   cellMap: Map<string, CellData>;
+  commitByHash: Map<string, Commit>;
   onSelectCommit: (hash: string) => void;
+  onSelectRange?: (fromTs: number, toTs: number) => void;
+  onChangeLens?: (lens: LensId) => void;
   labelW: number;
   cellH: number;
   headerH: number;
+  lowThreshold: number;
+  highThreshold: number;
 };
 
 function AuthorDayGrid({
@@ -504,10 +847,15 @@ function AuthorDayGrid({
   authors,
   remainingAuthors,
   cellMap,
+  commitByHash,
   onSelectCommit,
+  onSelectRange,
+  onChangeLens,
   labelW,
   cellH,
   headerH,
+  lowThreshold,
+  highThreshold,
 }: AuthorDayGridProps) {
   const CELL_W = 32;
 
@@ -594,6 +942,18 @@ function AuthorDayGrid({
           {days.map((d) => {
             const key = `${author}::${d}` as const;
             const cell = cellMap.get(key);
+            const topCommit = cell ? commitByHash.get(cell.topHash) : undefined;
+            const factor = topCommit
+              ? buildRiskFactor(topCommit, formatDateTime(topCommit.authorDate))
+              : undefined;
+            const dayStart = dayKeyToMidnightMs(d);
+            const jumpToTrend =
+              cell && dayStart !== null && onSelectRange && onChangeLens
+                ? () => {
+                    onSelectRange(dayStart, dayStart + DAY_MS - 1);
+                    onChangeLens('risk-trend');
+                  }
+                : undefined;
             return (
               <div
                 key={d}
@@ -615,6 +975,11 @@ function AuthorDayGrid({
                       ? () => onSelectCommit(cell.topHash)
                       : undefined
                   }
+                  lowThreshold={lowThreshold}
+                  highThreshold={highThreshold}
+                  factor={factor}
+                  cellLabel={`${author} · ${d}`}
+                  onJumpToTrend={jumpToTrend}
                 />
               </div>
             );
@@ -647,36 +1012,60 @@ type DayHourGridProps = {
   days: string[];
   hours: number[];
   cellMap: Map<string, CellData>;
+  commitByHash: Map<string, Commit>;
   onSelectCommit: (hash: string) => void;
+  onSelectRange?: (fromTs: number, toTs: number) => void;
+  onChangeLens?: (lens: LensId) => void;
   labelW: number;
   cellH: number;
   headerH: number;
+  lowThreshold: number;
+  highThreshold: number;
 };
 
 function DayHourGrid({
   days,
   hours,
   cellMap,
+  commitByHash,
   onSelectCommit,
+  onSelectRange,
+  onChangeLens,
   labelW,
   cellH,
   headerH,
+  lowThreshold,
+  highThreshold,
 }: DayHourGridProps) {
   const CELL_W = 40;
   const totalW = labelW + hours.length * CELL_W;
 
   return (
     <div style={{ minWidth: totalW }}>
-      {/* Header: 時間ラベル */}
+      {/* Header: 時間ラベル + TZ 表示 (GAP-A) */}
       <div
         style={{
           display: 'flex',
           height: headerH,
           alignItems: 'flex-end',
           paddingBottom: 4,
+          position: 'relative',
         }}
       >
-        <div style={{ width: labelW, flexShrink: 0 }} />
+        <div
+          style={{
+            width: labelW,
+            flexShrink: 0,
+            fontSize: 9,
+            color: 'var(--rs-text-muted)',
+            textAlign: 'right',
+            paddingRight: 8,
+            paddingBottom: 2,
+          }}
+          title={`タイムゾーン: ${LOCAL_TZ_LABEL}`}
+        >
+          tz: {LOCAL_TZ_LABEL}
+        </div>
         {hours.map((h) => (
           <div
             key={h}
@@ -688,7 +1077,7 @@ function DayHourGrid({
               textAlign: 'center',
             }}
           >
-            {h % 6 === 0 ? `${h}h` : ''}
+            {h % 3 === 0 ? `${h}h` : ''}
           </div>
         ))}
       </div>
@@ -728,6 +1117,19 @@ function DayHourGrid({
             {hours.map((h) => {
               const key = `${d}::${h}` as const;
               const cell = cellMap.get(key);
+              const topCommit = cell ? commitByHash.get(cell.topHash) : undefined;
+              const factor = topCommit
+                ? buildRiskFactor(topCommit, formatDateTime(topCommit.authorDate))
+                : undefined;
+              const dayStart = dayKeyToMidnightMs(d);
+              const hourStart = dayStart !== null ? dayStart + h * HOUR_MS : null;
+              const jumpToTrend =
+                cell && hourStart !== null && onSelectRange && onChangeLens
+                  ? () => {
+                      onSelectRange(hourStart, hourStart + HOUR_MS - 1);
+                      onChangeLens('risk-trend');
+                    }
+                  : undefined;
               return (
                 <div
                   key={h}
@@ -749,6 +1151,11 @@ function DayHourGrid({
                         ? () => onSelectCommit(cell.topHash)
                         : undefined
                     }
+                    lowThreshold={lowThreshold}
+                    highThreshold={highThreshold}
+                    factor={factor}
+                    cellLabel={`${d} · ${String(h).padStart(2, '0')}:00`}
+                    onJumpToTrend={jumpToTrend}
                   />
                 </div>
               );
