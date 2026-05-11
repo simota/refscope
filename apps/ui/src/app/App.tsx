@@ -1468,6 +1468,7 @@ export default function App() {
           <DriftLens
             repoId={selectedRepo}
             refs={refs}
+            selectedRef={selectedRef}
             onSelectRef={(ref) => { setSelectedRef(ref); }}
             onChangeLens={setActiveLens}
           />
