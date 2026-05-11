@@ -318,6 +318,9 @@ export default function App() {
   // Commit kind filter (D-2): client-side filter applied to coarseKind from API.
   // 'all' = show all, 'refactor' = likely_refactor + empty, 'logic' = likely_logic.
   const [commitKindFilter, setCommitKindFilter] = useState<"all" | "refactor" | "logic">("all");
+  // Risk Trend Lens のドラッグ範囲選択で設定される時間フィルタ (epoch ms).
+  // null のときは未適用。CommitTimeline に渡す filteredCommits を絞り込む。
+  const [dateRangeFilter, setDateRangeFilter] = useState<{ from: number; to: number } | null>(null);
   // State A: subject-mode value lives in `search`; pickaxe/regex/message values live in `searchPattern`.
   // Keeping them separate prevents mode-switch cross-contamination and maps 1-to-1 onto the API contract
   // (`search` param vs `mode`+`pattern` params).
@@ -899,17 +902,28 @@ export default function App() {
   // Client-side commit kind filter (D-2). Applied after server-side filters so the
   // list endpoint payload is unchanged; only the rendered subset changes.
   const filteredCommits = useMemo(() => {
-    if (commitKindFilter === "all") return commits;
-    return commits.filter((c) => {
-      const kind = c.coarseKind;
-      if (commitKindFilter === "refactor") {
-        // 'empty' is included because zero-change commits carry no logic.
-        return kind === "likely_refactor" || kind === "empty" || kind === undefined;
-      }
-      // 'logic': show likely_logic and unknown (undefined = legacy API response)
-      return kind === "likely_logic" || kind === undefined;
-    });
-  }, [commits, commitKindFilter]);
+    let result = commits;
+    if (commitKindFilter !== "all") {
+      result = result.filter((c) => {
+        const kind = c.coarseKind;
+        if (commitKindFilter === "refactor") {
+          // 'empty' is included because zero-change commits carry no logic.
+          return kind === "likely_refactor" || kind === "empty" || kind === undefined;
+        }
+        // 'logic': show likely_logic and unknown (undefined = legacy API response)
+        return kind === "likely_logic" || kind === undefined;
+      });
+    }
+    if (dateRangeFilter) {
+      const { from, to } = dateRangeFilter;
+      result = result.filter((c) => {
+        const ts = Date.parse(c.authorDate ?? c.time ?? "");
+        if (!Number.isFinite(ts)) return false;
+        return ts >= from && ts <= to;
+      });
+    }
+    return result;
+  }, [commits, commitKindFilter, dateRangeFilter]);
   const repoName = repositories.find((repo) => repo.id === selectedRepo)?.name ?? selectedRepo;
   const refName = displayRefName(selectedRef, refs);
   const toggleSummaryView = useCallback(() => setSummaryViewOpen((prev) => !prev), []);
@@ -1348,6 +1362,14 @@ export default function App() {
         onLensChange={setActiveLens}
         hidden={mode === "fleet"}
       />
+      {dateRangeFilter && mode !== "fleet" && (
+        <DateRangeFilterBanner
+          from={dateRangeFilter.from}
+          to={dateRangeFilter.to}
+          matched={filteredCommits.length}
+          onClear={() => setDateRangeFilter(null)}
+        />
+      )}
       {/* Fleet mode: FleetSurface + onboarding overlay */}
       {mode === "fleet" && (
         <div style={{ position: "relative", flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
@@ -1415,6 +1437,8 @@ export default function App() {
           <RiskTrendLens
             commits={commits}
             onSelectCommit={(hash) => { setSelected(hash); }}
+            onChangeLens={setActiveLens}
+            onSelectRange={(from, to) => setDateRangeFilter({ from, to })}
           />
         </div>
       )}
@@ -1761,6 +1785,74 @@ function isWorkTreeContentEqual(
     if (prevUntracked[i].added !== nextUntracked[i].added) return false;
   }
   return true;
+}
+
+function DateRangeFilterBanner({
+  from,
+  to,
+  matched,
+  onClear,
+}: {
+  from: number;
+  to: number;
+  matched: number;
+  onClear: () => void;
+}) {
+  const fmt = (ts: number): string => {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return "?";
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${yyyy}/${mm}/${dd} ${hh}:${mi}`;
+  };
+  return (
+    <div
+      role="status"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "6px 16px",
+        background: "color-mix(in oklab, var(--rs-bg-panel), var(--rs-accent) 12%)",
+        borderBottom: "1px solid var(--rs-border)",
+        fontFamily: "var(--rs-sans)",
+        fontSize: 11,
+        color: "var(--rs-text-secondary)",
+        flexShrink: 0,
+      }}
+    >
+      <span style={{ color: "var(--rs-accent)", fontWeight: 600 }}>
+        Range filter
+      </span>
+      <span style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text)" }}>
+        {fmt(from)} – {fmt(to)}
+      </span>
+      <span style={{ color: "var(--rs-text-muted)" }}>
+        {matched.toLocaleString()} {matched === 1 ? "commit" : "commits"} matched
+      </span>
+      <button
+        type="button"
+        onClick={onClear}
+        style={{
+          marginLeft: "auto",
+          height: 22,
+          padding: "0 10px",
+          fontSize: 11,
+          fontFamily: "var(--rs-sans)",
+          border: "1px solid var(--rs-border)",
+          borderRadius: "var(--rs-radius-sm)",
+          background: "var(--rs-bg-elevated)",
+          color: "var(--rs-text)",
+          cursor: "pointer",
+        }}
+      >
+        Clear filter
+      </button>
+    </div>
+  );
 }
 
 function activeFilters(
