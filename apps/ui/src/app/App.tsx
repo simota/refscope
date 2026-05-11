@@ -1484,6 +1484,7 @@ export default function App() {
               setActiveLens('live');
             }}
             onOpenWorktree={() => { setActiveLens('live'); }}
+            onChangeLens={setActiveLens}
           />
         </div>
       )}

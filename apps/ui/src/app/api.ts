@@ -640,6 +640,12 @@ export type BranchGroupEntry = {
 export type BranchGroupHealthResponse = {
   prefix: string | null;
   base: { input: string; resolved: string };
+  /**
+   * Currently checked-out branch when HEAD points to a branch.
+   * `null` on detached HEAD or when the API cannot resolve it.
+   * Use `head.hash` to match the corresponding entry in `branches`.
+   */
+  head: { name: string; hash: string } | null;
   branches: BranchGroupEntry[];
 };
 

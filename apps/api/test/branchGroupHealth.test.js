@@ -254,6 +254,73 @@ test("rotScore thresholds: warning zone (8-15)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// head field — surfaces the currently checked-out branch so the UI can
+// identify which entry in `branches` is HEAD without round-tripping refs.
+// ---------------------------------------------------------------------------
+
+test("getBranchGroupHealth returns head matching the checked-out branch", async () => {
+  const repoPath = createTempPath("rtgv-group-health-head-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "v0\n", "chore: seed");
+    git(repoPath, "checkout", "-b", "feat/widget");
+    writeAndCommit(repoPath, "widget.txt", "w\n", "feat: widget");
+    // Leave HEAD on feat/widget.
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+
+    const result = await service.getBranchGroupHealth(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams(),
+    );
+
+    assert.equal(result.status, 200);
+    assert.ok(result.body.head, "head should be present on a normal HEAD");
+    assert.equal(result.body.head.name, "feat/widget");
+    assert.match(result.body.head.hash, /^[a-f0-9]{40}$/);
+
+    // head.hash must match the matching entry's hash in `branches`.
+    const matching = result.body.branches.find((b) => b.shortName === "feat/widget");
+    assert.ok(matching, "feat/widget must appear in branches");
+    assert.equal(matching.hash, result.body.head.hash);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getBranchGroupHealth returns head=null on detached HEAD", async () => {
+  const repoPath = createTempPath("rtgv-group-health-detached-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "v0\n", "chore: seed");
+    writeAndCommit(repoPath, "second.txt", "x\n", "chore: second");
+    // Detach HEAD by checking out the first commit hash directly.
+    const firstHash = git(repoPath, "rev-list", "--max-parents=0", "HEAD").trim();
+    git(repoPath, "checkout", firstHash);
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+
+    const result = await service.getBranchGroupHealth(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams(),
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.head, null, "head should be null on detached HEAD");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Helpers (shared with refsDrift pattern)
 // ---------------------------------------------------------------------------
 

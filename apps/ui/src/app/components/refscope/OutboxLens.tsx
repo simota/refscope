@@ -2,25 +2,41 @@
  * Outbox Lens — "まだ世界に出していない自分の差分" を 3 列カンバンで表示する。
  *
  * 列 1: Uncommitted — work-tree の未ステージ + ステージ済み変更
- * 列 2: Stashed      — git stash の一覧
- * 列 3: Ahead        — upstream より先行しているコミット
+ * 列 2: Stashed      — git stash の一覧 (現状クリック不可: Phase 2 で詳細表示予定)
+ * 列 3: Ahead        — HEAD ブランチが upstream より先行しているコミット
  *
- * 各列は top-50 でハードキャップ。3 列すべて空のときはプレースホルダを表示。
+ * 各列は CARD_CAP (50) でハードキャップ。3 列すべて空のときは EmptyStateCard。
  * カードクリック:
- *   - Uncommitted → 既存 work-tree diff (onSelectCommit をクリア & lens='live' には戻さない)
- *   - Stash       → (現在は詳細表示なし、今後の拡張ポイント)
+ *   - Uncommitted → onOpenWorktree (Live Lens の work-tree diff へ)
+ *   - Stash       → クリック不可 (refs/stash@{N} は API validation で拒否される設計)
  *   - Ahead       → onSelectCommit(hash)
+ *
+ * a11y: 絵文字に aria-hidden、カードに focus ring、Stash カードに aria-disabled。
  */
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import {
   fetchWorkTree,
-  fetchRefDrift,
+  fetchBranchGroupHealth,
   listCommits,
   listStashes,
   type WorkTreeResponse,
   type StashEntry,
 } from '../../api';
 import type { Commit } from './data';
+import { LensHeader } from './LensHeader';
+import {
+  EmptyStateCard,
+  type LensEmptyReason,
+  type EmptyStateMessage,
+} from './EmptyStateCard';
+import type { LensId } from './LensSwitcher';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,6 +55,9 @@ type UncommittedCard = {
 
 const CARD_CAP = 50;
 
+/** Outbox 固有の空状態理由。EmptyStateCard へキャストして渡す。 */
+type OutboxEmptyReason = 'outbox-clean' | 'outbox-error';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -56,7 +75,7 @@ function formatRelative(iso: string | null): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** Try to find the main/master/trunk branch name from the drift refs. */
+/** Try to find the main/master/trunk branch name from the ref list. */
 function estimateBase(refs: Array<{ name: string }>): string | null {
   const CANDIDATES = ['main', 'master', 'trunk'];
   for (const c of CANDIDATES) {
@@ -70,7 +89,68 @@ function estimateBase(refs: Array<{ name: string }>): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-components
+// Help content for LensHeader
+// ---------------------------------------------------------------------------
+
+function OutboxHelpContent(): ReactNode {
+  return (
+    <>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+        Outbox Lens とは
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        「まだ世界に出していない自分の差分」を 3 種類に分けて一覧します。
+        commit / stash pop / push という<strong>異なる出口</strong>を持つ作業を、
+        同じカンバンで見渡せます。
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        3 列の意味
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
+        ・<strong>Uncommitted</strong>: 未ステージ・ステージ済み・未追跡の変更
+        (出口: <code>git commit</code>)<br />
+        ・<strong>Stashed</strong>: <code>git stash</code> で一時退避中のスナップショット
+        (出口: <code>git stash pop / apply</code>)<br />
+        ・<strong>Ahead</strong>: <strong>HEAD ブランチ</strong>が upstream より先行している
+        コミット (出口: <code>git push</code>)
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        バッジの読み方
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        ・件数バッジ (例: <code>3</code>) はその列のカード数を表します<br />
+        ・<code>±N lines</code> は added + deleted の合計行数 (Stash は API で取得不可のため非表示)<br />
+        ・各列は <strong>{CARD_CAP}</strong> 件で打ち切り。超過時は警告バナーを表示します
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        操作
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)' }}>
+        ・<strong>Uncommitted</strong> カード → Live Lens の work-tree diff に遷移<br />
+        ・<strong>Stash</strong> カード → 現在クリック不可 (詳細表示は Phase 2 で対応予定)<br />
+        ・<strong>Ahead</strong> カード → そのコミットを選択 (DetailPanel に表示)
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Empty state messages
+// ---------------------------------------------------------------------------
+
+const OUTBOX_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> = {
+  ['outbox-clean' as LensEmptyReason]: {
+    title: 'Outbox はクリーンです',
+    body:
+      '未コミット変更・stash・未 push のコミットいずれもありません。次の作業を始めるか、Drift Lens でブランチ全体の状況を確認してください。',
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Styles
 // ---------------------------------------------------------------------------
 
 const COLUMN_STYLE: CSSProperties = {
@@ -107,6 +187,7 @@ const CARD_STYLE: CSSProperties = {
   flexDirection: 'column',
   gap: 4,
   transition: 'border-color 80ms ease-out, background 80ms ease-out',
+  outline: 'none',
 };
 
 const CARD_TITLE_STYLE: CSSProperties = {
@@ -144,19 +225,42 @@ function ColumnHeader({
   title,
   count,
   totalLoc,
+  showLoc = true,
 }: {
   icon: string;
   title: string;
   count: number;
   totalLoc: number;
+  showLoc?: boolean;
 }) {
   return (
     <div style={COLUMN_HEADER_STYLE}>
-      <span>{icon}</span>
+      <span aria-hidden="true">{icon}</span>
       <span>{title}</span>
       <span style={{ ...BADGE_STYLE, marginLeft: 'auto' }}>
-        {count} &nbsp;·&nbsp; ~{totalLoc} LOC
+        {showLoc ? `${count} · ±${totalLoc} lines` : `${count}`}
       </span>
+    </div>
+  );
+}
+
+function TruncationFooter({ shown, total }: { shown: number; total: number }) {
+  if (total <= shown) return null;
+  return (
+    <div
+      role="status"
+      style={{
+        padding: '6px 8px',
+        fontSize: 10,
+        fontFamily: 'var(--rs-sans)',
+        color: '#b45309',
+        background: 'color-mix(in oklab, var(--rs-bg-elevated), #b45309 12%)',
+        border: '1px solid #b45309',
+        borderRadius: 'var(--rs-radius-sm)',
+        textAlign: 'center',
+      }}
+    >
+      ⚠ +{total - shown} more (truncated to {shown})
     </div>
   );
 }
@@ -186,9 +290,14 @@ function UncommittedColumn({
             key={i}
             role="button"
             tabIndex={0}
+            className="rs-outbox-card"
+            aria-label={
+              `${card.label}: ${card.fileCount} file${card.fileCount !== 1 ? 's' : ''}, ` +
+              `+${card.added}, -${card.deleted}. Enter で work-tree diff を開く`
+            }
             style={CARD_STYLE}
             onClick={onSelect}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); } }}
           >
             <div style={CARD_TITLE_STYLE}>{card.label}</div>
             <div style={CARD_META_STYLE}>
@@ -209,26 +318,48 @@ function UncommittedColumn({
 // ---------------------------------------------------------------------------
 
 function StashColumn({ stashes }: { stashes: StashEntry[] }) {
-  const totalLoc = 0; // stash doesn't carry numstat in the list endpoint
+  const shown = stashes.slice(0, CARD_CAP);
   return (
     <div style={COLUMN_STYLE}>
-      <ColumnHeader icon="📦" title="Stashed" count={stashes.length} totalLoc={totalLoc} />
+      <ColumnHeader
+        icon="📦"
+        title="Stashed"
+        count={stashes.length}
+        totalLoc={0}
+        showLoc={false}
+      />
       {stashes.length === 0 ? (
         <div style={{ padding: '16px 0', color: 'var(--rs-text-secondary)', fontSize: 12 }}>
           No stashes.
         </div>
       ) : (
-        stashes.slice(0, CARD_CAP).map((s) => (
-          <div key={s.hash} style={{ ...CARD_STYLE, cursor: 'default' }}>
-            <div style={CARD_TITLE_STYLE}>{s.subject || s.name}</div>
-            <div style={CARD_META_STYLE}>
-              <span style={{ fontFamily: 'var(--rs-mono)' }}>{s.shortHash}</span>
-              {s.committedAt && (
-                <span style={{ marginLeft: 'auto' }}>{formatRelative(s.committedAt)}</span>
-              )}
+        <>
+          {shown.map((s) => (
+            <div
+              key={s.hash}
+              role="button"
+              aria-disabled="true"
+              aria-label={
+                `${s.subject || s.name} (${s.shortHash}). 詳細表示は Phase 2 で対応予定`
+              }
+              title="Stash 詳細表示は Phase 2 で対応予定"
+              style={{
+                ...CARD_STYLE,
+                cursor: 'not-allowed',
+                opacity: 0.85,
+              }}
+            >
+              <div style={CARD_TITLE_STYLE}>{s.subject || s.name}</div>
+              <div style={CARD_META_STYLE}>
+                <span style={{ fontFamily: 'var(--rs-mono)' }}>{s.shortHash}</span>
+                {s.committedAt && (
+                  <span style={{ marginLeft: 'auto' }}>{formatRelative(s.committedAt)}</span>
+                )}
+              </div>
             </div>
-          </div>
-        ))
+          ))}
+          <TruncationFooter shown={shown.length} total={stashes.length} />
+        </>
       )}
     </div>
   );
@@ -248,6 +379,7 @@ function AheadColumn({
   onSelect: (hash: string) => void;
 }) {
   const totalLoc = commits.reduce((s, c) => s + (c.added ?? 0) + (c.deleted ?? 0), 0);
+  const shown = commits.slice(0, CARD_CAP);
   return (
     <div style={COLUMN_STYLE}>
       <ColumnHeader icon="🚀" title="Ahead" count={aheadCount} totalLoc={totalLoc} />
@@ -256,33 +388,41 @@ function AheadColumn({
           Branch is up-to-date with upstream.
         </div>
       ) : (
-        commits.slice(0, CARD_CAP).map((c) => (
-          <div
-            key={c.hash}
-            role="button"
-            tabIndex={0}
-            style={CARD_STYLE}
-            onClick={() => { onSelect(c.hash); }}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(c.hash); }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <span style={{ ...CARD_TITLE_STYLE, flex: 1 }}>{c.subject}</span>
+        <>
+          {shown.map((c) => (
+            <div
+              key={c.hash}
+              role="button"
+              tabIndex={0}
+              className="rs-outbox-card"
+              aria-label={
+                `Commit ${c.shortHash ?? c.hash.slice(0, 7)}: ${c.subject}. ` +
+                `+${c.added ?? 0}, -${c.deleted ?? 0}. Enter で DetailPanel に表示`
+              }
+              style={CARD_STYLE}
+              onClick={() => { onSelect(c.hash); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(c.hash); } }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <span style={{ ...CARD_TITLE_STYLE, flex: 1 }}>{c.subject}</span>
+              </div>
+              <div style={CARD_META_STYLE}>
+                <span style={{ fontFamily: 'var(--rs-mono)' }}>{c.shortHash ?? c.hash.slice(0, 7)}</span>
+                {c.fileCount != null && (
+                  <span>{c.fileCount} file{c.fileCount !== 1 ? 's' : ''}</span>
+                )}
+                {(c.added != null || c.deleted != null) && (
+                  <>
+                    <span style={{ color: 'var(--rs-git-added)' }}>+{c.added ?? 0}</span>
+                    <span style={{ color: 'var(--rs-git-deleted)' }}>-{c.deleted ?? 0}</span>
+                  </>
+                )}
+                <span style={{ marginLeft: 'auto' }}>{c.time}</span>
+              </div>
             </div>
-            <div style={CARD_META_STYLE}>
-              <span style={{ fontFamily: 'var(--rs-mono)' }}>{c.shortHash ?? c.hash.slice(0, 7)}</span>
-              {c.fileCount != null && (
-                <span>{c.fileCount} file{c.fileCount !== 1 ? 's' : ''}</span>
-              )}
-              {(c.added != null || c.deleted != null) && (
-                <>
-                  <span style={{ color: 'var(--rs-git-added)' }}>+{c.added ?? 0}</span>
-                  <span style={{ color: 'var(--rs-git-deleted)' }}>-{c.deleted ?? 0}</span>
-                </>
-              )}
-              <span style={{ marginLeft: 'auto' }}>{c.time}</span>
-            </div>
-          </div>
-        ))
+          ))}
+          <TruncationFooter shown={shown.length} total={aheadCount} />
+        </>
       )}
     </div>
   );
@@ -298,6 +438,8 @@ export type OutboxLensProps = {
   onSelectCommit: (hash: string) => void;
   /** Navigate to the live lens (work-tree view) */
   onOpenWorktree: () => void;
+  /** 他 Lens への遷移 (EmptyStateCard / Error カード用) */
+  onChangeLens?: (lens: LensId) => void;
 };
 
 type OutboxData = {
@@ -305,9 +447,17 @@ type OutboxData = {
   stashes: StashEntry[];
   aheadCommits: Commit[];
   aheadCount: number;
+  /** Head ブランチ名 (検出できない / detached 時は null) */
+  headName: string | null;
 };
 
-export function OutboxLens({ repoId, refs, onSelectCommit, onOpenWorktree }: OutboxLensProps) {
+export function OutboxLens({
+  repoId,
+  refs,
+  onSelectCommit,
+  onOpenWorktree,
+  onChangeLens,
+}: OutboxLensProps) {
   const [data, setData] = useState<OutboxData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -318,32 +468,32 @@ export function OutboxLens({ repoId, refs, onSelectCommit, onOpenWorktree }: Out
       setError(null);
 
       try {
-        // Step 1: fetch worktree + stashes + drift in parallel
         const base = estimateBase(refs);
-        const [worktree, stashes, drift] = await Promise.all([
+        // PR-A: fetchRefDrift → fetchBranchGroupHealth に切替。`head` を使って
+        // 「最初に ahead を持つ任意のブランチ」ではなく HEAD ブランチの ahead を
+        // 正確に取得する。detached HEAD は head=null → aheadCount=0。
+        const [worktree, stashes, groupHealth] = await Promise.all([
           fetchWorkTree(repoId, signal),
           listStashes(repoId),
           base
-            ? fetchRefDrift(repoId, { base, limit: 5 }, signal)
+            ? fetchBranchGroupHealth(repoId, { base }, signal)
             : Promise.resolve(null),
         ]);
 
         if (signal.aborted) return;
 
-        // Step 2: build uncommitted cards (max CARD_CAP combined)
         const uncommitted = buildUncommittedCards(worktree);
 
-        // Step 3: find ahead count for current HEAD branch
         let aheadCount = 0;
-        if (drift) {
-          // Find the entry for HEAD or the current branch (first local branch ahead)
-          const headEntry = drift.refs.find(
-            (r) => r.type === 'branch' && r.ahead > 0,
+        let headName: string | null = null;
+        if (groupHealth && groupHealth.head) {
+          headName = groupHealth.head.name;
+          const headEntry = groupHealth.branches.find(
+            (b) => b.hash === groupHealth.head!.hash || b.name === groupHealth.head!.name,
           );
           aheadCount = headEntry?.ahead ?? 0;
         }
 
-        // Step 4: fetch ahead commits if any
         let aheadCommits: Commit[] = [];
         if (aheadCount > 0) {
           const limit = Math.min(aheadCount + 5, CARD_CAP);
@@ -354,7 +504,13 @@ export function OutboxLens({ repoId, refs, onSelectCommit, onOpenWorktree }: Out
         }
 
         if (!signal.aborted) {
-          setData({ uncommitted, stashes: stashes.slice(0, CARD_CAP), aheadCommits, aheadCount });
+          setData({
+            uncommitted,
+            stashes: stashes.slice(0, CARD_CAP),
+            aheadCommits,
+            aheadCount,
+            headName,
+          });
           setLoading(false);
         }
       } catch (err) {
@@ -372,6 +528,11 @@ export function OutboxLens({ repoId, refs, onSelectCommit, onOpenWorktree }: Out
     return () => { controller.abort(); };
   }, [load]);
 
+  const handleRefresh = useCallback(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+  }, [load]);
+
   const containerStyle: CSSProperties = {
     display: 'flex',
     flexDirection: 'column',
@@ -382,22 +543,59 @@ export function OutboxLens({ repoId, refs, onSelectCommit, onOpenWorktree }: Out
     overflow: 'hidden',
   };
 
-  const headerStyle: CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '10px 16px 6px',
-    borderBottom: '1px solid var(--rs-border)',
-    fontSize: 12,
-    color: 'var(--rs-text-secondary)',
-    flexShrink: 0,
-  };
+  // LensHeader 一行説明 (HEAD 名があれば文脈を強化)
+  const oneLiner = useMemo(() => {
+    const headPart = data?.headName
+      ? `HEAD: ${data.headName} · `
+      : '';
+    return `${headPart}まだ世界に出していない変更を 3 列で一望する (Uncommitted / Stashed / Ahead)`;
+  }, [data?.headName]);
 
-  if (loading) {
+  const renderHeader = () => (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'stretch',
+        gap: 0,
+        flexShrink: 0,
+        borderBottom: '1px solid var(--rs-border)',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <LensHeader title="Outbox" oneLiner={oneLiner} helpContent={<OutboxHelpContent />} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px 6px' }}>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={loading}
+          aria-busy={loading}
+          aria-label="Outbox を再読み込み"
+          style={{
+            padding: '2px 10px',
+            fontSize: 11,
+            fontFamily: 'var(--rs-sans)',
+            background: 'transparent',
+            border: '1px solid var(--rs-border)',
+            borderRadius: 'var(--rs-radius-sm)',
+            color: 'var(--rs-text-secondary)',
+            cursor: loading ? 'wait' : 'pointer',
+            opacity: loading ? 0.6 : 1,
+          }}
+        >
+          {loading ? '…' : 'Refresh'}
+        </button>
+      </div>
+    </div>
+  );
+
+  if (loading && !data) {
     return (
       <div style={containerStyle}>
-        <div style={headerStyle}>Outbox Lens — loading…</div>
+        {renderHeader()}
         <div
+          role="status"
+          aria-live="polite"
           style={{
             flex: 1,
             display: 'flex',
@@ -416,21 +614,105 @@ export function OutboxLens({ repoId, refs, onSelectCommit, onOpenWorktree }: Out
   if (error) {
     return (
       <div style={containerStyle}>
-        <div style={headerStyle}>Outbox Lens</div>
+        {renderHeader()}
         <div
           style={{
-            flex: 1,
             display: 'flex',
-            flexDirection: 'column',
+            flex: 1,
             alignItems: 'center',
             justifyContent: 'center',
-            gap: 8,
-            color: 'var(--rs-text-secondary)',
-            fontSize: 13,
+            padding: 24,
           }}
         >
-          <span style={{ color: '#f87171' }}>Failed to load outbox data</span>
-          <span style={{ fontSize: 11 }}>{error}</span>
+          <div
+            style={{
+              maxWidth: 440,
+              padding: '20px 24px',
+              background: 'var(--rs-bg-elevated)',
+              border: '1px solid var(--rs-border)',
+              borderRadius: 'var(--rs-radius-md)',
+              fontFamily: 'var(--rs-sans)',
+            }}
+          >
+            <div
+              style={{
+                fontSize: 14,
+                fontWeight: 600,
+                color: 'var(--rs-git-deleted)',
+                marginBottom: 8,
+              }}
+            >
+              Outbox データの取得に失敗しました
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--rs-text-secondary)',
+                lineHeight: 1.6,
+                marginBottom: 16,
+                wordBreak: 'break-word',
+              }}
+            >
+              {error}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handleRefresh}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  fontSize: 11,
+                  fontFamily: 'var(--rs-sans)',
+                  borderRadius: 'var(--rs-radius-sm)',
+                  border: '1px solid var(--rs-accent)',
+                  background: 'var(--rs-accent)',
+                  color: 'var(--rs-bg-panel)',
+                  cursor: 'pointer',
+                }}
+              >
+                再試行
+              </button>
+              {onChangeLens && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onChangeLens('live')}
+                    style={{
+                      height: 28,
+                      padding: '0 12px',
+                      fontSize: 11,
+                      fontFamily: 'var(--rs-sans)',
+                      borderRadius: 'var(--rs-radius-sm)',
+                      border: '1px solid var(--rs-border)',
+                      background: 'transparent',
+                      color: 'var(--rs-text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Live を開く
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeLens('drift')}
+                    style={{
+                      height: 28,
+                      padding: '0 12px',
+                      fontSize: 11,
+                      fontFamily: 'var(--rs-sans)',
+                      borderRadius: 'var(--rs-radius-sm)',
+                      border: '1px solid var(--rs-border)',
+                      background: 'transparent',
+                      color: 'var(--rs-text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Drift を開く
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -445,39 +727,22 @@ export function OutboxLens({ repoId, refs, onSelectCommit, onOpenWorktree }: Out
 
   return (
     <div style={containerStyle}>
-      <div style={headerStyle}>
-        <span>Outbox Lens</span>
-        <button
-          type="button"
-          onClick={() => { void load(new AbortController().signal); }}
-          style={{
-            padding: '2px 8px',
-            fontSize: 11,
-            fontFamily: 'var(--rs-sans)',
-            background: 'transparent',
-            border: '1px solid var(--rs-border)',
-            borderRadius: 'var(--rs-radius-sm)',
-            color: 'var(--rs-text-secondary)',
-            cursor: 'pointer',
-          }}
-        >
-          Refresh
-        </button>
-      </div>
+      {renderHeader()}
 
       {isEmpty ? (
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--rs-text-secondary)',
-            fontSize: 13,
-          }}
-        >
-          Nothing to push or commit — outbox is clean.
-        </div>
+        <EmptyStateCard
+          reason={'outbox-clean' as LensEmptyReason}
+          messages={OUTBOX_EMPTY_MESSAGES}
+          onChangeLens={onChangeLens}
+          relatedLenses={
+            onChangeLens
+              ? [
+                  { id: 'drift', label: 'Drift を開く' },
+                  { id: 'live', label: 'Live を開く' },
+                ]
+              : undefined
+          }
+        />
       ) : (
         <div
           style={{
@@ -502,6 +767,14 @@ export function OutboxLens({ repoId, refs, onSelectCommit, onOpenWorktree }: Out
           />
         </div>
       )}
+
+      {/* Focus ring style for keyboard a11y (DriftLens parallel) */}
+      <style>{`
+        .rs-outbox-card:focus-visible {
+          outline: 2px solid var(--rs-accent);
+          outline-offset: 2px;
+        }
+      `}</style>
     </div>
   );
 }
