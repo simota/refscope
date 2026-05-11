@@ -201,62 +201,67 @@ export function TopBar({
         </Tooltip>
       )}
 
-      <Separator />
+      {/* Repo / Ref / Search / Filter / History は Detail モード固有の "single-repo
+          context" コントロール群。Fleet モードでは機能しないため hide してノイズを除去。
+          Magi T1+T2 verdict 3-0 APPROVE (confidence 88.3)。 */}
+      {mode === "detail" && (
+        <>
+          <Separator />
 
-      <label className="rs-chip" style={{ paddingRight: 6 }}>
-        <span className="sr-only">Repository</span>
-        <select
-          value={selectedRepo}
-          onChange={(event) => onSelectRepo(event.target.value)}
-          disabled={!repositories.length}
-          className="bg-transparent outline-none"
-          style={{
-            appearance: "none",
-            color: "inherit",
-            font: "inherit",
-            maxWidth: 180,
-            cursor: repositories.length ? "pointer" : "default",
-          }}
-        >
-          {repositories.length ? (
-            repositories.map((repo) => (
-              <option key={repo.id} value={repo.id}>
-                {repo.name}
-              </option>
-            ))
-          ) : (
-            <option value="">{repoName}</option>
-          )}
-        </select>
-        <ChevronDown size={12} />
-      </label>
-      <label className="rs-chip" style={{ paddingRight: 6 }}>
-        <Circle size={8} fill="var(--rs-accent)" stroke="none" />
-        <span className="sr-only">Ref</span>
-        <select
-          value={selectedRef}
-          onChange={(event) => onSelectRef(event.target.value)}
-          disabled={!selectedRepo}
-          className="bg-transparent outline-none"
-          style={{
-            appearance: "none",
-            color: "inherit",
-            font: "inherit",
-            maxWidth: 180,
-            cursor: selectedRepo ? "pointer" : "default",
-          }}
-        >
-          <option value="HEAD">{refs.length ? "HEAD" : refName}</option>
-          {refs.map((ref) => (
-            <option key={ref.name} value={ref.name}>
-              {formatRefOption(ref)}
-            </option>
-          ))}
-        </select>
-        <ChevronDown size={12} />
-      </label>
+          <label className="rs-chip" style={{ paddingRight: 6 }}>
+            <span className="sr-only">Repository</span>
+            <select
+              value={selectedRepo}
+              onChange={(event) => onSelectRepo(event.target.value)}
+              disabled={!repositories.length}
+              className="bg-transparent outline-none"
+              style={{
+                appearance: "none",
+                color: "inherit",
+                font: "inherit",
+                maxWidth: 180,
+                cursor: repositories.length ? "pointer" : "default",
+              }}
+            >
+              {repositories.length ? (
+                repositories.map((repo) => (
+                  <option key={repo.id} value={repo.id}>
+                    {repo.name}
+                  </option>
+                ))
+              ) : (
+                <option value="">{repoName}</option>
+              )}
+            </select>
+            <ChevronDown size={12} />
+          </label>
+          <label className="rs-chip" style={{ paddingRight: 6 }}>
+            <Circle size={8} fill="var(--rs-accent)" stroke="none" />
+            <span className="sr-only">Ref</span>
+            <select
+              value={selectedRef}
+              onChange={(event) => onSelectRef(event.target.value)}
+              disabled={!selectedRepo}
+              className="bg-transparent outline-none"
+              style={{
+                appearance: "none",
+                color: "inherit",
+                font: "inherit",
+                maxWidth: 180,
+                cursor: selectedRepo ? "pointer" : "default",
+              }}
+            >
+              <option value="HEAD">{refs.length ? "HEAD" : refName}</option>
+              {refs.map((ref) => (
+                <option key={ref.name} value={ref.name}>
+                  {formatRefOption(ref)}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={12} />
+          </label>
 
-      <div className="min-w-0 flex-1 flex items-center gap-2 px-4">
+          <div className="min-w-0 flex-1 flex items-center gap-2 px-4">
         <div className="min-w-0 flex-1 flex items-center gap-1.5">
           <SearchModeSelector mode={searchMode} onChange={onSearchModeChange} />
           <div
@@ -386,57 +391,70 @@ export function TopBar({
         {/* Top-level entry to file history. Always visible so the feature is
             reachable regardless of viewport (the path filter above hides at
             sub-xl widths but the history view should not). */}
-        <button
-          type="button"
-          className="rs-compact-button"
-          onClick={onOpenFileHistory}
-          aria-label="Open file history"
-          title="Open file history (path prompt)"
-        >
-          <History size={11} aria-hidden style={{ marginRight: 4 }} />
-          History
-        </button>
-      </div>
+            <button
+              type="button"
+              className="rs-compact-button"
+              onClick={onOpenFileHistory}
+              aria-label="Open file history"
+              title="Open file history (path prompt)"
+            >
+              <History size={11} aria-hidden style={{ marginRight: 4 }} />
+              History
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Fleet モード時の中央スペーサ — 右クラスタを右端に押し出すため flex-1 を維持。
+          Magi T2 verdict: 視覚的に左右配置を保ったまま中央 cluster を不可視化。 */}
+      {mode === "fleet" && <div className="min-w-0 flex-1" aria-hidden="true" />}
 
       <div
         className="shrink-0 flex items-center gap-2"
         style={{ fontFamily: "var(--rs-mono)" }}
       >
-        <div
-          className="flex items-center gap-1.5 px-2"
-          aria-label={
-            effectivePaused
-              ? `Live updates paused, ${pendingUpdates} pending`
-              : `Live status ${status}`
-          }
-          style={{ fontSize: 11, color: "var(--rs-text-secondary)" }}
-        >
-          <span
-            className="inline-block rounded-full"
-            style={{
-              width: 7,
-              height: 7,
-              background: liveColor,
-              boxShadow: isQuiet
-                ? "none"
-                : `0 0 0 3px color-mix(in oklab, ${liveColor}, transparent 75%)`,
-            }}
-          />
-          <LivePulse
-            status={status}
-            paused={effectivePaused}
-            pendingUpdates={pendingUpdates}
-            color={liveColor}
-            quiet={isQuiet}
-          />
-          {effectivePaused
-            ? `PAUSED · ${pendingUpdates}`
-            : status === "connected"
-              ? "LIVE"
-              : status.toUpperCase()}
-        </div>
-        <Separator />
+        {/* LIVE indicator は Detail モードの SSE 接続状態を表す。Fleet は別系統の
+            30s polling で動作するため hide。Magi T3 verdict。 */}
+        {mode === "detail" && (
+          <>
+            <div
+              className="flex items-center gap-1.5 px-2"
+              aria-label={
+                effectivePaused
+                  ? `Live updates paused, ${pendingUpdates} pending`
+                  : `Live status ${status}`
+              }
+              style={{ fontSize: 11, color: "var(--rs-text-secondary)" }}
+            >
+              <span
+                className="inline-block rounded-full"
+                style={{
+                  width: 7,
+                  height: 7,
+                  background: liveColor,
+                  boxShadow: isQuiet
+                    ? "none"
+                    : `0 0 0 3px color-mix(in oklab, ${liveColor}, transparent 75%)`,
+                }}
+              />
+              <LivePulse
+                status={status}
+                paused={effectivePaused}
+                pendingUpdates={pendingUpdates}
+                color={liveColor}
+                quiet={isQuiet}
+              />
+              {effectivePaused
+                ? `PAUSED · ${pendingUpdates}`
+                : status === "connected"
+                  ? "LIVE"
+                  : status.toUpperCase()}
+            </div>
+            <Separator />
+          </>
+        )}
         <ViewOptionsMenu
+          mode={mode}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={onToggleSidebar}
           summaryViewOpen={summaryViewOpen}
@@ -447,35 +465,41 @@ export function TopBar({
           isCvdSafe={isCvdSafe}
           onToggleColorVision={onToggleColorVision}
         />
-        <Separator />
-        <button
-          type="button"
-          className="rs-compact-button"
-          onClick={onRefreshWorkTree}
-          disabled={!workTreeAvailable}
-          aria-label="Refresh working tree"
-          title="Refresh working tree (HEAD vs index + index vs worktree)"
-        >
-          <RefreshCw size={11} aria-hidden />
-          <span className="hidden 2xl:inline" style={{ marginLeft: 4 }}>
-            Worktree
-          </span>
-        </button>
-        <button
-          type="button"
-          className="rs-compact-button"
-          onClick={onToggleLiveUpdates}
-          disabled={status === "error"}
-          aria-pressed={livePaused}
-          aria-label={livePaused ? "Resume live updates" : "Pause live updates"}
-          title={
-            livePaused
-              ? `Resume live updates${pendingUpdates > 0 ? ` (${pendingUpdates} pending will be applied)` : ''}`
-              : "Pause live updates (events accumulate as 'pending', applied on resume)"
-          }
-        >
-          {livePaused ? "Resume" : "Pause"}
-        </button>
+        {/* Worktree refresh + Live pause toggle は Detail モード固有のため hide。
+            Magi T4 verdict。 */}
+        {mode === "detail" && (
+          <>
+            <Separator />
+            <button
+              type="button"
+              className="rs-compact-button"
+              onClick={onRefreshWorkTree}
+              disabled={!workTreeAvailable}
+              aria-label="Refresh working tree"
+              title="Refresh working tree (HEAD vs index + index vs worktree)"
+            >
+              <RefreshCw size={11} aria-hidden />
+              <span className="hidden 2xl:inline" style={{ marginLeft: 4 }}>
+                Worktree
+              </span>
+            </button>
+            <button
+              type="button"
+              className="rs-compact-button"
+              onClick={onToggleLiveUpdates}
+              disabled={status === "error"}
+              aria-pressed={livePaused}
+              aria-label={livePaused ? "Resume live updates" : "Pause live updates"}
+              title={
+                livePaused
+                  ? `Resume live updates${pendingUpdates > 0 ? ` (${pendingUpdates} pending will be applied)` : ''}`
+                  : "Pause live updates (events accumulate as 'pending', applied on resume)"
+              }
+            >
+              {livePaused ? "Resume" : "Pause"}
+            </button>
+          </>
+        )}
       </div>
     </header>
   );
@@ -540,6 +564,7 @@ function Separator() {
  * the user sees at-a-glance that something is on.
  */
 function ViewOptionsMenu({
+  mode,
   sidebarCollapsed,
   onToggleSidebar,
   summaryViewOpen,
@@ -550,6 +575,8 @@ function ViewOptionsMenu({
   isCvdSafe,
   onToggleColorVision,
 }: {
+  /** Detail モード時のみ Sidebar / Summary toggle を表示。Fleet 時は Quiet / CVD のみ。 */
+  mode: "fleet" | "detail";
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   summaryViewOpen: boolean;
@@ -561,12 +588,14 @@ function ViewOptionsMenu({
   onToggleColorVision: () => void;
 }) {
   const sidebarVisible = !sidebarCollapsed;
-  // Sidebar default = visible, others default = off. Count any deviation.
-  const activeCount =
-    (sidebarVisible ? 0 : 1) +
-    (summaryViewOpen ? 1 : 0) +
-    (isQuiet ? 1 : 0) +
-    (isCvdSafe ? 1 : 0);
+  // Detail-only な項目 (sidebar / summary) は Fleet モード時はカウントしない。
+  // Magi T5 verdict: menu は残し中身を mode 分岐。
+  const detailOnlyCount =
+    mode === "detail"
+      ? (sidebarVisible ? 0 : 1) + (summaryViewOpen ? 1 : 0)
+      : 0;
+  const universalCount = (isQuiet ? 1 : 0) + (isCvdSafe ? 1 : 0);
+  const activeCount = detailOnlyCount + universalCount;
   const triggerActive = activeCount > 0;
 
   return (
@@ -624,38 +653,45 @@ function ViewOptionsMenu({
           minWidth: 220,
         }}
       >
-        <DropdownMenuLabel
-          style={{
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: "0.6px",
-            textTransform: "uppercase",
-            color: "var(--rs-text-secondary)",
-          }}
-        >
-          View
-        </DropdownMenuLabel>
-        <DropdownMenuCheckboxItem
-          checked={sidebarVisible}
-          onCheckedChange={onToggleSidebar}
-          style={{ fontSize: 12 }}
-        >
-          {sidebarVisible ? (
-            <PanelLeftClose size={12} aria-hidden />
-          ) : (
-            <PanelLeftOpen size={12} aria-hidden />
-          )}
-          Branch sidebar
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={summaryViewOpen}
-          onCheckedChange={onToggleSummaryView}
-          style={{ fontSize: 12 }}
-        >
-          <CalendarRange size={12} aria-hidden />
-          Period summary
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
+        {/* Sidebar / Summary は Detail モード固有 (Live layout 内の panel 制御)。
+            Fleet モードでは BranchSidebar / PeriodSummaryView が描画されないため
+            menu からも除外。 Magi T5 verdict。 */}
+        {mode === "detail" && (
+          <>
+            <DropdownMenuLabel
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.6px",
+                textTransform: "uppercase",
+                color: "var(--rs-text-secondary)",
+              }}
+            >
+              View
+            </DropdownMenuLabel>
+            <DropdownMenuCheckboxItem
+              checked={sidebarVisible}
+              onCheckedChange={onToggleSidebar}
+              style={{ fontSize: 12 }}
+            >
+              {sidebarVisible ? (
+                <PanelLeftClose size={12} aria-hidden />
+              ) : (
+                <PanelLeftOpen size={12} aria-hidden />
+              )}
+              Branch sidebar
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={summaryViewOpen}
+              onCheckedChange={onToggleSummaryView}
+              style={{ fontSize: 12 }}
+            >
+              <CalendarRange size={12} aria-hidden />
+              Period summary
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuLabel
           style={{
             fontSize: 10,
