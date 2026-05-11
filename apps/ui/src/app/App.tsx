@@ -1469,6 +1469,7 @@ export default function App() {
             repoId={selectedRepo}
             refs={refs}
             onSelectRef={(ref) => { setSelectedRef(ref); }}
+            onChangeLens={setActiveLens}
           />
         </div>
       )}

@@ -3,13 +3,16 @@
  *
  * - X 軸: behind (base に対する遅れコミット数)
  * - Y 軸: ahead  (base に対する先行コミット数)
- * - 点サイズ (z): 最終コミットからの経過日数 (古いほど大きい)
+ * - 点サイズ (z): 最終コミットからの経過日数 (古いほど大きい) — PR-B で接続予定。現状 r=6 固定。
  * - 点の色: 警戒度に応じて緑 → 黄 → 赤
  * - 象限ガイド:
  *   左下 "Aligned" / 左上 "Hot" / 右下 "Stale" / 右上 "Diverged"
  * - 点クリック → onSelectRef(refName) で既存 Live / BranchSidebar が反応
+ *
+ * a11y: SVG 全体に role="img" + aria-label、視覚非表示の <ul> で SR 用テキスト経路を提供。
+ * 各点に tabIndex + onKeyDown を設定し、キーボードで点間移動 (Tab) + 選択 (Enter/Space) 可能。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { CSSProperties } from 'react';
 import {
   ScatterChart,
@@ -24,6 +27,13 @@ import {
   type TooltipProps,
 } from 'recharts';
 import { fetchRefDrift, type RefDriftEntry } from '../../api';
+import { LensHeader } from './LensHeader';
+import {
+  EmptyStateCard,
+  type LensEmptyReason,
+  type EmptyStateMessage,
+} from './EmptyStateCard';
+import type { LensId } from './LensSwitcher';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,10 +43,12 @@ export type DriftLensProps = {
   repoId: string;
   refs: Array<{ name: string }>;
   onSelectRef: (ref: string) => void;
+  /** 他 Lens への遷移 (EmptyStateCard の relatedLenses 用 / PR-B で点クリック遷移にも使用予定) */
+  onChangeLens?: (lens: LensId) => void;
 };
 
 type DriftPoint = RefDriftEntry & {
-  /** days since last commit (0 = today) */
+  /** days since last commit (0 = today) — PR-B で `daysSinceLast` を BranchGroupHealth から取得予定 */
   ageDays: number;
   /** radius for ZAxis substitute; encoded as SVG r attribute via custom shape */
   r: number;
@@ -45,6 +57,9 @@ type DriftPoint = RefDriftEntry & {
   /** raw alert score */
   alertScore: number;
 };
+
+/** Drift 固有の空状態理由。EmptyStateCard へキャストして渡す。 */
+type DriftEmptyReason = 'drift-no-base' | 'drift-no-diverged';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -72,15 +87,11 @@ function estimateBase(refs: Array<{ name: string }>): string | null {
   return refs[0]?.name ?? null;
 }
 
-function computeAgeDays(hashOrDate: string): number {
-  // The API returns a hash, not a date — we derive age from the drift payload's
-  // lastCommitAt if present; otherwise fall back to 0 so the size is neutral.
-  return 0;
-}
-
 /**
  * Map an alert score (0–1) to an rgb() colour string.
  * 0.0 → green (#4ade80), 0.5 → yellow (#facc15), 1.0 → red (#f87171)
+ *
+ * NOTE: PR-B で BranchSidebar の computeRotScore / ROT_SCORE_COLORS に置換予定。
  */
 function scoreToColor(score: number): string {
   const s = Math.max(0, Math.min(1, score));
@@ -102,8 +113,8 @@ function scoreToColor(score: number): string {
 
 function toDriftPoint(entry: RefDriftEntry): DriftPoint {
   const alertScore = Math.min(1, (entry.ahead + entry.behind) / 100);
-  const ageDays = 0; // hash only — no date available from drift endpoint
-  // r: 4 (young/zero) → 10 (old). Since we lack a date, keep neutral 6.
+  const ageDays = 0; // PR-B で BranchGroupHealth から daysSinceLast を取得
+  // r: PR-B で age に応じて 4..12 にマップ。現状はニュートラル 6。
   const r = 6;
   return {
     ...entry,
@@ -113,6 +124,88 @@ function toDriftPoint(entry: RefDriftEntry): DriftPoint {
     alertScore,
   };
 }
+
+function shortRefName(name: string): string {
+  // refs/heads/foo → foo, refs/remotes/origin/bar → origin/bar, refs/tags/v1 → v1
+  if (name.startsWith('refs/heads/')) return name.slice('refs/heads/'.length);
+  if (name.startsWith('refs/remotes/')) return name.slice('refs/remotes/'.length);
+  if (name.startsWith('refs/tags/')) return name.slice('refs/tags/'.length);
+  return name;
+}
+
+// ---------------------------------------------------------------------------
+// Help content for LensHeader
+// ---------------------------------------------------------------------------
+
+function DriftHelpContent(): ReactNode {
+  return (
+    <>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+        Drift Lens とは
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        全ブランチを <strong>base ブランチに対する ahead / behind</strong> で散布図にプロット。
+        散らばり方からブランチ整理の優先順位を把握できます。
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        4 象限の意味
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
+        ・<strong>Aligned</strong> (左下): base にほぼ揃っている健全な状態<br />
+        ・<strong>Hot</strong> (左上): base に追従しつつ独自コミットが多い活発開発中<br />
+        ・<strong>Stale</strong> (右下): base から遅れたまま放置 (削除候補)<br />
+        ・<strong>Diverged</strong> (右上): 双方向に乖離、rebase / merge が必要
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        点の色 (alertScore)
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        <code>min(1, (ahead + behind) / 100)</code> を緑 → 黄 → 赤に補間。
+        合計コミット数が多いほど赤くなります。
+        <em style={{ color: 'var(--rs-text-muted)' }}>
+          {' '}(PR-B で BranchSidebar と同じ rotScore に統合予定)
+        </em>
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        base ブランチの推定
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        <code>main → master → trunk → 先頭の ref</code> の順で候補を検索します。
+        手動切替 UI は Phase 2 で追加予定です。
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        操作
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 4 }}>
+        ・点 <strong>クリック</strong> または <strong>Enter / Space</strong>: そのブランチを選択
+        (BranchSidebar が連動)<br />
+        ・<strong>Tab</strong>: 点間のフォーカス移動<br />
+        ・最大 <strong>50</strong> 件を表示。51 件目以降は警告バナーで明示します
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Empty state messages (Drift 固有 reason を持つ messages map)
+// ---------------------------------------------------------------------------
+
+const DRIFT_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> = {
+  ['drift-no-base' as LensEmptyReason]: {
+    title: 'ベースブランチが見つかりません',
+    body:
+      'ref リストに main / master / trunk が含まれていないため、比較基点を決められません。リポジトリを開き直すか、Live Lens でブランチを確認してください。',
+  },
+  ['drift-no-diverged' as LensEmptyReason]: {
+    title: '分岐したブランチはありません',
+    body:
+      'すべての ref がベースブランチと揃っています。新規ブランチが作られたり、コミットが追加されると散布図に表示されます。',
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Custom tooltip
@@ -137,39 +230,73 @@ function DriftTooltip({ active, payload }: TooltipProps<number, string>) {
 
   return (
     <div style={containerStyle}>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: point.color }}>{point.name}</div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: point.color }}>
+        {shortRefName(point.name)}
+      </div>
+      <div style={{ color: 'var(--rs-text-muted)', fontSize: 10, marginBottom: 4 }}>
+        {point.name}
+      </div>
       <div>ahead: <strong>{point.ahead}</strong></div>
       <div>behind: <strong>{point.behind}</strong></div>
       <div style={{ color: 'var(--rs-text-secondary)', marginTop: 4, fontSize: 11 }}>
-        click to select
+        Click / Enter to select in BranchSidebar
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Custom dot shape — needed to apply per-point colour and radius
+// Custom dot shape — needed to apply per-point colour, radius, and a11y
 // ---------------------------------------------------------------------------
 
 interface DotShapeProps {
   cx?: number;
   cy?: number;
   payload?: DriftPoint;
+  onActivate?: (name: string) => void;
 }
 
-function DotShape({ cx = 0, cy = 0, payload }: DotShapeProps) {
+function DotShape({ cx = 0, cy = 0, payload, onActivate }: DotShapeProps) {
   if (!payload) return null;
+  const refName = payload.name;
+  const label = shortRefName(refName);
   return (
-    <circle
-      cx={cx}
-      cy={cy}
-      r={payload.r}
-      fill={payload.color}
-      fillOpacity={0.75}
-      stroke={payload.color}
-      strokeWidth={1}
-      style={{ cursor: 'pointer' }}
-    />
+    <g
+      tabIndex={0}
+      role="button"
+      aria-label={`${label}: ahead ${payload.ahead}, behind ${payload.behind}. Enter / Space to select.`}
+      onKeyDown={(e: KeyboardEvent<SVGGElement>) => {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+          e.preventDefault();
+          onActivate?.(refName);
+        }
+      }}
+      className="rs-drift-dot"
+      style={{ outline: 'none' }}
+    >
+      <title>{refName}</title>
+      {/* Focus ring (SVG 上で outline が効かないため独自に描画) */}
+      <circle
+        cx={cx}
+        cy={cy}
+        r={payload.r + 4}
+        fill="none"
+        stroke="var(--rs-accent)"
+        strokeWidth={2}
+        strokeOpacity={0}
+        className="rs-drift-focus-ring"
+      />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={payload.r}
+        fill={payload.color}
+        fillOpacity={0.75}
+        stroke={payload.color}
+        strokeWidth={1}
+        style={{ cursor: 'pointer' }}
+      />
+    </g>
   );
 }
 
@@ -177,17 +304,21 @@ function DotShape({ cx = 0, cy = 0, payload }: DotShapeProps) {
 // Main component
 // ---------------------------------------------------------------------------
 
+// Quadrant label readability fixes: WCAG コントラスト確保のため 12px + rs-text
 const QUADRANT_LABEL_STYLE: CSSProperties = {
-  fontSize: 11,
-  fill: 'var(--rs-text-secondary)',
+  fontSize: 12,
+  fill: 'var(--rs-text)',
+  fontWeight: 500,
 };
 
-export function DriftLens({ repoId, refs, onSelectRef }: DriftLensProps) {
+export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLensProps) {
   const [points, setPoints] = useState<DriftPoint[]>([]);
   const [base, setBase] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
+  const [limit] = useState(50);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const srDescId = useId();
 
   const load = useCallback(
     async (signal: AbortSignal) => {
@@ -204,7 +335,7 @@ export function DriftLens({ repoId, refs, onSelectRef }: DriftLensProps) {
       try {
         const res = await fetchRefDrift(
           repoId,
-          { base: estimatedBase, limit: 50 },
+          { base: estimatedBase, limit },
           signal,
         );
         const pts = res.refs.map(toDriftPoint);
@@ -217,13 +348,18 @@ export function DriftLens({ repoId, refs, onSelectRef }: DriftLensProps) {
         setLoading(false);
       }
     },
-    [repoId, refs],
+    [repoId, refs, limit],
   );
 
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
     return () => { controller.abort(); };
+  }, [load]);
+
+  const handleRetry = useCallback(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
   }, [load]);
 
   // Determine axis domains with at least a minimum extent so reference lines render
@@ -241,19 +377,26 @@ export function DriftLens({ repoId, refs, onSelectRef }: DriftLensProps) {
     fontFamily: 'var(--rs-sans)',
   };
 
-  const headerStyle: CSSProperties = {
-    padding: '10px 16px 6px',
-    borderBottom: '1px solid var(--rs-border)',
-    fontSize: 12,
-    color: 'var(--rs-text-secondary)',
-  };
+  const renderHeader = (baseLabel: string | null) => (
+    <LensHeader
+      title="Drift"
+      oneLiner={
+        baseLabel
+          ? `base: ${shortRefName(baseLabel)} に対する ahead / behind を散布図で可視化`
+          : 'ベースブランチに対する全ブランチの分岐状況を散布図で可視化'
+      }
+      helpContent={<DriftHelpContent />}
+    />
+  );
 
   // --- Loading ---
   if (loading) {
     return (
       <div style={containerStyle}>
-        <div style={headerStyle}>Drift Lens — loading…</div>
+        {renderHeader(base)}
         <div
+          role="status"
+          aria-live="polite"
           style={{
             flex: 1,
             display: 'flex',
@@ -273,21 +416,105 @@ export function DriftLens({ repoId, refs, onSelectRef }: DriftLensProps) {
   if (error) {
     return (
       <div style={containerStyle}>
-        <div style={headerStyle}>Drift Lens</div>
+        {renderHeader(base)}
         <div
           style={{
-            flex: 1,
             display: 'flex',
-            flexDirection: 'column',
+            flex: 1,
             alignItems: 'center',
             justifyContent: 'center',
-            gap: 8,
-            color: 'var(--rs-text-secondary)',
-            fontSize: 13,
+            padding: 24,
           }}
         >
-          <span style={{ color: '#f87171' }}>Failed to load drift data</span>
-          <span style={{ fontSize: 11 }}>{error}</span>
+          <div
+            style={{
+              maxWidth: 440,
+              padding: '20px 24px',
+              background: 'var(--rs-bg-elevated)',
+              border: '1px solid var(--rs-border)',
+              borderRadius: 'var(--rs-radius-md)',
+              fontFamily: 'var(--rs-sans)',
+            }}
+          >
+            <div
+              style={{
+                fontSize: 14,
+                fontWeight: 600,
+                color: 'var(--rs-git-deleted)',
+                marginBottom: 8,
+              }}
+            >
+              drift データの取得に失敗しました
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--rs-text-secondary)',
+                lineHeight: 1.6,
+                marginBottom: 16,
+                wordBreak: 'break-word',
+              }}
+            >
+              {error}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handleRetry}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  fontSize: 11,
+                  fontFamily: 'var(--rs-sans)',
+                  borderRadius: 'var(--rs-radius-sm)',
+                  border: '1px solid var(--rs-accent)',
+                  background: 'var(--rs-accent)',
+                  color: 'var(--rs-bg-panel)',
+                  cursor: 'pointer',
+                }}
+              >
+                再試行
+              </button>
+              {onChangeLens && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onChangeLens('live')}
+                    style={{
+                      height: 28,
+                      padding: '0 12px',
+                      fontSize: 11,
+                      fontFamily: 'var(--rs-sans)',
+                      borderRadius: 'var(--rs-radius-sm)',
+                      border: '1px solid var(--rs-border)',
+                      background: 'transparent',
+                      color: 'var(--rs-text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Live を開く
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeLens('hotspot')}
+                    style={{
+                      height: 28,
+                      padding: '0 12px',
+                      fontSize: 11,
+                      fontFamily: 'var(--rs-sans)',
+                      borderRadius: 'var(--rs-radius-sm)',
+                      border: '1px solid var(--rs-border)',
+                      background: 'transparent',
+                      color: 'var(--rs-text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Hotspot を開く
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -297,19 +524,17 @@ export function DriftLens({ repoId, refs, onSelectRef }: DriftLensProps) {
   if (!base) {
     return (
       <div style={containerStyle}>
-        <div style={headerStyle}>Drift Lens</div>
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--rs-text-secondary)',
-            fontSize: 13,
-          }}
-        >
-          No refs available — open a repository first.
-        </div>
+        {renderHeader(null)}
+        <EmptyStateCard
+          reason={'drift-no-base' as LensEmptyReason}
+          messages={DRIFT_EMPTY_MESSAGES}
+          onChangeLens={onChangeLens}
+          relatedLenses={
+            onChangeLens
+              ? [{ id: 'live', label: 'Live を開く' }]
+              : undefined
+          }
+        />
       </div>
     );
   }
@@ -318,38 +543,81 @@ export function DriftLens({ repoId, refs, onSelectRef }: DriftLensProps) {
   if (points.length === 0) {
     return (
       <div style={containerStyle}>
-        <div style={headerStyle}>
-          Drift Lens — base: <strong>{base}</strong>
-        </div>
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--rs-text-secondary)',
-            fontSize: 13,
-          }}
-        >
-          No diverged branches — all refs are aligned with <strong>&nbsp;{base}</strong>.
-        </div>
+        {renderHeader(base)}
+        <EmptyStateCard
+          reason={'drift-no-diverged' as LensEmptyReason}
+          messages={DRIFT_EMPTY_MESSAGES}
+          onChangeLens={onChangeLens}
+          relatedLenses={
+            onChangeLens
+              ? [
+                  { id: 'live', label: 'Live を開く' },
+                  { id: 'hotspot', label: 'Hotspot を開く' },
+                ]
+              : undefined
+          }
+        />
       </div>
     );
   }
 
   return (
     <div style={containerStyle}>
-      <div style={headerStyle}>
-        Drift Lens — base:{' '}
-        <strong style={{ color: 'var(--rs-text)' }}>{base}</strong>
-        {truncated && (
-          <span style={{ marginLeft: 8, color: '#facc15' }}>
-            (showing first 50 branches)
-          </span>
-        )}
-      </div>
+      {renderHeader(base)}
 
-      <div style={{ flex: 1, minHeight: 0, padding: '12px 8px 8px' }}>
+      {truncated && (
+        <div
+          role="status"
+          style={{
+            margin: '0 16px 8px',
+            padding: '6px 10px',
+            background: 'color-mix(in oklab, var(--rs-bg-elevated), #b45309 18%)',
+            border: '1px solid #b45309',
+            borderRadius: 'var(--rs-radius-sm)',
+            fontFamily: 'var(--rs-sans)',
+            fontSize: 11,
+            color: '#b45309',
+            flexShrink: 0,
+          }}
+        >
+          ⚠ 表示は最初の <strong>{limit}</strong> 件で打ち切られています。
+          全件確認には他の Lens (Hotspot / Live) を併用してください。
+        </div>
+      )}
+
+      {/* SR-only graph description (CoChange と同パターン) */}
+      <span
+        id={srDescId}
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+        }}
+      >
+        <p>
+          Drift 散布図。base: {base}。{points.length} 件のブランチ。
+        </p>
+        <ul>
+          {points.map((p) => (
+            <li key={p.name}>
+              {shortRefName(p.name)}: ahead {p.ahead}, behind {p.behind}
+            </li>
+          ))}
+        </ul>
+      </span>
+
+      <div
+        style={{ flex: 1, minHeight: 0, padding: '12px 8px 8px' }}
+        role="img"
+        aria-label={`Drift scatter chart: ${points.length} branches plotted by ahead and behind commits against base ${base}.`}
+        aria-describedby={srDescId}
+      >
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 24, right: 32, bottom: 24, left: 16 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--rs-border)" />
@@ -442,7 +710,7 @@ export function DriftLens({ repoId, refs, onSelectRef }: DriftLensProps) {
 
             <Scatter
               data={points}
-              shape={<DotShape />}
+              shape={<DotShape onActivate={onSelectRef} />}
               onClick={(data: unknown) => {
                 const pt = data as DriftPoint | undefined;
                 if (pt?.name) onSelectRef(pt.name);
@@ -451,6 +719,13 @@ export function DriftLens({ repoId, refs, onSelectRef }: DriftLensProps) {
           </ScatterChart>
         </ResponsiveContainer>
       </div>
+
+      {/* Focus-visible style for SVG group focus ring */}
+      <style>{`
+        .rs-drift-dot:focus-visible .rs-drift-focus-ring {
+          stroke-opacity: 0.85;
+        }
+      `}</style>
     </div>
   );
 }
