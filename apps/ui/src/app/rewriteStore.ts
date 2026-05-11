@@ -38,7 +38,13 @@ type StoragePayload = {
 };
 
 const SCHEMA_VERSION = 1 as const;
-const MAX_SNAPSHOTS = 20;
+/**
+ * FIFO ring buffer cap for rescue snapshots.
+ * Exported so the UI can render the same value in transparency text
+ * ("up to N events kept") without duplicating the magic number in App.tsx
+ * or RewriteRescuePanel.
+ */
+export const MAX_SNAPSHOTS = 20;
 
 function storageKey(repoId: string): string {
   // Include schema version in key so a future breaking migration can use a
@@ -119,6 +125,59 @@ export function clearRewriteSnapshots(repoId: string): void {
   }
 }
 
+/**
+ * Identifier used to address a single rescue snapshot. Composite of
+ * `previousHash + observedAt` because (ref, previousHash) can repeat when the
+ * same branch is rewritten multiple times — only the timestamp disambiguates.
+ */
+export type RescueSnapshotKey = {
+  previousHash: string;
+  observedAt: string;
+};
+
+/**
+ * Remove a single rescue snapshot identified by its composite key.
+ * No-op when storage is unavailable or the entry is absent.
+ */
+export function deleteRewriteSnapshot(
+  repoId: string,
+  key: RescueSnapshotKey,
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    const existing = loadRewriteSnapshots(repoId);
+    const filtered = existing.filter(
+      (e) =>
+        !(e.previousHash === key.previousHash && e.observedAt === key.observedAt),
+    );
+    if (filtered.length === existing.length) return; // not found, no-op
+    const payload: StoragePayload = { v: SCHEMA_VERSION, entries: filtered };
+    window.localStorage.setItem(storageKey(repoId), JSON.stringify(payload));
+  } catch {
+    // Silently ignore storage errors.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shell quoting helpers (POSIX sh)
+// ---------------------------------------------------------------------------
+
+/**
+ * Quote a string for safe substitution inside a POSIX sh single-quoted context.
+ * `'` is replaced with `'\''` (close, escaped quote, reopen). This handles
+ * spaces, `$`, backticks, semicolons, and other shell metacharacters because
+ * single quotes suppress all expansion in POSIX sh.
+ *
+ * Used by `generateRestoreCommands` so branch names like `feature/alice's-fix`
+ * or `feature/spaced name` round-trip safely through clipboard → terminal.
+ *
+ * NOTE: refscope assumes a POSIX-compatible shell (bash / zsh / sh / fish);
+ * csh is not supported. Windows users are expected to use WSL / Git Bash.
+ */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 // ---------------------------------------------------------------------------
 // Command generation helpers (pure, no side effects)
 // ---------------------------------------------------------------------------
@@ -131,7 +190,11 @@ export function clearRewriteSnapshots(repoId: string): void {
  * executed by the UI.
  */
 export function generateRestoreCommands(entry: RewriteRescueEntry): string {
-  const { branch, previousHash } = entry;
+  // shellQuote each free-form value so POSIX sh handles spaces, single quotes,
+  // and metacharacters safely (e.g. `feature/alice's-fix`). previousHash is
+  // hex-only in practice but we quote it too for uniform safety.
+  const branch = shellQuote(entry.branch);
+  const previousHash = shellQuote(entry.previousHash);
   return [
     `# Restore branch to pre-rewrite state (local only)`,
     `git checkout ${branch}`,
@@ -156,6 +219,12 @@ export function generateRescueBranchCommand(entry: RewriteRescueEntry): string {
     .replace(/\.\d+Z$/, "")
     .replace(/Z$/, "")
     .slice(0, 15);
+  // safeBranch enforces git's ref-format constraints (a stricter alphabet
+  // than shell). The resulting ref-name is then shellQuote-d when embedded
+  // in the command alongside previousHash so a quote in a future format
+  // change cannot break the command.
   const safeBranch = entry.branch.replace(/[^a-zA-Z0-9._/-]/g, "_");
-  return `git checkout -b rescue/${safeBranch}-${ts} ${entry.previousHash}`;
+  const newRef = shellQuote(`rescue/${safeBranch}-${ts}`);
+  const previousHash = shellQuote(entry.previousHash);
+  return `git checkout -b ${newRef} ${previousHash}`;
 }

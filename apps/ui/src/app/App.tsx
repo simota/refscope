@@ -87,6 +87,7 @@ import type { RefDriftSummary } from "./components/refscope/BranchSidebar";
 import {
   loadRewriteSnapshots,
   saveRewriteSnapshot,
+  MAX_SNAPSHOTS,
   type RewriteRescueEntry,
 } from "./rewriteStore";
 
@@ -803,14 +804,14 @@ export default function App() {
         saveRewriteSnapshot(data.repoId, entry);
         // Update in-memory state immediately so the Rescue lens shows the event
         // without requiring the user to switch repos or refresh. Prepend newest
-        // first and cap at 20 entries (mirrors rewriteStore.ts ring buffer).
+        // first and cap at MAX_SNAPSHOTS (mirrors rewriteStore.ts ring buffer).
         setRewriteRescueEntries((prev) =>
           [entry, ...prev.filter(
             (e) =>
               !(e.ref === entry.ref &&
                 e.previousHash === entry.previousHash &&
                 e.observedAt === entry.observedAt),
-          )].slice(0, 20),
+          )].slice(0, MAX_SNAPSHOTS),
         );
       }
       handleRealtimeEvent(notice, () => {
@@ -1506,9 +1507,24 @@ export default function App() {
           <RewriteRescuePanel
             repoId={selectedRepo}
             entries={rewriteRescueEntries}
+            eventStatus={eventStatus}
+            onChangeLens={setActiveLens}
             onClear={(repoId) => {
               if (repoId === selectedRepo) {
                 setRewriteRescueEntries([]);
+              }
+            }}
+            onDelete={(repoId, previousHash, observedAt) => {
+              if (repoId === selectedRepo) {
+                setRewriteRescueEntries((prev) =>
+                  prev.filter(
+                    (e) =>
+                      !(
+                        e.previousHash === previousHash &&
+                        e.observedAt === observedAt
+                      ),
+                  ),
+                );
               }
             }}
           />
