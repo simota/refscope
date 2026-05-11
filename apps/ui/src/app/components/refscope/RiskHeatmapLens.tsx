@@ -18,6 +18,7 @@
  */
 import { useMemo, useState, useCallback } from 'react';
 import type { Commit } from './data';
+import { dayKey } from './dateKey';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,14 +50,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** yyyy-mm-dd 形式のキーを返す */
-function dayKey(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-}
 
 /** ISO日時文字列 → Date (invalid なら null) */
 function parseDate(iso: string | undefined): Date | null {
