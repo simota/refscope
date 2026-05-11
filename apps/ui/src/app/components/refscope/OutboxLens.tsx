@@ -38,6 +38,10 @@ import {
 } from './EmptyStateCard';
 import { ROT_SCORE_COLORS } from './BranchSidebar';
 import { estimateBase } from './refUtil';
+import {
+  RISK_HIGH_THRESHOLD,
+  riskBadgeStyle,
+} from './riskBadge';
 import type { LensId } from './LensSwitcher';
 
 // ---------------------------------------------------------------------------
@@ -93,38 +97,12 @@ function formatRelative(iso: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// riskScore thresholds (Spark 14-A / 14-D)
+// stash age thresholds (Outbox local)
 // ---------------------------------------------------------------------------
-
-/** riskScore ≥ HIGH → critical 色 */
-const RISK_HIGH_THRESHOLD = 50;
-/** riskScore ≥ LOW → warning 色 */
-const RISK_LOW_THRESHOLD = 1;
 
 /** stash daysSinceLast ≥ WARN → warning 色、≥ CRIT → danger 色 */
 const STASH_WARN_DAYS = 30;
 const STASH_CRIT_DAYS = 90;
-
-function riskBadgeStyle(score: number): CSSProperties | null {
-  if (score < RISK_LOW_THRESHOLD) return null;
-  const color =
-    score >= RISK_HIGH_THRESHOLD
-      ? ROT_SCORE_COLORS.critical
-      : ROT_SCORE_COLORS.warning;
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    padding: '0 5px',
-    height: 14,
-    borderRadius: 4,
-    fontSize: 9,
-    fontFamily: 'var(--rs-mono)',
-    fontWeight: 600,
-    background: `color-mix(in oklab, var(--rs-bg-elevated), ${color} 25%)`,
-    color,
-    border: `1px solid ${color}`,
-  };
-}
 
 function stashAgeColor(committedAt: string | null | undefined): string {
   if (!committedAt) return 'var(--rs-text-secondary)';
