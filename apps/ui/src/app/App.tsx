@@ -1459,6 +1459,7 @@ export default function App() {
             selectedRef={selectedRef}
             selectedFilePath={fileHistoryPath}
             onOpenFileHistory={submitFileHistoryPath}
+            onChangeLens={setActiveLens}
           />
         </div>
       )}
