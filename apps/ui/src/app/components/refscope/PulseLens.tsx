@@ -28,6 +28,13 @@ import { FileContextMenu } from './FileContextMenu';
 import { extractWorkTreeFiles } from '../../lib/workTreeFiles';
 import type { FileKind } from '../../lib/fileKind';
 import { classifyFile, colorForKind, labelForKind } from '../../lib/fileKind';
+import { LensHeader } from './LensHeader';
+import {
+  EmptyStateCard,
+  type LensEmptyReason,
+  type EmptyStateMessage,
+} from './EmptyStateCard';
+import type { LensId } from './LensSwitcher';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -95,6 +102,21 @@ function statusGlyph(status: string): string {
     case 'D': return '−';
     case 'R': return '↦';
     default:  return '·';
+  }
+}
+
+/**
+ * statusGlyph (装飾) の代わりに SR が読み上げる自然語ラベル。
+ * Echo #10 Minor 対応: 全角 ＋ / − を SR で「全角プラス」と読まれないようにする。
+ */
+function statusName(status: string): string {
+  switch (status) {
+    case 'A': return '追加';
+    case 'D': return '削除';
+    case 'M': return '変更';
+    case 'R': return '名前変更';
+    case 'C': return 'コピー';
+    default:  return status || '変更';
   }
 }
 
@@ -291,6 +313,13 @@ export type PulseLensProps = {
   onOpenFileHistory?: (path: string) => void;
   workTree?: WorkTreeResponse | null;
   paused?: boolean;
+  /**
+   * SSE 接続状態。"connected" 以外で live dot をグレー/赤に切替し、
+   * 切断バナーを表示する (Rescue PR #37 と同パターン)。
+   */
+  eventStatus?: 'connecting' | 'connected' | 'error';
+  /** 他 Lens への遷移 (EmptyStateCard relatedLenses 用) */
+  onChangeLens?: (lens: LensId) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -896,8 +925,39 @@ function useCanvasParticleField({
       }
     }
 
+    // Cursor scope: pointer のみ粒子ヒット時に表示 (Echo #9 Major)
+    // mousemove ヒットテストは hit-radius のみ計算する軽量版で rAF debounce 等は省略
+    let lastCursor: 'pointer' | 'default' = 'default';
+    function handleMouseMove(e: MouseEvent) {
+      const rect = canvas!.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      let hit = false;
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const { stat, x, y } = nodes[i];
+        const r = radiusForCount(stat.commitCount) + 4;
+        if ((mx - x) ** 2 + (my - y) ** 2 < r * r) {
+          hit = true;
+          break;
+        }
+      }
+      const next: 'pointer' | 'default' = hit ? 'pointer' : 'default';
+      if (next !== lastCursor) {
+        canvas!.style.cursor = next;
+        lastCursor = next;
+      }
+    }
+    function handleMouseLeave() {
+      if (lastCursor !== 'default') {
+        canvas!.style.cursor = 'default';
+        lastCursor = 'default';
+      }
+    }
+
     canvas.addEventListener('click', handleClick);
     canvas.addEventListener('contextmenu', handleContextMenu);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseleave', handleMouseLeave);
 
     return () => {
       cancelled = true;
@@ -907,6 +967,8 @@ function useCanvasParticleField({
       if (sim) sim.stop();
       canvas.removeEventListener('click', handleClick);
       canvas.removeEventListener('contextmenu', handleContextMenu);
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('mouseleave', handleMouseLeave);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasRef, reducedMotion]);
@@ -915,6 +977,100 @@ function useCanvasParticleField({
 // ---------------------------------------------------------------------------
 // PulseLens main
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Help content + i18n labels (T2 / T3 / T9 / T11 / T12)
+// ---------------------------------------------------------------------------
+
+const KIND_LABEL_JA: Record<FileKind, string> = {
+  code: 'コード',
+  style: 'スタイル',
+  config: '設定',
+  markup: 'マークアップ',
+  docs: 'ドキュメント',
+  test: 'テスト',
+  asset: 'アセット',
+  other: 'その他',
+};
+
+const KIND_TOOLTIP_JA: Record<FileKind, string> = {
+  code: 'TypeScript / JavaScript / Python 等のソースコード',
+  style: 'CSS / SCSS / Tailwind 等のスタイル',
+  config: 'package.json / vite.config.ts 等の設定',
+  markup: 'HTML / Vue / Astro 等のマークアップ',
+  docs: 'Markdown / README 等のドキュメント',
+  test: '.test.* / .spec.* 等のテスト',
+  asset: '画像 / フォント / バイナリ等のアセット',
+  other: '分類されないファイル',
+};
+
+function labelForKindJa(k: FileKind): string {
+  return KIND_LABEL_JA[k] ?? labelForKind(k);
+}
+
+function kindTooltip(k: FileKind): string {
+  return KIND_TOOLTIP_JA[k] ?? '';
+}
+
+function PulseHelpContent() {
+  return (
+    <>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+        Pulse Lens とは
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        コードベースの<strong>今の鼓動</strong>を粒子フィールドで可視化する Lens。
+        ログ的な「Activity」ではなく、リポジトリが今動いている感覚を映します。
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        粒子の読み方
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
+        ・<strong>1 粒 = 1 ファイル</strong><br />
+        ・<strong>サイズ = 変更回数</strong> (2回 → 4回 → 6回以上で段階的に拡大)<br />
+        ・<strong>色 = ファイル種別</strong> (重要度ではない — 凡例参照)<br />
+        ・<strong>グロー + パルスリング</strong> = 直近 {Math.round(HIGHLIGHT_MS / 1000)} 秒以内に更新<br />
+        ・<strong>花火バースト</strong> = 新規ファイル出現<br />
+        ・<strong>breathing</strong> = idle 時のリズム
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        対象データ
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        <strong>直近 {MAX_COMMITS} commits + working tree</strong> の変更を粒子化。
+        累計 +N / -N も同じ範囲の合計です。
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        live indicator
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
+        ・<span style={{ color: '#22c55e' }}>緑パルス</span>: SSE 接続中 (リアルタイム取り込み)<br />
+        ・<span style={{ color: 'var(--rs-text-muted)' }}>グレー</span>: 接続中… または 一時停止<br />
+        ・<span style={{ color: '#ef4444' }}>赤</span>: 切断 (新しい変更は記録されません)
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        操作
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)' }}>
+        ・粒子<strong>クリック</strong> → ファイル履歴を開く<br />
+        ・粒子<strong>右クリック</strong> → コンテキストメニュー (Live で表示、Co-change を見る等)<br />
+        ・右側の "Recent changes" リスト → コミット選択
+      </div>
+    </>
+  );
+}
+
+const PULSE_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> = {
+  ['pulse-quiet' as LensEmptyReason]: {
+    title: '鼓動を待っています',
+    body:
+      'コミットや working tree の変更がまだ観測されていません。リポジトリで何か作業が起きると粒子が現れます。別の Lens で別の観点を確認するか、しばらく待ってみてください。',
+  },
+};
+
 export function PulseLens({
   repoId,
   commits,
@@ -922,6 +1078,9 @@ export function PulseLens({
   onSelectCommit,
   onOpenFileHistory,
   workTree,
+  paused = false,
+  eventStatus,
+  onChangeLens,
 }: PulseLensProps) {
   // ---- Detail cache (per-commit file lists) -----------------------------
   const [detailCache, setDetailCache] = useState<Map<string, CommitDetail>>(
@@ -1290,65 +1449,195 @@ export function PulseLens({
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          flexDirection: 'column',
           height: '100%',
-          color: 'var(--rs-text-secondary)',
-          fontFamily: 'var(--rs-sans)',
-          fontSize: 13,
           background: 'var(--rs-bg-canvas)',
         }}
       >
-        Waiting for the codebase to start pulsing…
+        <LensHeader
+          title="Pulse"
+          oneLiner="コードベースの今の鼓動 — ファイル変更を粒子として可視化"
+          helpContent={<PulseHelpContent />}
+        />
+        <EmptyStateCard
+          reason={'pulse-quiet' as LensEmptyReason}
+          messages={PULSE_EMPTY_MESSAGES}
+          onChangeLens={onChangeLens}
+          relatedLenses={
+            onChangeLens
+              ? [
+                  { id: 'stream', label: 'File Stream を開く' },
+                  { id: 'hotspot', label: 'Hotspot を開く' },
+                  { id: 'digest', label: 'Digest を開く' },
+                ]
+              : undefined
+          }
+        />
       </div>
     );
   }
+
+  // ---- live dot 状態 (eventStatus + paused) -----------------------------
+  const dotState: 'connected' | 'connecting' | 'error' | 'paused' = paused
+    ? 'paused'
+    : eventStatus ?? 'connected';
+
+  const dotColor =
+    dotState === 'connected'
+      ? '#22c55e'
+      : dotState === 'error'
+        ? '#ef4444'
+        : 'var(--rs-text-muted)';
+  const dotAriaLabel =
+    dotState === 'connected'
+      ? '接続中: 新しい変更をリアルタイムで取り込んでいます'
+      : dotState === 'connecting'
+        ? '接続中…'
+        : dotState === 'error'
+          ? '接続が途切れています'
+          : '一時停止中';
+
+  const showStatusBanner =
+    dotState === 'error' || dotState === 'paused' || dotState === 'connecting';
 
   return (
     <div className="rs-pulse-root">
       <style>{PULSE_STYLES}</style>
 
-      {/* Header — live indicator + counts */}
+      {/* Row 1: LensHeader (title + oneLiner + ? Popover) */}
+      <LensHeader
+        title="Pulse"
+        oneLiner="コードベースの今の鼓動 — ファイル変更を粒子として可視化"
+        helpContent={<PulseHelpContent />}
+      />
+
+      {/* Row 2: live indicator + counts + legend (legacy stats bar) */}
       <header className="rs-pulse-header">
         <span className="rs-pulse-header__indicator" aria-hidden="true">
-          <span className="rs-pulse-header__dot" />
+          <span
+            className={
+              dotState === 'connected'
+                ? 'rs-pulse-header__dot'
+                : 'rs-pulse-header__dot rs-pulse-header__dot--static'
+            }
+            style={{ background: dotColor }}
+          />
         </span>
-        <span className="rs-pulse-header__title">Pulse</span>
+        <span
+          role="status"
+          aria-live="polite"
+          className="rs-pulse-header__live-label"
+          aria-label={dotAriaLabel}
+        >
+          <span aria-hidden="true">
+            {dotState === 'connected'
+              ? 'live'
+              : dotState === 'connecting'
+                ? 'connecting…'
+                : dotState === 'error'
+                  ? 'offline'
+                  : 'paused'}
+          </span>
+        </span>
         <span className="rs-pulse-header__divider" aria-hidden="true" />
         <span className="rs-pulse-header__stat">
           <strong>{summary.files.toLocaleString()}</strong> files
         </span>
         <span className="rs-pulse-header__stat">
           <strong>{summary.commits.toLocaleString()}</strong> commits
+          <span aria-hidden="true" style={{ color: 'var(--rs-text-muted)', marginLeft: 4, fontSize: 10 }}>
+            / {MAX_COMMITS} max
+          </span>
         </span>
-        <span className="rs-pulse-header__diff">
-          <span style={{ color: '#22c55e' }}>+{summary.added.toLocaleString()}</span>
-          <span style={{ color: '#ef4444' }}>−{summary.deleted.toLocaleString()}</span>
+        <span
+          className="rs-pulse-header__diff"
+          title="直近 30 commits + working tree の累計追加 / 削除行数"
+        >
+          <span aria-hidden="true" style={{ color: '#22c55e' }}>+{summary.added.toLocaleString()}</span>
+          <span className="sr-only">{summary.added.toLocaleString()} lines added</span>
+          <span aria-hidden="true" style={{ color: '#ef4444' }}>−{summary.deleted.toLocaleString()}</span>
+          <span className="sr-only">{summary.deleted.toLocaleString()} lines deleted</span>
         </span>
         {summary.hotCount > 0 && (
-          <span className="rs-pulse-header__hot">
+          <span
+            className="rs-pulse-header__hot"
+            title={`直近 ${Math.round(HIGHLIGHT_MS / 1000)} 秒以内に変更されたファイル数`}
+          >
             {summary.hotCount} hot
           </span>
         )}
         {summary.workingTreeCount > 0 && (
-          <span className="rs-pulse-header__wt">
+          <span
+            className="rs-pulse-header__wt"
+            title="working tree の未コミット変更ファイル数"
+          >
             {summary.workingTreeCount} uncommitted
           </span>
         )}
 
-        <div className="rs-pulse-header__legend" aria-label="File kind legend">
+        <div className="rs-pulse-header__legend" aria-label="ファイル種別の凡例">
           {(['code', 'style', 'config', 'markup', 'docs', 'test', 'asset'] as const).map((k) => (
-            <span key={k} className="rs-pulse-header__legend-item">
+            <span
+              key={k}
+              className="rs-pulse-header__legend-item"
+              title={kindTooltip(k)}
+            >
               <span
                 className="rs-pulse-header__legend-dot"
                 style={{ background: colorForKind(k) }}
                 aria-hidden="true"
               />
-              <span>{labelForKind(k)}</span>
+              <span>{labelForKindJa(k)}</span>
             </span>
           ))}
         </div>
       </header>
+
+      {showStatusBanner && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rs-pulse-status-banner"
+          style={{
+            padding: '6px 16px',
+            fontSize: 11,
+            fontFamily: 'var(--rs-sans)',
+            color:
+              dotState === 'error'
+                ? '#ef4444'
+                : dotState === 'paused'
+                  ? 'var(--rs-text-secondary)'
+                  : 'var(--rs-text-muted)',
+            background:
+              dotState === 'error'
+                ? 'color-mix(in oklab, var(--rs-bg-elevated), #ef4444 12%)'
+                : 'var(--rs-bg-elevated)',
+            borderBottom: '1px solid var(--rs-border)',
+          }}
+        >
+          {dotState === 'error'
+            ? '⚠ 接続が途切れています — 新しい変更は記録されていません。'
+            : dotState === 'paused'
+              ? 'Paused — 新しい変更の取り込みを停止しています。'
+              : 'Connecting — サーバーに接続しています…'}
+        </div>
+      )}
+
+      {reducedMotion && (
+        <div
+          className="rs-pulse-reduced-motion-note"
+          style={{
+            padding: '4px 16px',
+            fontSize: 10,
+            fontFamily: 'var(--rs-sans)',
+            color: 'var(--rs-text-muted)',
+            background: 'var(--rs-bg-elevated)',
+            borderBottom: '1px solid var(--rs-border)',
+          }}
+        >
+          Reduced motion: 鼓動アニメーションを抑制しています (Lens は動作中)。
+        </div>
+      )}
 
       {/* Body: canvas stage (left) + sidebar (right) */}
       <div className="rs-pulse-body">
@@ -1359,8 +1648,33 @@ export function PulseLens({
             ref={canvasRef}
             className="rs-pulse-canvas"
             aria-label={`Particle field — ${summary.files} files`}
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: 'pointer' }}
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: 'default' }}
+            aria-label={`Particle field — ${summary.files} files. 同じ情報のテキスト一覧は隣のリストにあります。`}
           />
+          {/* Visually-hidden SR live region: surfaces recent file changes for SR users (Echo #4) */}
+          <ul
+            role="status"
+            aria-live="polite"
+            aria-atomic="false"
+            style={{
+              position: 'absolute',
+              width: 1,
+              height: 1,
+              padding: 0,
+              margin: -1,
+              overflow: 'hidden',
+              clip: 'rect(0,0,0,0)',
+              whiteSpace: 'nowrap',
+              border: 0,
+            }}
+          >
+            {recentEntries.slice(0, 5).map((entry) => (
+              <li key={`${entry.commitHash ?? 'wt'}:${entry.path}`}>
+                {entry.isWorkingTree ? '未コミット' : entry.commitHash?.slice(0, 7)}{' '}
+                {entry.path} (+{entry.added ?? 0} / -{entry.deleted ?? 0})
+              </li>
+            ))}
+          </ul>
           {groups.length === 0 && (
             <div
               className="rs-pulse-stage__empty"
@@ -1403,6 +1717,8 @@ export function PulseLens({
                           handleContextMenu(e, entry.path);
                         }}
                         title={`${entry.path}\n${entry.subject}`}
+                        aria-label={`${statusName(entry.status)}: ${entry.path}${entry.isWorkingTree ? ' (working tree)' : ` — ${entry.subject}`}`}
+                        aria-disabled={entry.isWorkingTree}
                         disabled={entry.isWorkingTree}
                       >
                         <span

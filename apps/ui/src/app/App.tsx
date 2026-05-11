@@ -1409,6 +1409,8 @@ export default function App() {
             onSelectCommit={(hash) => { setSelected(hash); }}
             onOpenFileHistory={submitFileHistoryPath}
             workTree={workTreeHasChanges ? workTree : null}
+            eventStatus={eventStatus}
+            onChangeLens={setActiveLens}
           />
         </div>
       )}
