@@ -32,6 +32,11 @@ import {
 } from '../../api';
 import type { Commit } from './data';
 import { LensHeader } from './LensHeader';
+import {
+  EmptyStateCard,
+  type LensEmptyReason,
+  type EmptyStateMessage,
+} from './EmptyStateCard';
 import { ROT_SCORE_COLORS } from './BranchSidebar';
 import {
   RISK_HIGH_THRESHOLD,
@@ -72,6 +77,36 @@ function periodToSince(period: Period): string {
     return new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
   }
   return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// period 永続化 (lensThreshold パターン参考)
+// ---------------------------------------------------------------------------
+
+const PERIOD_STORAGE_KEY = 'refscope.digest.period';
+
+function isPeriod(v: unknown): v is Period {
+  return v === '24h' || v === '7d';
+}
+
+function loadPeriod(): Period {
+  if (typeof window === 'undefined') return '24h';
+  try {
+    const raw = window.localStorage.getItem(PERIOD_STORAGE_KEY);
+    if (raw && isPeriod(raw)) return raw;
+  } catch {
+    // ignore corrupt or disabled storage
+  }
+  return '24h';
+}
+
+function savePeriod(period: Period): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PERIOD_STORAGE_KEY, period);
+  } catch {
+    // ignore quota / disabled storage
+  }
 }
 
 function formatRelative(iso: string | null): string {
@@ -128,6 +163,18 @@ function buildMarkdown(data: DigestData, period: Period): string {
 
   return lines.join('\n');
 }
+
+// ---------------------------------------------------------------------------
+// Empty state messages
+// ---------------------------------------------------------------------------
+
+const DIGEST_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> = {
+  ['digest-no-activity' as LensEmptyReason]: {
+    title: '期間内の活動がありません',
+    body:
+      '選択中の期間内にコミット・hotspot・risky・ref 更新のいずれも記録されていません。期間を切り替えるか、別の Lens で他の観点を確認してください。',
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Help content for LensHeader
@@ -496,12 +543,17 @@ export function DigestLens({
   onOpenFileHistory,
   onChangeLens,
 }: DigestLensProps) {
-  const [period, setPeriod] = useState<Period>('24h');
+  const [period, setPeriod] = useState<Period>(loadPeriod);
   const [data, setData] = useState<DigestData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
+
+  // T-09: period の変更を localStorage に永続化
+  useEffect(() => {
+    savePeriod(period);
+  }, [period]);
 
   const load = useCallback(
     async (signal: AbortSignal, currentPeriod: Period) => {
@@ -569,6 +621,12 @@ export function DigestLens({
     const controller = new AbortController();
     void load(controller.signal, period);
     return () => { controller.abort(); };
+  }, [load, period]);
+
+  // T-11 / T-12: 手動再ロード (Error Retry / Refresh ボタンから利用)
+  const handleRefresh = useCallback(() => {
+    const controller = new AbortController();
+    void load(controller.signal, period);
   }, [load, period]);
 
   const handleCopy = useCallback(() => {
@@ -693,6 +751,27 @@ export function DigestLens({
         >
           {copyError ? '✕ Copy failed' : copied ? '✓ Copied!' : 'Copy as Markdown'}
         </button>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={loading}
+          aria-busy={loading}
+          aria-label="Digest を再読み込み"
+          style={{
+            padding: '2px 10px',
+            fontSize: 11,
+            fontFamily: 'var(--rs-sans)',
+            background: 'transparent',
+            border: '1px solid var(--rs-border)',
+            borderRadius: 'var(--rs-radius-sm)',
+            color: 'var(--rs-text-secondary)',
+            cursor: loading ? 'wait' : 'pointer',
+            opacity: loading ? 0.6 : 1,
+            height: 24,
+          }}
+        >
+          {loading ? '…' : 'Refresh'}
+        </button>
       </div>
     </div>
   );
@@ -756,14 +835,64 @@ export function DigestLens({
                 fontSize: 12,
                 color: 'var(--rs-text-secondary)',
                 lineHeight: 1.6,
-                marginBottom: 12,
+                marginBottom: 16,
                 wordBreak: 'break-word',
               }}
             >
               {error}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--rs-text-muted)' }}>
-              Phase 1 では PR-B で Retry ボタン + 代替 Lens 誘導が追加される予定です。
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handleRefresh}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  fontSize: 11,
+                  fontFamily: 'var(--rs-sans)',
+                  borderRadius: 'var(--rs-radius-sm)',
+                  border: '1px solid var(--rs-accent)',
+                  background: 'var(--rs-accent)',
+                  color: 'var(--rs-bg-panel)',
+                  cursor: 'pointer',
+                }}
+              >
+                再試行
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeLens('live')}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  fontSize: 11,
+                  fontFamily: 'var(--rs-sans)',
+                  borderRadius: 'var(--rs-radius-sm)',
+                  border: '1px solid var(--rs-border)',
+                  background: 'transparent',
+                  color: 'var(--rs-text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                Live を開く
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeLens('risk-heatmap')}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  fontSize: 11,
+                  fontFamily: 'var(--rs-sans)',
+                  borderRadius: 'var(--rs-radius-sm)',
+                  border: '1px solid var(--rs-border)',
+                  background: 'transparent',
+                  color: 'var(--rs-text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                Risk Heatmap を開く
+              </button>
             </div>
           </div>
         </div>
@@ -784,18 +913,16 @@ export function DigestLens({
       {renderHeader()}
 
       {isEmpty ? (
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--rs-text-secondary)',
-            fontSize: 13,
-          }}
-        >
-          No activity in the last {period}
-        </div>
+        <EmptyStateCard
+          reason={'digest-no-activity' as LensEmptyReason}
+          messages={DIGEST_EMPTY_MESSAGES}
+          onChangeLens={onChangeLens}
+          relatedLenses={[
+            { id: 'live', label: 'Live を開く' },
+            { id: 'risk-heatmap', label: 'Risk Heatmap を開く' },
+            { id: 'stream', label: 'File Stream を開く' },
+          ]}
+        />
       ) : (
         <div
           style={{
