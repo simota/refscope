@@ -74,7 +74,7 @@ export function rotScoreLabel(score: number): RotScoreLabel {
   return "critical";
 }
 
-const ROT_SCORE_COLORS: Record<RotScoreLabel, string> = {
+export const ROT_SCORE_COLORS: Record<RotScoreLabel, string> = {
   healthy: "var(--rs-git-added)",
   warning: "var(--rs-warning)",
   critical: "var(--rs-git-deleted)",

@@ -1,18 +1,33 @@
 /**
- * Drift Lens — 全ブランチの ahead/behind を散布図で可視化し、分岐状況を一目で把握する。
+ * Drift Lens — 全 local branches の ahead/behind を散布図で可視化し、
+ * 分岐状況を一目で把握する。
  *
  * - X 軸: behind (base に対する遅れコミット数)
  * - Y 軸: ahead  (base に対する先行コミット数)
- * - 点サイズ (z): 最終コミットからの経過日数 (古いほど大きい) — PR-B で接続予定。現状 r=6 固定。
- * - 点の色: 警戒度に応じて緑 → 黄 → 赤
+ * - 点サイズ: 最終コミットからの経過日数 (古いほど大きい / `daysSinceLast`)
+ * - 点の色: rotScore のラベルに対応 (BranchSidebar と統一)
+ *   - healthy (≤7)  → var(--rs-git-added)
+ *   - warning (8–15) → var(--rs-warning)
+ *   - critical (>15) → var(--rs-git-deleted)
  * - 象限ガイド:
  *   左下 "Aligned" / 左上 "Hot" / 右下 "Stale" / 右上 "Diverged"
- * - 点クリック → onSelectRef(refName) で既存 Live / BranchSidebar が反応
+ * - 点クリック または Enter / Space → onSelectRef(refName) + onChangeLens('risk-trend')
  *
  * a11y: SVG 全体に role="img" + aria-label、視覚非表示の <ul> で SR 用テキスト経路を提供。
  * 各点に tabIndex + onKeyDown を設定し、キーボードで点間移動 (Tab) + 選択 (Enter/Space) 可能。
+ *
+ * 仕様変更 (PR-B): API を fetchRefDrift → fetchBranchGroupHealth に切替。
+ * Drift Lens は local branches のみを対象とする (remote/tag は別 Lens で確認)。
  */
-import { useCallback, useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import type { CSSProperties } from 'react';
 import {
   ScatterChart,
@@ -26,13 +41,18 @@ import {
   ResponsiveContainer,
   type TooltipProps,
 } from 'recharts';
-import { fetchRefDrift, type RefDriftEntry } from '../../api';
+import { fetchBranchGroupHealth, type BranchGroupEntry } from '../../api';
 import { LensHeader } from './LensHeader';
 import {
   EmptyStateCard,
   type LensEmptyReason,
   type EmptyStateMessage,
 } from './EmptyStateCard';
+import {
+  ROT_SCORE_COLORS,
+  rotScoreLabel,
+  type RotScoreLabel,
+} from './BranchSidebar';
 import type { LensId } from './LensSwitcher';
 
 // ---------------------------------------------------------------------------
@@ -42,24 +62,45 @@ import type { LensId } from './LensSwitcher';
 export type DriftLensProps = {
   repoId: string;
   refs: Array<{ name: string }>;
+  /** App.tsx 側の現在の selectedRef。一致点を強調表示する */
+  selectedRef?: string;
   onSelectRef: (ref: string) => void;
-  /** 他 Lens への遷移 (EmptyStateCard の relatedLenses 用 / PR-B で点クリック遷移にも使用予定) */
+  /** 他 Lens への遷移。EmptyStateCard / Error カード / 点クリック後の遷移に使用 */
   onChangeLens?: (lens: LensId) => void;
 };
 
-type DriftPoint = RefDriftEntry & {
-  /** days since last commit (0 = today) — PR-B で `daysSinceLast` を BranchGroupHealth から取得予定 */
-  ageDays: number;
-  /** radius for ZAxis substitute; encoded as SVG r attribute via custom shape */
-  r: number;
-  /** rgb() string derived from alert score */
+type DriftPoint = {
+  /** フル ref 名 (refs/heads/...) */
+  name: string;
+  shortName: string;
+  hash: string;
+  ahead: number;
+  behind: number;
+  mergeBase: string | null;
+  /** 最終コミット ISO (取得できない場合は null) */
+  updatedAt: string | null;
+  daysSinceLast: number;
+  /** rotScore 0..25 (API 側で計算済み) */
+  rotScore: number;
+  /** rotScore からの分類 */
+  rotLabel: RotScoreLabel;
+  /** 色 (ROT_SCORE_COLORS[rotLabel]) */
   color: string;
-  /** raw alert score */
-  alertScore: number;
+  /** 点半径 (daysSinceLast に応じて 4..12) */
+  r: number;
 };
 
 /** Drift 固有の空状態理由。EmptyStateCard へキャストして渡す。 */
 type DriftEmptyReason = 'drift-no-base' | 'drift-no-diverged';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const RADIUS_MIN = 4;
+const RADIUS_MAX = 12;
+/** daysSinceLast がこの値以上で最大半径 */
+const RADIUS_SATURATION_DAYS = 180;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -87,50 +128,50 @@ function estimateBase(refs: Array<{ name: string }>): string | null {
   return refs[0]?.name ?? null;
 }
 
-/**
- * Map an alert score (0–1) to an rgb() colour string.
- * 0.0 → green (#4ade80), 0.5 → yellow (#facc15), 1.0 → red (#f87171)
- *
- * NOTE: PR-B で BranchSidebar の computeRotScore / ROT_SCORE_COLORS に置換予定。
- */
-function scoreToColor(score: number): string {
-  const s = Math.max(0, Math.min(1, score));
-  if (s < 0.5) {
-    // green → yellow
-    const t = s * 2;
-    const r = Math.round(74 + (250 - 74) * t);
-    const g = Math.round(222 + (204 - 222) * t);
-    const b = Math.round(128 + (21 - 128) * t);
-    return `rgb(${r},${g},${b})`;
-  }
-  // yellow → red
-  const t = (s - 0.5) * 2;
-  const r = Math.round(250 + (248 - 250) * t);
-  const g = Math.round(204 + (113 - 204) * t);
-  const b = Math.round(21 + (113 - 21) * t);
-  return `rgb(${r},${g},${b})`;
-}
-
-function toDriftPoint(entry: RefDriftEntry): DriftPoint {
-  const alertScore = Math.min(1, (entry.ahead + entry.behind) / 100);
-  const ageDays = 0; // PR-B で BranchGroupHealth から daysSinceLast を取得
-  // r: PR-B で age に応じて 4..12 にマップ。現状はニュートラル 6。
-  const r = 6;
-  return {
-    ...entry,
-    ageDays,
-    r,
-    color: scoreToColor(alertScore),
-    alertScore,
-  };
-}
-
 function shortRefName(name: string): string {
-  // refs/heads/foo → foo, refs/remotes/origin/bar → origin/bar, refs/tags/v1 → v1
   if (name.startsWith('refs/heads/')) return name.slice('refs/heads/'.length);
   if (name.startsWith('refs/remotes/')) return name.slice('refs/remotes/'.length);
   if (name.startsWith('refs/tags/')) return name.slice('refs/tags/'.length);
   return name;
+}
+
+/** daysSinceLast を r=[RADIUS_MIN, RADIUS_MAX] にマップ */
+function daysToRadius(days: number): number {
+  if (!Number.isFinite(days) || days <= 0) return RADIUS_MIN;
+  const t = Math.min(1, days / RADIUS_SATURATION_DAYS);
+  return Math.round(RADIUS_MIN + (RADIUS_MAX - RADIUS_MIN) * t);
+}
+
+/** ISO 文字列を相対表記 (HotspotLens / CoChangeLens と挙動を揃える) */
+function formatRelative(iso: string | null): string {
+  if (!iso) return '不明';
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return iso;
+  const days = Math.floor(ms / 86_400_000);
+  if (days === 0) return 'today';
+  if (days === 1) return '1d ago';
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+function toDriftPoint(entry: BranchGroupEntry): DriftPoint {
+  const rotLabel = rotScoreLabel(entry.rotScore);
+  return {
+    name: entry.name,
+    shortName: entry.shortName,
+    hash: entry.hash,
+    ahead: entry.ahead,
+    behind: entry.behind,
+    mergeBase: entry.mergeBase,
+    updatedAt: entry.updatedAt,
+    daysSinceLast: entry.daysSinceLast,
+    rotScore: entry.rotScore,
+    rotLabel,
+    color: ROT_SCORE_COLORS[rotLabel],
+    r: daysToRadius(entry.daysSinceLast),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -144,8 +185,8 @@ function DriftHelpContent(): ReactNode {
         Drift Lens とは
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
-        全ブランチを <strong>base ブランチに対する ahead / behind</strong> で散布図にプロット。
-        散らばり方からブランチ整理の優先順位を把握できます。
+        全 <strong>local branches</strong> を base ブランチに対する ahead / behind で
+        散布図にプロット。散らばり方からブランチ整理の優先順位を把握できます。
       </div>
 
       <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
@@ -159,14 +200,22 @@ function DriftHelpContent(): ReactNode {
       </div>
 
       <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
-        点の色 (alertScore)
+        点のサイズ
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
-        <code>min(1, (ahead + behind) / 100)</code> を緑 → 黄 → 赤に補間。
-        合計コミット数が多いほど赤くなります。
-        <em style={{ color: 'var(--rs-text-muted)' }}>
-          {' '}(PR-B で BranchSidebar と同じ rotScore に統合予定)
-        </em>
+        最終コミットからの経過日数 (<code>daysSinceLast</code>) に応じて
+        {' '}{RADIUS_MIN} 〜 {RADIUS_MAX} px。古いブランチほど大きく表示されます。
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        点の色 (rotScore)
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
+        <code>clamp(D/7,0,10) + clamp(B/5,0,10) + clamp(A/10,0,5)</code> で算出される 0–25 のスコア。
+        BranchSidebar の色と統一しています。<br />
+        ・<span style={{ color: 'var(--rs-git-added)' }}>healthy (0–7)</span> ·
+        {' '}<span style={{ color: 'var(--rs-warning)' }}>warning (8–15)</span> ·
+        {' '}<span style={{ color: 'var(--rs-git-deleted)' }}>critical (16+)</span>
       </div>
 
       <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
@@ -181,17 +230,16 @@ function DriftHelpContent(): ReactNode {
         操作
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 4 }}>
-        ・点 <strong>クリック</strong> または <strong>Enter / Space</strong>: そのブランチを選択
-        (BranchSidebar が連動)<br />
-        ・<strong>Tab</strong>: 点間のフォーカス移動<br />
-        ・最大 <strong>50</strong> 件を表示。51 件目以降は警告バナーで明示します
+        ・点 <strong>クリック</strong> または <strong>Enter / Space</strong>:
+        {' '}そのブランチを選択し <strong>Risk Trend Lens</strong> に切替<br />
+        ・<strong>Tab</strong>: 点間のフォーカス移動
       </div>
     </>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Empty state messages (Drift 固有 reason を持つ messages map)
+// Empty state messages
 // ---------------------------------------------------------------------------
 
 const DRIFT_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> = {
@@ -201,9 +249,9 @@ const DRIFT_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> 
       'ref リストに main / master / trunk が含まれていないため、比較基点を決められません。リポジトリを開き直すか、Live Lens でブランチを確認してください。',
   },
   ['drift-no-diverged' as LensEmptyReason]: {
-    title: '分岐したブランチはありません',
+    title: 'local branches が見つかりません',
     body:
-      'すべての ref がベースブランチと揃っています。新規ブランチが作られたり、コミットが追加されると散布図に表示されます。',
+      'このリポジトリには表示可能な local branches がありません。新規ブランチを切るか、Live Lens で remote ブランチを確認してください。',
   },
 };
 
@@ -224,29 +272,40 @@ function DriftTooltip({ active, payload }: TooltipProps<number, string>) {
     fontSize: 12,
     fontFamily: 'var(--rs-mono)',
     color: 'var(--rs-text)',
-    maxWidth: 260,
+    maxWidth: 280,
     wordBreak: 'break-all',
   };
 
   return (
     <div style={containerStyle}>
       <div style={{ fontWeight: 600, marginBottom: 4, color: point.color }}>
-        {shortRefName(point.name)}
+        {point.shortName}
       </div>
       <div style={{ color: 'var(--rs-text-muted)', fontSize: 10, marginBottom: 4 }}>
         {point.name}
       </div>
-      <div>ahead: <strong>{point.ahead}</strong></div>
-      <div>behind: <strong>{point.behind}</strong></div>
-      <div style={{ color: 'var(--rs-text-secondary)', marginTop: 4, fontSize: 11 }}>
-        Click / Enter to select in BranchSidebar
+      <div>ahead: <strong>{point.ahead}</strong> · behind: <strong>{point.behind}</strong></div>
+      <div style={{ marginTop: 4 }}>
+        rotScore: <strong style={{ color: point.color }}>{point.rotScore}/25</strong>
+        {' '}({point.rotLabel})
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginTop: 2 }}>
+        Last commit: {formatRelative(point.updatedAt)}
+      </div>
+      {point.mergeBase && (
+        <div style={{ color: 'var(--rs-text-muted)', marginTop: 2, fontSize: 10 }}>
+          merge-base: {point.mergeBase.slice(0, 7)}
+        </div>
+      )}
+      <div style={{ color: 'var(--rs-text-secondary)', marginTop: 6, fontSize: 11 }}>
+        Click / Enter → Risk Trend Lens で詳細を見る
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Custom dot shape — needed to apply per-point colour, radius, and a11y
+// Custom dot shape
 // ---------------------------------------------------------------------------
 
 interface DotShapeProps {
@@ -254,17 +313,24 @@ interface DotShapeProps {
   cy?: number;
   payload?: DriftPoint;
   onActivate?: (name: string) => void;
+  selectedRef?: string;
 }
 
-function DotShape({ cx = 0, cy = 0, payload, onActivate }: DotShapeProps) {
+function DotShape({ cx = 0, cy = 0, payload, onActivate, selectedRef }: DotShapeProps) {
   if (!payload) return null;
   const refName = payload.name;
-  const label = shortRefName(refName);
+  const label = payload.shortName;
+  const isSelected = selectedRef === refName || selectedRef === payload.shortName;
+
   return (
     <g
       tabIndex={0}
       role="button"
-      aria-label={`${label}: ahead ${payload.ahead}, behind ${payload.behind}. Enter / Space to select.`}
+      aria-label={
+        `${label}: ahead ${payload.ahead}, behind ${payload.behind}, ` +
+        `rotScore ${payload.rotScore} of 25 (${payload.rotLabel}). ` +
+        `Enter / Space で Risk Trend Lens に切替。`
+      }
       onKeyDown={(e: KeyboardEvent<SVGGElement>) => {
         if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
           e.preventDefault();
@@ -275,7 +341,7 @@ function DotShape({ cx = 0, cy = 0, payload, onActivate }: DotShapeProps) {
       style={{ outline: 'none' }}
     >
       <title>{refName}</title>
-      {/* Focus ring (SVG 上で outline が効かないため独自に描画) */}
+      {/* Focus ring */}
       <circle
         cx={cx}
         cy={cy}
@@ -286,6 +352,18 @@ function DotShape({ cx = 0, cy = 0, payload, onActivate }: DotShapeProps) {
         strokeOpacity={0}
         className="rs-drift-focus-ring"
       />
+      {/* Selection ring (App.tsx の selectedRef と一致時に常時表示) */}
+      {isSelected && (
+        <circle
+          cx={cx}
+          cy={cy}
+          r={payload.r + 5}
+          fill="none"
+          stroke="var(--rs-accent)"
+          strokeWidth={2.5}
+          strokeOpacity={0.85}
+        />
+      )}
       <circle
         cx={cx}
         cy={cy}
@@ -293,7 +371,7 @@ function DotShape({ cx = 0, cy = 0, payload, onActivate }: DotShapeProps) {
         fill={payload.color}
         fillOpacity={0.75}
         stroke={payload.color}
-        strokeWidth={1}
+        strokeWidth={isSelected ? 2 : 1}
         style={{ cursor: 'pointer' }}
       />
     </g>
@@ -304,18 +382,21 @@ function DotShape({ cx = 0, cy = 0, payload, onActivate }: DotShapeProps) {
 // Main component
 // ---------------------------------------------------------------------------
 
-// Quadrant label readability fixes: WCAG コントラスト確保のため 12px + rs-text
 const QUADRANT_LABEL_STYLE: CSSProperties = {
   fontSize: 12,
   fill: 'var(--rs-text)',
   fontWeight: 500,
 };
 
-export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLensProps) {
+export function DriftLens({
+  repoId,
+  refs,
+  selectedRef,
+  onSelectRef,
+  onChangeLens,
+}: DriftLensProps) {
   const [points, setPoints] = useState<DriftPoint[]>([]);
   const [base, setBase] = useState<string | null>(null);
-  const [truncated, setTruncated] = useState(false);
-  const [limit] = useState(50);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const srDescId = useId();
@@ -333,14 +414,13 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
       setLoading(true);
       setError(null);
       try {
-        const res = await fetchRefDrift(
+        const res = await fetchBranchGroupHealth(
           repoId,
-          { base: estimatedBase, limit },
+          { base: estimatedBase },
           signal,
         );
-        const pts = res.refs.map(toDriftPoint);
+        const pts = res.branches.map(toDriftPoint);
         setPoints(pts);
-        setTruncated(res.truncated);
         setLoading(false);
       } catch (err) {
         if ((err as { name?: string }).name === 'AbortError') return;
@@ -348,7 +428,7 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
         setLoading(false);
       }
     },
-    [repoId, refs, limit],
+    [repoId, refs],
   );
 
   useEffect(() => {
@@ -362,11 +442,25 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
     void load(controller.signal);
   }, [load]);
 
-  // Determine axis domains with at least a minimum extent so reference lines render
-  const maxBehind = Math.max(10, ...points.map((p) => p.behind));
-  const maxAhead  = Math.max(10, ...points.map((p) => p.ahead));
-  const midBehind = Math.round(maxBehind / 2);
-  const midAhead  = Math.round(maxAhead  / 2);
+  const handleActivate = useCallback(
+    (name: string) => {
+      onSelectRef(name);
+      onChangeLens?.('risk-trend');
+    },
+    [onSelectRef, onChangeLens],
+  );
+
+  // Axis domains
+  const { maxBehind, maxAhead, midBehind, midAhead } = useMemo(() => {
+    const mb = Math.max(10, ...points.map((p) => p.behind));
+    const ma = Math.max(10, ...points.map((p) => p.ahead));
+    return {
+      maxBehind: mb,
+      maxAhead: ma,
+      midBehind: Math.round(mb / 2),
+      midAhead: Math.round(ma / 2),
+    };
+  }, [points]);
 
   const containerStyle: CSSProperties = {
     display: 'flex',
@@ -382,8 +476,8 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
       title="Drift"
       oneLiner={
         baseLabel
-          ? `base: ${shortRefName(baseLabel)} に対する ahead / behind を散布図で可視化`
-          : 'ベースブランチに対する全ブランチの分岐状況を散布図で可視化'
+          ? `base: ${shortRefName(baseLabel)} に対する local branches の ahead / behind を可視化`
+          : 'ベースブランチに対する local branches の分岐状況を可視化'
       }
       helpContent={<DriftHelpContent />}
     />
@@ -539,7 +633,7 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
     );
   }
 
-  // --- Empty (base found but no diverged branches) ---
+  // --- Empty (base found but no local branches) ---
   if (points.length === 0) {
     return (
       <div style={containerStyle}>
@@ -565,27 +659,7 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
     <div style={containerStyle}>
       {renderHeader(base)}
 
-      {truncated && (
-        <div
-          role="status"
-          style={{
-            margin: '0 16px 8px',
-            padding: '6px 10px',
-            background: 'color-mix(in oklab, var(--rs-bg-elevated), #b45309 18%)',
-            border: '1px solid #b45309',
-            borderRadius: 'var(--rs-radius-sm)',
-            fontFamily: 'var(--rs-sans)',
-            fontSize: 11,
-            color: '#b45309',
-            flexShrink: 0,
-          }}
-        >
-          ⚠ 表示は最初の <strong>{limit}</strong> 件で打ち切られています。
-          全件確認には他の Lens (Hotspot / Live) を併用してください。
-        </div>
-      )}
-
-      {/* SR-only graph description (CoChange と同パターン) */}
+      {/* SR-only graph description */}
       <span
         id={srDescId}
         style={{
@@ -601,12 +675,14 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
         }}
       >
         <p>
-          Drift 散布図。base: {base}。{points.length} 件のブランチ。
+          Drift 散布図。base: {base}。{points.length} 件の local branches。
         </p>
         <ul>
           {points.map((p) => (
             <li key={p.name}>
-              {shortRefName(p.name)}: ahead {p.ahead}, behind {p.behind}
+              {p.shortName}: ahead {p.ahead}, behind {p.behind},
+              rotScore {p.rotScore} ({p.rotLabel}),
+              last commit {formatRelative(p.updatedAt)}
             </li>
           ))}
         </ul>
@@ -615,14 +691,16 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
       <div
         style={{ flex: 1, minHeight: 0, padding: '12px 8px 8px' }}
         role="img"
-        aria-label={`Drift scatter chart: ${points.length} branches plotted by ahead and behind commits against base ${base}.`}
+        aria-label={
+          `Drift scatter chart: ${points.length} local branches plotted by ahead and behind ` +
+          `commits against base ${base}.`
+        }
         aria-describedby={srDescId}
       >
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 24, right: 32, bottom: 24, left: 16 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--rs-border)" />
 
-            {/* Quadrant guide lines */}
             <ReferenceLine
               x={midBehind}
               stroke="var(--rs-border)"
@@ -636,8 +714,6 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
               strokeOpacity={0.6}
             />
 
-            {/* Quadrant shading */}
-            {/* Left-bottom: Aligned (green tint) */}
             <ReferenceArea
               x1={0}
               x2={midBehind}
@@ -647,7 +723,6 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
               fillOpacity={0.05}
               label={{ value: 'Aligned', position: 'insideBottomLeft', style: QUADRANT_LABEL_STYLE }}
             />
-            {/* Left-top: Hot (yellow tint) */}
             <ReferenceArea
               x1={0}
               x2={midBehind}
@@ -657,7 +732,6 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
               fillOpacity={0.05}
               label={{ value: 'Hot', position: 'insideTopLeft', style: QUADRANT_LABEL_STYLE }}
             />
-            {/* Right-bottom: Stale (orange tint) */}
             <ReferenceArea
               x1={midBehind}
               x2={maxBehind + 1}
@@ -667,7 +741,6 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
               fillOpacity={0.05}
               label={{ value: 'Stale', position: 'insideBottomRight', style: QUADRANT_LABEL_STYLE }}
             />
-            {/* Right-top: Diverged (red tint) */}
             <ReferenceArea
               x1={midBehind}
               x2={maxBehind + 1}
@@ -710,17 +783,16 @@ export function DriftLens({ repoId, refs, onSelectRef, onChangeLens }: DriftLens
 
             <Scatter
               data={points}
-              shape={<DotShape onActivate={onSelectRef} />}
+              shape={<DotShape onActivate={handleActivate} selectedRef={selectedRef} />}
               onClick={(data: unknown) => {
                 const pt = data as DriftPoint | undefined;
-                if (pt?.name) onSelectRef(pt.name);
+                if (pt?.name) handleActivate(pt.name);
               }}
             />
           </ScatterChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Focus-visible style for SVG group focus ring */}
       <style>{`
         .rs-drift-dot:focus-visible .rs-drift-focus-ring {
           stroke-opacity: 0.85;
