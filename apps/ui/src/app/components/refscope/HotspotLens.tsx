@@ -7,7 +7,7 @@
  * - 点・行クリック → onOpenFileHistory(path) で既存のファイル履歴オーバーレイを開く
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import {
   ScatterChart,
   Scatter,
@@ -30,6 +30,7 @@ import {
   TableRow,
 } from '../ui/table';
 import { ScrollArea } from '../ui/scroll-area';
+import { LensHeader } from './LensHeader';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -92,24 +93,32 @@ function median(arr: number[]): number {
 }
 
 /**
- * Map normalized hot score t∈[0,1] to a 3-stop color: blue → amber → red.
- * Picked for perceptual contrast on dark backgrounds while remaining
- * distinguishable for common color-vision deficiencies.
+ * Map normalized hot score t∈[0,1] to a 3-stop color: blue → amber → magenta.
+ *
+ * 末端を red から magenta (#c026d3) に振り替えてある。理由は refscope 内で
+ * red (`--rs-git-deleted`) が Risk Heatmap の "HIGH risk" 用に使われており、
+ * 同じ色語彙で「リスク」と「リファクタ ROI」を表すと初見ユーザが混同する。
+ * Hotspot は ROI 軸の独自スケールであることを色で分離する。
  */
+const HOT_COLOR_STOPS: Array<[number, number, number]> = [
+  [59, 130, 246],   // #3b82f6 blue
+  [245, 158, 11],   // #f59e0b amber
+  [192, 38, 211],   // #c026d3 fuchsia / magenta
+];
+
 function computeHotColor(t: number): string {
   const c = Math.max(0, Math.min(1, t));
-  const stops: Array<[number, number, number]> = [
-    [59, 130, 246],   // #3b82f6 blue
-    [245, 158, 11],   // #f59e0b amber
-    [239, 68, 68],    // #ef4444 red
-  ];
   const seg = c * 2;
   const i = Math.min(1, Math.floor(seg));
   const f = seg - i;
-  const a = stops[i];
-  const b = stops[i + 1];
+  const a = HOT_COLOR_STOPS[i];
+  const b = HOT_COLOR_STOPS[i + 1];
   return `rgb(${Math.round(a[0] + (b[0] - a[0]) * f)}, ${Math.round(a[1] + (b[1] - a[1]) * f)}, ${Math.round(a[2] + (b[2] - a[2]) * f)})`;
 }
+
+/** ScatterLegend 等で使う CSS gradient (HOT_COLOR_STOPS と同期)。 */
+const HOT_COLOR_GRADIENT_CSS =
+  `linear-gradient(to right, rgb(${HOT_COLOR_STOPS[0].join(',')}), rgb(${HOT_COLOR_STOPS[1].join(',')}), rgb(${HOT_COLOR_STOPS[2].join(',')}))`;
 
 function formatRelative(iso: string): string {
   const ms = Date.now() - Date.parse(iso);
@@ -121,6 +130,70 @@ function formatRelative(iso: string): string {
   const months = Math.floor(days / 30);
   if (months < 12) return `${months}mo ago`;
   return `${Math.floor(months / 12)}y ago`;
+}
+
+// ---------------------------------------------------------------------------
+// Self-explanation content (LensHeader.helpContent)
+// ---------------------------------------------------------------------------
+
+function HotspotHelpContent() {
+  return (
+    <>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+        Hotspot Lens の見方
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        ファイルを <strong>サイズ (lines)</strong> と{' '}
+        <strong>変更頻度 (churn)</strong> の 2 軸でプロットし、
+        改修候補となるファイルを浮かび上がらせます。
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        hotScore の式
+      </div>
+      <div
+        style={{
+          fontFamily: 'var(--rs-mono)',
+          color: 'var(--rs-text)',
+          marginBottom: 8,
+          padding: '4px 8px',
+          background: 'var(--rs-bg-canvas)',
+          borderRadius: 'var(--rs-radius-sm)',
+        }}
+      >
+        log10(lines+1) × log10(churn+1)
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        4 象限
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        散布図の中央線 (lines / churn の中央値) を基準に:
+        <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+          <li><strong>Hotspot</strong>: 大きく頻繁に変わる — 改修優先候補</li>
+          <li><strong>Volatile · small</strong>: 小さいが頻繁に変わる — 分割候補</li>
+          <li><strong>Stable · big</strong>: 大きいがあまり変わらない — 安定</li>
+          <li><strong>Quiet</strong>: 小さく変わらない — 触らなくて良い</li>
+        </ul>
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        Risk Heatmap との違い
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        Risk Heatmap は <strong>"いつ・誰が"</strong> 危ない変更をしたか、
+        Hotspot は <strong>"どのファイル"</strong> が改修候補かを見ます。
+        色語彙も別系統 (Risk = 赤 / Hotspot = 青〜マゼンタ) にして混同を避けています。
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        色と粒度
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        点の色は hotScore (青 = 低 / マゼンタ = 高)、粒の大きさは
+        <strong> 最終変更日 (lastChangedAt) の新しさ</strong>。
+      </div>
+      <div style={{ color: 'var(--rs-text-muted)', fontSize: 11 }}>
+        observation only — refscope は書き込み操作を行いません。
+      </div>
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +413,7 @@ function ScatterLegend() {
             width: 56,
             height: 6,
             borderRadius: 3,
-            background: 'linear-gradient(to right, rgb(59,130,246), rgb(245,158,11), rgb(239,68,68))',
+            background: HOT_COLOR_GRADIENT_CSS,
             boxShadow: '0 0 0 1px var(--rs-border)',
           }}
         />
@@ -485,7 +558,7 @@ const RANKING_HEAD_NUM_STYLE: CSSProperties = {
   textAlign: 'right',
 };
 
-type SortKey = 'path' | 'lines' | 'churn' | 'lastChangedAt';
+type SortKey = 'path' | 'lines' | 'churn' | 'hotScore' | 'lastChangedAt';
 type SortDir = 'asc' | 'desc';
 
 /** Default sort direction when switching to a new column. */
@@ -493,6 +566,7 @@ const DEFAULT_DIR: Record<SortKey, SortDir> = {
   path: 'asc',
   lines: 'desc',
   churn: 'desc',
+  hotScore: 'desc',
   lastChangedAt: 'desc',
 };
 
@@ -501,6 +575,7 @@ function compareFiles(a: HotspotFileEntry, b: HotspotFileEntry, key: SortKey): n
     case 'path':          return a.path.localeCompare(b.path);
     case 'lines':         return a.lines - b.lines;
     case 'churn':         return a.churn - b.churn;
+    case 'hotScore':      return computeHotScore(a.lines, a.churn) - computeHotScore(b.lines, b.churn);
     case 'lastChangedAt': return Date.parse(a.lastChangedAt) - Date.parse(b.lastChangedAt);
   }
 }
@@ -513,6 +588,7 @@ function SortableHead({
   onSort,
   align = 'left',
   width,
+  description,
 }: {
   label: string;
   sortKey: SortKey;
@@ -521,27 +597,62 @@ function SortableHead({
   onSort: (key: SortKey) => void;
   align?: 'left' | 'right';
   width?: number;
+  description?: string;
 }) {
   const baseStyle = align === 'right' ? RANKING_HEAD_NUM_STYLE : RANKING_HEAD_STYLE;
   const arrow = active ? (dir === 'asc' ? '↑' : '↓') : '';
+  const ariaSort: 'ascending' | 'descending' | 'none' = active
+    ? dir === 'asc'
+      ? 'ascending'
+      : 'descending'
+    : 'none';
+  const nextDir = active && dir === 'asc' ? 'desc' : active ? 'asc' : DEFAULT_DIR[sortKey];
+  const ariaLabel = `${label} で並び替え (現在: ${
+    active ? (dir === 'asc' ? '昇順' : '降順') : '未選択'
+  }、クリックで${nextDir === 'asc' ? '昇順' : '降順'}に切替)`;
   return (
     <TableHead
-      onClick={() => onSort(sortKey)}
-      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      aria-sort={ariaSort}
       style={{
         ...baseStyle,
         ...(width != null ? { width } : {}),
-        cursor: 'pointer',
-        userSelect: 'none',
-        color: active ? 'var(--rs-accent)' : baseStyle.color,
+        padding: 0,
       }}
     >
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: align === 'right' ? 'flex-end' : 'flex-start', width: '100%' }}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        title={description}
+        aria-label={ariaLabel}
+        style={{
+          display: 'inline-flex',
+          width: '100%',
+          height: '100%',
+          minHeight: 30,
+          padding: '0 10px',
+          alignItems: 'center',
+          justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+          gap: 4,
+          background: 'transparent',
+          border: 'none',
+          color: active ? 'var(--rs-accent)' : baseStyle.color,
+          font: 'inherit',
+          fontSize: 10,
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          fontFamily: 'var(--rs-sans)',
+          cursor: 'pointer',
+          userSelect: 'none',
+          outline: 'none',
+        }}
+        className="rs-hotspot-sort-btn"
+      >
         <span>{label}</span>
-        <span style={{ width: 10, color: active ? 'var(--rs-accent)' : 'var(--rs-text-muted)' }}>
+        <span aria-hidden="true" style={{ width: 10, color: active ? 'var(--rs-accent)' : 'var(--rs-text-muted)' }}>
           {arrow || (active ? '' : '↕')}
         </span>
-      </span>
+      </button>
     </TableHead>
   );
 }
@@ -662,81 +773,183 @@ function RankingPanel({
         <TableHeader>
           <TableRow>
             <TableHead style={{ ...RANKING_HEAD_STYLE, width: 48 }}>#</TableHead>
-            <SortableHead label="path" sortKey="path" active={sortKey === 'path'} dir={sortDir} onSort={handleSort} />
-            <SortableHead label="lines" sortKey="lines" active={sortKey === 'lines'} dir={sortDir} onSort={handleSort} align="right" width={80} />
-            <SortableHead label="churn" sortKey="churn" active={sortKey === 'churn'} dir={sortDir} onSort={handleSort} align="right" width={72} />
-            <SortableHead label="last changed" sortKey="lastChangedAt" active={sortKey === 'lastChangedAt'} dir={sortDir} onSort={handleSort} width={120} />
+            <SortableHead
+              label="path"
+              sortKey="path"
+              active={sortKey === 'path'}
+              dir={sortDir}
+              onSort={handleSort}
+              description="ファイルパスで並び替え"
+            />
+            <SortableHead
+              label="lines"
+              sortKey="lines"
+              active={sortKey === 'lines'}
+              dir={sortDir}
+              onSort={handleSort}
+              align="right"
+              width={80}
+              description="作業ツリーでの現行行数"
+            />
+            <SortableHead
+              label="churn"
+              sortKey="churn"
+              active={sortKey === 'churn'}
+              dir={sortDir}
+              onSort={handleSort}
+              align="right"
+              width={72}
+              description="分析対象コミット中で該当ファイルが変更された回数"
+            />
+            <SortableHead
+              label="hotScore"
+              sortKey="hotScore"
+              active={sortKey === 'hotScore'}
+              dir={sortDir}
+              onSort={handleSort}
+              align="right"
+              width={84}
+              description="log10(lines+1) × log10(churn+1) — 改修候補度。散布図の色とも対応"
+            />
+            <SortableHead
+              label="last changed"
+              sortKey="lastChangedAt"
+              active={sortKey === 'lastChangedAt'}
+              dir={sortDir}
+              onSort={handleSort}
+              width={120}
+              description="直近のコミット日時"
+            />
             <TableHead style={{ ...RANKING_HEAD_STYLE, width: 72 }}>操作</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {sorted.map((file, idx) => (
-            <TableRow
-              key={file.path}
-              onClick={() => onClickPath(file.path)}
-              style={{ cursor: 'pointer' }}
-            >
-              <TableCell style={{ color: 'var(--rs-text-secondary)', fontSize: 11 }}>
-                {idx + 1}
-              </TableCell>
-              <TableCell
-                style={{
-                  fontFamily: 'var(--rs-mono)',
-                  fontSize: 11,
-                  maxWidth: 360,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+          {sorted.map((file, idx) => {
+            const hotScore = computeHotScore(file.lines, file.churn);
+            return (
+              <TableRow
+                key={file.path}
+                onClick={() => onClickPath(file.path)}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onClickPath(file.path);
+                  }
                 }}
-                title={file.path}
+                tabIndex={0}
+                role="button"
+                aria-label={`${file.path} の履歴を開く (lines: ${file.lines}, churn: ${file.churn}, hotScore: ${hotScore.toFixed(1)})`}
+                className="rs-hotspot-row"
+                style={{ cursor: 'pointer' }}
               >
-                {file.path}
-              </TableCell>
-              <TableCell
-                style={{
-                  textAlign: 'right',
-                  fontFamily: 'var(--rs-mono)',
-                  fontSize: 11,
-                  ...barCellStyle((file.lines / maxLines) * 100),
-                }}
-              >
-                {file.lines.toLocaleString()}
-              </TableCell>
-              <TableCell
-                style={{
-                  textAlign: 'right',
-                  fontFamily: 'var(--rs-mono)',
-                  fontSize: 11,
-                  ...barCellStyle((file.churn / maxChurn) * 100),
-                }}
-              >
-                {file.churn}
-              </TableCell>
-              <TableCell style={{ fontSize: 11, color: 'var(--rs-text-secondary)' }}>
-                {formatRelative(file.lastChangedAt)}
-              </TableCell>
-              <TableCell>
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); onClickPath(file.path); }}
+                <TableCell style={{ color: 'var(--rs-text-secondary)', fontSize: 11 }}>
+                  {idx + 1}
+                </TableCell>
+                <TableCell
                   style={{
+                    fontFamily: 'var(--rs-mono)',
                     fontSize: 11,
-                    padding: '2px 6px',
-                    borderRadius: 'var(--rs-radius-sm)',
-                    border: '1px solid var(--rs-border)',
-                    background: 'transparent',
-                    color: 'var(--rs-text-secondary)',
-                    cursor: 'pointer',
+                    maxWidth: 360,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={file.path}
+                >
+                  {file.path}
+                </TableCell>
+                <TableCell
+                  style={{
+                    textAlign: 'right',
+                    fontFamily: 'var(--rs-mono)',
+                    fontSize: 11,
+                    ...barCellStyle((file.lines / maxLines) * 100),
                   }}
                 >
-                  履歴
-                </button>
-              </TableCell>
-            </TableRow>
-          ))}
+                  {file.lines.toLocaleString()}
+                </TableCell>
+                <TableCell
+                  style={{
+                    textAlign: 'right',
+                    fontFamily: 'var(--rs-mono)',
+                    fontSize: 11,
+                    ...barCellStyle((file.churn / maxChurn) * 100),
+                  }}
+                >
+                  {file.churn}
+                </TableCell>
+                <TableCell
+                  style={{
+                    textAlign: 'right',
+                    fontFamily: 'var(--rs-mono)',
+                    fontSize: 11,
+                    color: 'var(--rs-text)',
+                  }}
+                  title={`log10(${file.lines}+1) × log10(${file.churn}+1) = ${hotScore.toFixed(2)}`}
+                >
+                  {hotScore.toFixed(1)}
+                </TableCell>
+                <TableCell style={{ fontSize: 11, color: 'var(--rs-text-secondary)' }}>
+                  {formatRelative(file.lastChangedAt)}
+                </TableCell>
+                <TableCell>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onClickPath(file.path); }}
+                    aria-label={`${file.path} の履歴を開く`}
+                    style={{
+                      fontSize: 11,
+                      padding: '2px 8px',
+                      borderRadius: 'var(--rs-radius-sm)',
+                      border: '1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 35%)',
+                      background: 'color-mix(in oklab, transparent, var(--rs-accent) 8%)',
+                      color: 'var(--rs-accent)',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    履歴
+                  </button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
       </ScrollArea>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shell — 全状態 (loading/error/empty/main) で共通する style + LensHeader
+// ---------------------------------------------------------------------------
+
+function HotspotShell({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <style>{`
+        .rs-hotspot-sort-btn:focus-visible {
+          outline: 2px solid var(--rs-accent);
+          outline-offset: -2px;
+        }
+        .rs-hotspot-row:focus-visible {
+          outline: 2px solid var(--rs-accent);
+          outline-offset: -2px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .rs-hotspot-tab-trigger {
+            transition: none !important;
+          }
+        }
+      `}</style>
+      <LensHeader
+        title="Hotspot"
+        oneLiner="LOC × churn の 2 軸で改修候補ファイルを見つける"
+        helpContent={<HotspotHelpContent />}
+      />
+      {children}
     </div>
   );
 }
@@ -894,23 +1107,23 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
 
   if (loading && !data) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <HotspotShell>
         {toolbar}
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ fontSize: 13, color: 'var(--rs-text-secondary)', fontFamily: 'var(--rs-sans)' }}>
             ホットスポットを分析中…
           </div>
         </div>
-      </div>
+      </HotspotShell>
     );
   }
 
   if (error && !data) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <HotspotShell>
         {toolbar}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          <div style={{ fontSize: 13, color: '#ef4444', fontFamily: 'var(--rs-sans)' }}>
+          <div style={{ fontSize: 13, color: 'var(--rs-git-deleted)', fontFamily: 'var(--rs-sans)' }}>
             ホットスポットの取得に失敗しました
           </div>
           <div style={{ fontSize: 11, color: 'var(--rs-text-secondary)', fontFamily: 'var(--rs-mono)', maxWidth: 400, textAlign: 'center' }}>
@@ -932,13 +1145,13 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
             再試行
           </button>
         </div>
-      </div>
+      </HotspotShell>
     );
   }
 
   if (data && data.files.length === 0) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <HotspotShell>
         {toolbar}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
           <div style={{ fontSize: 13, color: 'var(--rs-text-secondary)', fontFamily: 'var(--rs-sans)' }}>
@@ -948,7 +1161,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
             {data.refLabel}
           </div>
         </div>
-      </div>
+      </HotspotShell>
     );
   }
 
@@ -957,7 +1170,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
   // ---------------------------------------------------------------------------
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <HotspotShell>
       {toolbar}
       {stats && <SummaryStrip stats={stats} />}
       <Tabs
@@ -982,7 +1195,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
           >
             <TabsTrigger
               value="scatter"
-              className="!rounded-none !border-0 !bg-transparent !shadow-none data-[state=active]:!bg-transparent data-[state=active]:!shadow-none data-[state=active]:!border-0"
+              className="rs-hotspot-tab-trigger !rounded-none !border-0 !bg-transparent !shadow-none data-[state=active]:!bg-transparent data-[state=active]:!shadow-none data-[state=active]:!border-0"
               style={{
                 fontSize: 12,
                 fontFamily: 'var(--rs-sans)',
@@ -999,7 +1212,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
             </TabsTrigger>
             <TabsTrigger
               value="ranking"
-              className="!rounded-none !border-0 !bg-transparent !shadow-none data-[state=active]:!bg-transparent data-[state=active]:!shadow-none data-[state=active]:!border-0"
+              className="rs-hotspot-tab-trigger !rounded-none !border-0 !bg-transparent !shadow-none data-[state=active]:!bg-transparent data-[state=active]:!shadow-none data-[state=active]:!border-0"
               style={{
                 fontSize: 12,
                 fontFamily: 'var(--rs-sans)',
@@ -1035,6 +1248,6 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
           />
         </TabsContent>
       </Tabs>
-    </div>
+    </HotspotShell>
   );
 }
