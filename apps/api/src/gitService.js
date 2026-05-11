@@ -1087,11 +1087,37 @@ export function createGitService(config) {
         }),
       );
 
+      // Resolve HEAD so the UI can identify which entry in `branches` is the
+      // currently checked-out branch. `git rev-parse --abbrev-ref HEAD`
+      // returns the branch short name when HEAD points to a branch and the
+      // literal "HEAD" string when HEAD is detached. We pair it with
+      // `rev-parse --verify HEAD` to obtain the resolved hash, and surface
+      // `head: null` on detached HEAD or on any runner failure.
+      let head = null;
+      try {
+        const abbrev = await runGit(repo, ["rev-parse", "--abbrev-ref", "HEAD"], {
+          timeoutMs: config.gitTimeoutMs,
+        });
+        const headName = abbrev.stdout.trim();
+        if (headName && headName !== "HEAD") {
+          const headHashResult = await runGit(repo, ["rev-parse", "--verify", "HEAD"], {
+            timeoutMs: config.gitTimeoutMs,
+          });
+          const headHash = headHashResult.stdout.trim();
+          if (headHash && /^[A-Fa-f0-9]{40}$/.test(headHash)) {
+            head = { name: headName, hash: headHash };
+          }
+        }
+      } catch {
+        // Detached HEAD or rev-parse failure → leave `head` as null.
+      }
+
       return {
         status: 200,
         body: {
           prefix: prefix ?? null,
           base: { input: base, resolved: baseRevision.hash },
+          head,
           branches,
         },
       };
