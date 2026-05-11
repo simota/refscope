@@ -29,6 +29,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "../ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { Filter } from "lucide-react";
 import type { SearchMode } from "../../api";
 import type { GitRef, Repository } from "./data";
 
@@ -307,44 +309,15 @@ export function TopBar({
             </span>
           </div>
         </div>
-        <div
-          className="hidden xl:flex shrink-0 items-center gap-2 px-3"
-          style={{
-            width: 120,
-            height: 30,
-            background: "var(--rs-bg-canvas)",
-            border: "1px solid var(--rs-border)",
-            borderRadius: "var(--rs-radius-sm)",
-          }}
-        >
-          <User size={13} style={{ color: "var(--rs-text-muted)" }} />
-          <input
-            value={author}
-            onChange={(event) => onAuthorChange(event.target.value)}
-            placeholder="Author"
-            className="bg-transparent outline-none min-w-0 flex-1"
-            style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
-          />
-        </div>
-        <div
-          className="hidden xl:flex shrink-0 items-center gap-2 px-3"
-          style={{
-            width: 140,
-            height: 30,
-            background: "var(--rs-bg-canvas)",
-            border: "1px solid var(--rs-border)",
-            borderRadius: "var(--rs-radius-sm)",
-          }}
-        >
-          <FileSearch size={13} style={{ color: "var(--rs-text-muted)" }} />
-          <input
-            value={path}
-            onChange={(event) => onPathChange(event.target.value)}
-            placeholder="Path"
-            className="bg-transparent outline-none min-w-0 flex-1"
-            style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
-          />
-        </div>
+        {/* Author + Path の 2 入力を 1 つの Filters Popover に集約。
+            xl-breakpoint 依存の消失挙動を解消し、全 viewport で安定操作可能。
+            active 件数を trigger に accent badge で常時可視化。 */}
+        <FiltersMenu
+          author={author}
+          path={path}
+          onAuthorChange={onAuthorChange}
+          onPathChange={onPathChange}
+        />
         {/* Active path-scope chip — only rendered when a scope is active.
             Visible at all viewports (the path input above hides at sub-xl)
             so a monorepo user always knows what's filtered, and can clear it
@@ -548,6 +521,240 @@ function LivePulse({
         />
       ))}
     </span>
+  );
+}
+
+/**
+ * FiltersMenu — Author / Path filters を 1 つの Popover に集約。
+ *
+ * 旧実装は 2 つの input chip (それぞれ独立した枠 + xl-breakpoint 依存) で
+ * 視覚的に分散し、xl 未満では消えていた。Popover 化により:
+ *   - 全 viewport で安定して filter を編集できる
+ *   - active 件数を trigger に accent badge で常時可視化
+ *   - ViewOptionsMenu と同じ "compact-button + active accent" パターンで統一感
+ *
+ * Path-scope chip は引き続き TopBar 本体に残し、1-click clear の利便性を保つ。
+ */
+function FiltersMenu({
+  author,
+  path,
+  onAuthorChange,
+  onPathChange,
+}: {
+  author: string;
+  path: string;
+  onAuthorChange: (value: string) => void;
+  onPathChange: (value: string) => void;
+}) {
+  const activeCount = (author ? 1 : 0) + (path ? 1 : 0);
+  const triggerActive = activeCount > 0;
+  const clearAll = () => {
+    if (author) onAuthorChange("");
+    if (path) onPathChange("");
+  };
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="rs-compact-button shrink-0"
+          aria-label={
+            triggerActive
+              ? `Filters (${activeCount} active)`
+              : "Filters"
+          }
+          title={
+            triggerActive
+              ? `${activeCount} filter${activeCount === 1 ? "" : "s"} active`
+              : "Filters: author and path"
+          }
+          style={
+            triggerActive
+              ? {
+                  color: "var(--rs-text-primary)",
+                  borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
+                  background: "var(--rs-bg-elevated)",
+                }
+              : undefined
+          }
+        >
+          <Filter size={11} aria-hidden style={{ marginRight: 4 }} />
+          Filters
+          {triggerActive ? (
+            <span
+              aria-hidden
+              style={{
+                marginLeft: 4,
+                padding: "0 5px",
+                borderRadius: 999,
+                fontSize: 10,
+                fontWeight: 600,
+                color: "var(--rs-accent)",
+                background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 25%)",
+              }}
+            >
+              {activeCount}
+            </span>
+          ) : null}
+          <ChevronDown size={11} aria-hidden style={{ marginLeft: 4 }} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        sideOffset={6}
+        className="w-72"
+        style={{
+          background: "var(--rs-bg-elevated)",
+          color: "var(--rs-text-primary)",
+          border: "1px solid var(--rs-border)",
+          fontFamily: "var(--rs-mono)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: "0.6px",
+            textTransform: "uppercase",
+            color: "var(--rs-text-secondary)",
+            marginBottom: 8,
+          }}
+        >
+          Filters
+        </div>
+        <label
+          htmlFor="topbar-filter-author"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 11,
+            color: "var(--rs-text-secondary)",
+            marginBottom: 4,
+            fontFamily: "var(--rs-sans)",
+          }}
+        >
+          <User size={12} aria-hidden />
+          Author
+        </label>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            height: 30,
+            padding: "0 8px",
+            marginBottom: 10,
+            background: "var(--rs-bg-canvas)",
+            border: "1px solid var(--rs-border)",
+            borderRadius: "var(--rs-radius-sm)",
+          }}
+        >
+          <input
+            id="topbar-filter-author"
+            value={author}
+            onChange={(event) => onAuthorChange(event.target.value)}
+            placeholder="alice@example.com"
+            className="bg-transparent outline-none min-w-0 flex-1"
+            style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
+          />
+          {author && (
+            <button
+              type="button"
+              onClick={() => onAuthorChange("")}
+              aria-label="Clear author filter"
+              title="Clear"
+              style={{
+                width: 16,
+                height: 16,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "transparent",
+                border: "none",
+                color: "var(--rs-text-muted)",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              <X size={11} aria-hidden />
+            </button>
+          )}
+        </div>
+        <label
+          htmlFor="topbar-filter-path"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 11,
+            color: "var(--rs-text-secondary)",
+            marginBottom: 4,
+            fontFamily: "var(--rs-sans)",
+          }}
+        >
+          <FileSearch size={12} aria-hidden />
+          Path
+        </label>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            height: 30,
+            padding: "0 8px",
+            marginBottom: 12,
+            background: "var(--rs-bg-canvas)",
+            border: "1px solid var(--rs-border)",
+            borderRadius: "var(--rs-radius-sm)",
+          }}
+        >
+          <input
+            id="topbar-filter-path"
+            value={path}
+            onChange={(event) => onPathChange(event.target.value)}
+            placeholder="src/foo"
+            className="bg-transparent outline-none min-w-0 flex-1"
+            style={{ fontSize: 12, color: "var(--rs-text-primary)" }}
+          />
+          {path && (
+            <button
+              type="button"
+              onClick={() => onPathChange("")}
+              aria-label="Clear path filter"
+              title="Clear"
+              style={{
+                width: 16,
+                height: 16,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "transparent",
+                border: "none",
+                color: "var(--rs-text-muted)",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              <X size={11} aria-hidden />
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={clearAll}
+          disabled={!triggerActive}
+          className="rs-compact-button"
+          aria-label="Clear all filters"
+          style={{
+            width: "100%",
+            justifyContent: "center",
+            opacity: triggerActive ? 1 : 0.5,
+            cursor: triggerActive ? "pointer" : "not-allowed",
+          }}
+        >
+          Clear all
+        </button>
+      </PopoverContent>
+    </Popover>
   );
 }
 
