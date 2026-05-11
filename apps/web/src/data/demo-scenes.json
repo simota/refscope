@@ -86,5 +86,29 @@
     "description": "Right-click any file row, or open the path prompt from the top bar, to see one file's history: a hunk timeline, a branch-drift halo, and a related-files panel that surfaces co-change neighbours from the same commits.",
     "alt": "File history view for a single path, showing the per-file timeline, branch drift halo, and a related-files (co-change) panel listing co-changing paths.",
     "lengthSec": 8
+  },
+  {
+    "n": "12",
+    "slug": "hotspot-lens",
+    "title": "Hotspot lens, the case for refactoring on a scatter",
+    "description": "Switch to `Hotspot`. Each file is a point: X is lines of code (log scale), Y is churn, size is recency of the last change. A ranking table sits beside the scatter; clicking a row or a point opens that file's history in place.",
+    "alt": "Hotspot lens with a scatter of files plotted on lines-of-code against churn axes, beside a ranking table listing the top files by churn and recency.",
+    "lengthSec": 8
+  },
+  {
+    "n": "13",
+    "slug": "risk-trend-lens",
+    "title": "Risk Trend lens, riskScore over time",
+    "description": "Switch to `Risk Trend`. The area chart reads `riskScore` for each observed commit; horizontal lines mark the LOW and HIGH thresholds; the brush lets you zoom the window. Click a point to open that commit in the detail panel.",
+    "alt": "Risk Trend lens showing an area chart of per-commit risk score over time, with two horizontal threshold lines and a brush control beneath the chart.",
+    "lengthSec": 7
+  },
+  {
+    "n": "14",
+    "slug": "fleet-mode",
+    "title": "Fleet mode, several observatories at once",
+    "description": "Append `?fleet=1` to switch into Fleet mode. Refscope polls every allowlisted repository every 30 seconds, aggregates activity over a `1h`, `6h`, `24h`, or `7d` window, and lists per-repo SSE availability. Click a row to drop into that repository in Detail mode.",
+    "alt": "Fleet mode listing several repositories as rows with aggregated activity counts over the selected window and per-repo SSE availability indicators.",
+    "lengthSec": 7
   }
 ]

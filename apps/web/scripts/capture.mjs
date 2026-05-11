@@ -314,6 +314,69 @@ async function captureFileHistory(page, theme) {
   await captureFull(page, resolve(MEDIA_DIR, `demo-11-file-history-${theme}.png`));
 }
 
+async function captureHotspotLens(page, theme) {
+  await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
+  await applyTheme(page, theme);
+  await settle(page);
+  const ok = await clickLensTab(page, "hotspot");
+  if (!ok) {
+    warn("hotspot lens tab not found; capturing default lens");
+  }
+  // The lens runs a `git log --numstat` pass over the full history before
+  // it can plot anything; on larger repositories that takes a few seconds.
+  // Wait for the loading placeholder ("分析中") to disappear, then give
+  // Recharts a beat to lay the scatter out.
+  await page
+    .waitForFunction(
+      () => !/分析中|Analyzing/.test(document.body.innerText || ""),
+      null,
+      { timeout: 8000 },
+    )
+    .catch(() => { /* keep going; capture will show the placeholder */ });
+  await page.waitForTimeout(800);
+  await captureFull(page, resolve(MEDIA_DIR, `demo-12-hotspot-lens-${theme}.png`));
+}
+
+async function captureRiskTrendLens(page, theme) {
+  await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
+  await applyTheme(page, theme);
+  await settle(page);
+  const ok = await clickLensTab(page, "risk-trend");
+  if (!ok) {
+    warn("risk-trend lens tab not found; capturing default lens");
+  }
+  // AreaChart fades in; give Recharts a moment so the line and threshold
+  // lines render before the screenshot.
+  await page.waitForTimeout(900);
+  await captureFull(page, resolve(MEDIA_DIR, `demo-13-risk-trend-lens-${theme}.png`));
+}
+
+async function captureFleetMode(page, theme) {
+  // Dismiss the onboarding overlay before navigating. The overlay reads its
+  // localStorage flag on mount, so we have to set it before the first paint;
+  // doing it on the LP origin first then navigating to the Fleet URL keeps
+  // both reads inside the same origin.
+  await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
+  await page.evaluate(() => {
+    try { localStorage.setItem("refscope.fleet.intro.dismissed.v1", "true"); } catch { /* ignore */ }
+  });
+  await page.goto(`${UI_URL}/?fleet=1`, { waitUntil: "domcontentloaded" });
+  await applyTheme(page, theme);
+  await settle(page);
+  // Fleet polls every 30s but the first snapshot is fetched immediately on
+  // mount. Wait for the per-repo rows to populate; "snapshot 2s ago" or any
+  // numeric activity cell signals the first poll has resolved.
+  await page
+    .waitForFunction(
+      () => /snapshot \d+s ago|snapshot just now/.test(document.body.innerText || ""),
+      null,
+      { timeout: 8000 },
+    )
+    .catch(() => { /* keep going; capture will show the in-flight state */ });
+  await page.waitForTimeout(500);
+  await captureFull(page, resolve(MEDIA_DIR, `demo-14-fleet-mode-${theme}.png`));
+}
+
 async function capturePalette(page, theme) {
   await page.goto(UI_URL, { waitUntil: "domcontentloaded" });
   await applyTheme(page, theme);
@@ -434,6 +497,9 @@ async function main() {
       try { await capturePulseLens(page, theme); }     catch (e) { warn(`scene 09 ${theme}: ${e.message}`); }
       try { await captureStreamLens(page, theme); }   catch (e) { warn(`scene 10 ${theme}: ${e.message}`); }
       try { await captureFileHistory(page, theme); }  catch (e) { warn(`scene 11 ${theme}: ${e.message}`); }
+      try { await captureHotspotLens(page, theme); }  catch (e) { warn(`scene 12 ${theme}: ${e.message}`); }
+      try { await captureRiskTrendLens(page, theme); }catch (e) { warn(`scene 13 ${theme}: ${e.message}`); }
+      try { await captureFleetMode(page, theme); }    catch (e) { warn(`scene 14 ${theme}: ${e.message}`); }
 
       await ctx.close();
     }
