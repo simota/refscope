@@ -113,10 +113,12 @@ export function FleetOnboardingOverlay({ isQuiet }: { isQuiet: boolean }) {
           A dash (&mdash;) means no Git event was observed in the last 24 hours, not that something is broken.
         </p>
         <p style={{ margin: "0 0 8px" }}>
-          Click any row to open that repo in detail view. Press Esc to return here.
+          Click any row to open that repo in detail view. Use the top bar&apos;s Fleet
+          toggle to return here.
         </p>
         <p style={{ margin: 0, color: "var(--rs-text-secondary)" }}>
           You can also add repos via the Add button below or via the RTGV_REPOS env var.
+          Click Got it or × to dismiss.
         </p>
       </div>
 

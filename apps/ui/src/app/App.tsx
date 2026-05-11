@@ -178,6 +178,28 @@ export default function App() {
   const [fleetError, setFleetError] = useState<string | null>(null);
   const fleetAbortRef = useRef<AbortController | null>(null);
 
+  // Fleet 集計窓セレクタ (1h/6h/24h/7d)。localStorage に永続化し、再起動後も復元。
+  // API 型 (FleetSnapshot["window"]) は既に対応済だが UI は 24h ハードコードだった
+  // (Echo J-2 / Spark ID-3a)。
+  const [fleetWindow, setFleetWindowState] = useState<"1h" | "6h" | "24h" | "7d">(() => {
+    if (typeof window === "undefined") return "24h";
+    try {
+      const raw = window.localStorage.getItem("refscope.fleet.window.v1");
+      if (raw === "1h" || raw === "6h" || raw === "24h" || raw === "7d") return raw;
+    } catch {
+      // localStorage 不可: default 維持
+    }
+    return "24h";
+  });
+  const setFleetWindow = useCallback((next: "1h" | "6h" | "24h" | "7d") => {
+    setFleetWindowState(next);
+    try {
+      window.localStorage.setItem("refscope.fleet.window.v1", next);
+    } catch {
+      // 永続化失敗: in-memory state のみで継続
+    }
+  }, []);
+
   // AddRepoDialog state — Step 7 will wire real API call.
   const [addRepoDialogOpen, setAddRepoDialogOpen] = useState(false);
 
@@ -196,6 +218,9 @@ export default function App() {
   }, []);
 
   // Fleet polling: 30s setInterval, starts when mode='fleet', cleans up on mode switch/unmount.
+  // Magi 争点 #4: Page Visibility 連動。document.hidden 時は poll skip し、
+  // visible 復帰で即時 1 回 fetch (背景タブの不要な git 呼び出しを抑制)。
+  // fleetWindow が変わると依存配列により effect 再起動 → 直前 abort + 即時新 window で fetch。
   useEffect(() => {
     if (mode !== "fleet") return;
 
@@ -210,7 +235,7 @@ export default function App() {
       // If no repos are known yet, omit include= so the API returns all.
       try {
         const snapshot = await fetchFleetSnapshot({
-          window: "24h",
+          window: fleetWindow,
           signal: controller.signal,
         });
         if (!controller.signal.aborted) {
@@ -230,16 +255,34 @@ export default function App() {
       }
     }
 
-    void poll();
-    const timer = setInterval(() => { void poll(); }, 30_000);
+    function maybePoll() {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void poll();
+    }
+
+    // 初回 + window 切替時の即時 fetch。
+    maybePoll();
+    const timer = setInterval(maybePoll, 30_000);
+    // タブが visible に戻ったタイミングで即時 1 回 poll し直す (古い snapshot を更新)。
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && !document.hidden) {
+        maybePoll();
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibility);
+    }
 
     return () => {
       clearInterval(timer);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibility);
+      }
       fleetAbortRef.current?.abort();
       fleetAbortRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+  }, [mode, fleetWindow]);
 
   // Hoisted before `handleFleetSelectRepo` to avoid TDZ on `recordLastOpened`.
   const { lastOpenedRepos, recordLastOpened, evictRepo } = useLastOpenedRepos();
@@ -1417,6 +1460,8 @@ export default function App() {
                 .map((r) => [r.id, r.origin as "env" | "ui"]),
             )}
             onRemoveRepo={handleRemoveRepo}
+            fleetWindow={fleetWindow}
+            onWindowChange={setFleetWindow}
           />
         </div>
       )}
