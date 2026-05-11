@@ -1,49 +1,148 @@
 ---
-const lenses = [
+type Lens = { id: string; name: string; summary: string };
+type Group = { eyebrow: string; lede: string; lenses: Lens[] };
+
+const groups: Group[] = [
   {
-    id: "live",
-    name: "Live",
-    summary: "The commit timeline as a single, calm column.",
-    body: "The default view. Refs, working-tree changes, and incoming commits read top to bottom. Live updates do not steal focus and do not auto-scroll the row you were reading.",
+    eyebrow: "Timeline",
+    lede: "The default lenses. Each reads the same commits and working-tree edits in a different shape.",
+    lenses: [
+      {
+        id: "live",
+        name: "Live",
+        summary: "The commit timeline as a single, calm column. Live updates do not steal focus and do not auto-scroll the row you were reading.",
+      },
+      {
+        id: "pulse",
+        name: "Pulse",
+        summary: "A canvas of file-change particles, colored by kind, sized by churn, bursting when a file changes. Idle, it breathes; busy, it pops.",
+      },
+      {
+        id: "stream",
+        name: "Stream",
+        summary: "One row per file change, in reverse chronological order. New commits arrive at the top; working-tree edits are interleaved as they happen.",
+      },
+    ],
   },
   {
-    id: "pulse",
-    name: "Pulse",
-    summary: "A canvas of file-change particles, drifting and bursting in real time.",
-    body: "Each particle is a file, colored by its kind and sized by how often it changes. When a file's contents shift, that particle bursts with sparks and a brief flash. Idle, the field breathes; busy, it pops like popcorn. Right-click any particle to open its file history; uncommitted edits surface alongside committed changes.",
+    eyebrow: "Risk",
+    lede: "Aggregate views over churn, drift, and rewrite-adjacent state. Read them like an observation log, not an alarm bell.",
+    lenses: [
+      {
+        id: "hotspot",
+        name: "Hotspot",
+        summary: "LOC against churn on a scatter, with a ranking table beside it. Surfaces files where refactoring would pay back.",
+      },
+      {
+        id: "risk-trend",
+        name: "Risk Trend",
+        summary: "Per-commit `riskScore` as an area chart over time, with brush-to-zoom and a click-through to the commit detail.",
+      },
+      {
+        id: "risk-heatmap",
+        name: "Risk Heatmap",
+        summary: "Author × date or date × hour intensity. Cells encode score with a colour-blind safe scale tied to dynamic thresholds.",
+      },
+      {
+        id: "co-change",
+        name: "Co-change",
+        summary: "A force-directed graph of files that move together. Edge weight is the co-change count; double-click opens file history.",
+      },
+      {
+        id: "drift",
+        name: "Drift",
+        summary: "All local branches on an ahead/behind scatter. Point size encodes staleness; quadrants label Aligned, Hot, Stale, Diverged.",
+      },
+      {
+        id: "outbox",
+        name: "Outbox",
+        summary: "Three columns of work that has not left your machine yet: uncommitted, stashed, and ahead of upstream.",
+      },
+    ],
   },
   {
-    id: "stream",
-    name: "Stream",
-    summary: "One row per file change, in reverse chronological order.",
-    body: "An event-shaped feed: status, path, additions, deletions, and the commit it belongs to. New commits arrive at the top; working-tree edits are interleaved as they happen. Right-click a row to open its file history.",
+    eyebrow: "Specialist",
+    lede: "Lenses that open in specific situations — a rewrite to recover from, a window to summarise, a symbol to follow.",
+    lenses: [
+      {
+        id: "digest",
+        name: "Digest",
+        summary: "Activity over 24h or 7d as a 2×2 dashboard: top contributors, hotspot delta, risky commits, and ref activity.",
+      },
+      {
+        id: "rescue",
+        name: "Rescue",
+        summary: "Every observed history-rewritten snapshot with copyable `git reflog` and recovery-branch commands. Refscope never runs them for you.",
+      },
+      {
+        id: "symbol",
+        name: "Symbol",
+        summary: "A single symbol's history across commits, opened from a file row. Useful when one function or class is the thread you are pulling.",
+      },
+    ],
   },
 ];
+
+const fleetNoteId = "lenses-fleet-note";
 ---
 <section id="lenses" class="rs-section" aria-labelledby="lenses-heading">
   <div class="rs-container">
     <p class="rs-eyebrow">Lenses</p>
-    <h2 id="lenses-heading">Three lenses over the same repository.</h2>
+    <h2 id="lenses-heading">Twelve lenses over the same repository.</h2>
     <p class="rs-lede">
-      Switch between Live, Pulse, and Stream without losing the active ref, the selected commit, or any filters.
+      Switch perspectives without losing the active ref, the selected commit, or any filters.
       Each lens is a different way to read the same observed facts.
     </p>
 
-    <div class="rs-grid-3 rs-lenses">
-      {lenses.map((l) => (
-        <article class="rs-lens rs-card">
-          <p class="rs-lens__tag" aria-hidden="true"><code>{l.id}</code></p>
-          <h3 class="rs-lens__name">{l.name}</h3>
-          <p class="rs-lens__summary">{l.summary}</p>
-          <p class="rs-lens__body">{l.body}</p>
-        </article>
-      ))}
-    </div>
+    {groups.map((g) => (
+      <div class="rs-lens-group" aria-labelledby={`lens-group-${g.eyebrow.toLowerCase()}`}>
+        <p class="rs-eyebrow rs-lens-group__eyebrow" id={`lens-group-${g.eyebrow.toLowerCase()}`}>{g.eyebrow}</p>
+        <p class="rs-lens-group__lede">{g.lede}</p>
+        <div class="rs-grid-3 rs-lenses">
+          {g.lenses.map((l) => (
+            <article class="rs-lens rs-card">
+              <p class="rs-lens__tag" aria-hidden="true"><code>{l.id}</code></p>
+              <h3 class="rs-lens__name">{l.name}</h3>
+              <p class="rs-lens__summary">{l.summary}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    ))}
+
+    <aside class="rs-fleet" aria-describedby={fleetNoteId}>
+      <div class="rs-fleet__head">
+        <p class="rs-eyebrow">Fleet</p>
+        <h3 class="rs-fleet__title">One observatory, many repositories.</h3>
+      </div>
+      <div class="rs-fleet__copy">
+        <p id={fleetNoteId} class="rs-fleet__body">
+          Append <code>?fleet=1</code> to the URL to switch into Fleet mode. Refscope polls every
+          allowlisted repository at 30-second intervals, aggregates activity over a
+          <code>1h</code>, <code>6h</code>, <code>24h</code>, or <code>7d</code> window, and shows
+          SSE availability and any untracked exclusions per row.
+        </p>
+        <p class="rs-fleet__body">
+          Click a row to open that repository in the lens you were last using.
+        </p>
+      </div>
+    </aside>
   </div>
 </section>
 
 <style>
-  .rs-lenses { margin-top: var(--spacing-6); }
+  .rs-lens-group { margin-top: var(--spacing-6); }
+  .rs-lens-group__eyebrow {
+    margin-bottom: var(--spacing-1);
+  }
+  .rs-lens-group__lede {
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-base);
+    line-height: var(--leading-snug);
+    margin: 0 0 var(--spacing-4);
+    max-width: 64ch;
+  }
+  .rs-lenses { margin-top: 0; }
   .rs-lens {
     display: grid;
     gap: var(--spacing-2);
@@ -74,15 +173,52 @@ const lenses = [
     margin: 0;
   }
   .rs-lens__summary {
-    color: var(--rs-fg-base);
-    font-size: var(--text-base);
-    line-height: var(--leading-snug);
-    margin: 0;
-  }
-  .rs-lens__body {
     color: var(--rs-fg-subtle);
     font-size: var(--text-sm);
     line-height: var(--leading-normal);
     margin: 0;
+  }
+
+  .rs-fleet {
+    margin-top: clamp(32px, 5vw, 56px);
+    padding: clamp(20px, 3vw, 28px) clamp(20px, 3vw, 32px);
+    border: 1px solid var(--rs-border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--rs-bg-raised);
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--spacing-4);
+    align-items: start;
+  }
+  @media (min-width: 768px) {
+    .rs-fleet {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      gap: clamp(24px, 4vw, 48px);
+    }
+  }
+  .rs-fleet__head {
+    display: grid;
+    gap: var(--spacing-2);
+  }
+  .rs-fleet__title {
+    margin: 0;
+    font-size: clamp(18px, 2.2vw, 22px);
+    font-weight: var(--font-weight-medium);
+    line-height: var(--leading-snug);
+    letter-spacing: var(--tracking-tight);
+    max-width: 18ch;
+  }
+  .rs-fleet__copy {
+    display: grid;
+    gap: var(--spacing-3);
+  }
+  .rs-fleet__body {
+    margin: 0;
+    color: var(--rs-fg-subtle);
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+  }
+  .rs-fleet__body code {
+    font-size: 0.92em;
   }
 </style>
