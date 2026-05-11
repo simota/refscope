@@ -8,9 +8,8 @@
  * - 点クリック → onSelectCommit(hash)
  * - 空 / 全 score=0 / authorDate 欠落 → 3 状態を区別したプレースホルダ
  *
- * TODO(LensHeader): Phase 2.5 で `LensHeader` 共通 primitive へ抽出予定。
- * 現状はこのファイル内に local 実装 (header + empty-state Card)。
- * 抽出時の props surface: { title, oneLiner, helpContent, related: LensId[] }
+ * Self-explanation header は LensHeader primitive を使用。
+ * Empty state Card もこのファイル内に local 実装で残存（Phase 2 で共通化予定）。
  */
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import {
@@ -27,10 +26,29 @@ import {
   type TooltipProps,
 } from 'recharts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
-import type { Commit, CoarseKind, ChangedFile, SignatureStatus } from './data';
+import type { Commit, CoarseKind, SignatureStatus } from './data';
 import type { LensId } from './LensSwitcher';
-import { percentile } from './percentile';
 import { dayKey } from './dateKey';
+import { LensHeader, RiskScoreLegend } from './LensHeader';
+import {
+  EmptyStateCard,
+  RiskScoreLegendInline,
+  type LensEmptyReason,
+  type EmptyStateMessage,
+} from './EmptyStateCard';
+import {
+  ThresholdSelector,
+  useThresholdState,
+  computeThresholds,
+  DEFAULT_LOW,
+  DEFAULT_HIGH,
+  type ThresholdState,
+} from './lensThreshold';
+import {
+  RiskFactorsCard,
+  pickTopFiles,
+  type TopFile,
+} from './RiskFactorsCard';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,13 +65,6 @@ export type RiskTrendLensProps = {
    * 未指定時はドラッグ範囲選択 UI が無効化される。
    */
   onSelectRange?: (fromTs: number, toTs: number) => void;
-};
-
-type TopFile = {
-  basename: string;
-  status: string;
-  changes: number;
-  structuralKind?: ChangedFile['structuralKind'];
 };
 
 type ChartPoint = {
@@ -103,61 +114,7 @@ type DailyPoint = {
 
 export type AggregationMode = 'per-commit' | 'per-day';
 
-// ---------------------------------------------------------------------------
-// Threshold mode (P9) — Fixed / Auto (p90/p99) / Custom
-// ---------------------------------------------------------------------------
-
-export type ThresholdMode = 'fixed' | 'auto' | 'custom';
-
-export type ThresholdState = {
-  mode: ThresholdMode;
-  customLow: number;
-  customHigh: number;
-};
-
-const DEFAULT_LOW = 1;
-const DEFAULT_HIGH = 50;
 const TOP_FILE_COUNT = 3;
-const STORAGE_KEY = 'refscope.riskTrend.threshold';
-const DEFAULT_THRESHOLD: ThresholdState = {
-  mode: 'fixed',
-  customLow: DEFAULT_LOW,
-  customHigh: DEFAULT_HIGH,
-};
-
-function loadThresholdState(): ThresholdState {
-  if (typeof window === 'undefined') return DEFAULT_THRESHOLD;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_THRESHOLD;
-    const parsed = JSON.parse(raw) as Partial<ThresholdState>;
-    if (
-      (parsed.mode === 'fixed' || parsed.mode === 'auto' || parsed.mode === 'custom') &&
-      typeof parsed.customLow === 'number' &&
-      Number.isFinite(parsed.customLow) &&
-      typeof parsed.customHigh === 'number' &&
-      Number.isFinite(parsed.customHigh)
-    ) {
-      return {
-        mode: parsed.mode,
-        customLow: parsed.customLow,
-        customHigh: parsed.customHigh,
-      };
-    }
-  } catch {
-    // ignore corrupt storage
-  }
-  return DEFAULT_THRESHOLD;
-}
-
-function saveThresholdState(s: ThresholdState): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-  } catch {
-    // ignore quota / disabled storage
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Aggregation view state (P1) — Per-commit / Per-day + MA toggle
@@ -223,43 +180,6 @@ function formatDateTimeTooltip(iso: string): string {
   return `${yyyy}/${mm}/${dd} ${hh}:${mi}`;
 }
 
-/** path の basename を返す */
-function basename(path: string): string {
-  const idx = path.lastIndexOf('/');
-  return idx >= 0 ? path.slice(idx + 1) : path;
-}
-
-/** 変更量降順で上位 N ファイルを返す (added + deleted > 0 のみ) */
-function pickTopFiles(files: ChangedFile[], limit: number): TopFile[] {
-  return files
-    .filter((f) => (f.added ?? 0) + (f.deleted ?? 0) > 0)
-    .map((f) => ({
-      basename: basename(f.path),
-      status: f.status,
-      changes: (f.added ?? 0) + (f.deleted ?? 0),
-      structuralKind: f.structuralKind,
-    }))
-    .sort((a, b) => b.changes - a.changes)
-    .slice(0, limit);
-}
-
-/** coarseKind を人間語ラベルに */
-function coarseKindLabel(kind?: CoarseKind): string | null {
-  if (!kind) return null;
-  switch (kind) {
-    case 'likely_logic':
-      return 'logic';
-    case 'likely_refactor':
-      return 'refactor';
-    case 'empty':
-      return 'empty';
-  }
-}
-
-/** signatureStatus が表示すべき状態か */
-function shouldShowSignature(s?: SignatureStatus): boolean {
-  return !!s && s !== 'unknown' && s !== 'unsigned';
-}
 
 /** 同日コミットを集約して DailyPoint[] を返す (P1) */
 function aggregateDaily(points: ChartPoint[]): DailyPoint[] {
@@ -342,176 +262,12 @@ function RiskTooltip({ active, payload, lowThreshold, highThreshold }: RiskToolt
   if (!active || !payload?.length) return null;
   const item = (payload[0] as RiskTooltipPayload).payload;
   if (!item) return null;
-
-  const score = item.riskScore;
-  const scoreColor =
-    score >= highThreshold
-      ? 'var(--rs-git-deleted)'
-      : score >= lowThreshold
-        ? 'var(--rs-warning)'
-        : 'var(--rs-text-secondary)';
-
-  const kindLabel = coarseKindLabel(item.coarseKind);
-  const showSig = shouldShowSignature(item.signatureStatus);
-
   return (
-    <div
-      style={{
-        background: 'var(--rs-bg-elevated)',
-        border: '1px solid var(--rs-border)',
-        borderRadius: 'var(--rs-radius-sm)',
-        padding: '8px 10px',
-        fontSize: 11,
-        fontFamily: 'var(--rs-sans)',
-        maxWidth: 320,
-        pointerEvents: 'none',
-        lineHeight: 1.45,
-      }}
-    >
-      {/* Hash */}
-      <div
-        style={{
-          fontWeight: 600,
-          marginBottom: 4,
-          fontFamily: 'var(--rs-mono)',
-          fontSize: 10,
-          color: 'var(--rs-text-secondary)',
-        }}
-      >
-        {item.hash.slice(0, 7)}
-      </div>
-
-      {/* Subject */}
-      <div
-        style={{
-          fontWeight: 500,
-          marginBottom: 4,
-          wordBreak: 'break-all',
-          color: 'var(--rs-text)',
-        }}
-      >
-        {item.subject}
-      </div>
-
-      {/* Author + 高精度日時 */}
-      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 4 }}>
-        {item.author} · {item.dateTimeLabel}
-      </div>
-
-      {/* riskScore */}
-      <div style={{ color: scoreColor, fontWeight: 600, marginBottom: 6 }}>
-        riskScore: {score}
-      </div>
-
-      {/* Risk factors */}
-      <div
-        style={{
-          borderTop: '1px solid var(--rs-border)',
-          paddingTop: 6,
-          marginTop: 2,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-        }}
-      >
-        {/* Lines / files */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span style={{ color: 'var(--rs-git-added)', fontFamily: 'var(--rs-mono)' }}>
-            +{item.added}
-          </span>
-          <span style={{ color: 'var(--rs-git-deleted)', fontFamily: 'var(--rs-mono)' }}>
-            −{item.deleted}
-          </span>
-          <span style={{ color: 'var(--rs-text-muted)' }}>
-            {item.fileCount} {item.fileCount === 1 ? 'file' : 'files'}
-          </span>
-        </div>
-
-        {/* Badges row: kind + merge + signed */}
-        {(kindLabel || item.isMerge || showSig) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            {kindLabel && (
-              <span
-                style={{
-                  fontSize: 9,
-                  padding: '1px 5px',
-                  borderRadius: 4,
-                  background: 'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-text-muted) 15%)',
-                  color: 'var(--rs-text-secondary)',
-                  fontFamily: 'var(--rs-mono)',
-                  textTransform: 'uppercase',
-                  letterSpacing: 0.5,
-                }}
-              >
-                {kindLabel}
-              </span>
-            )}
-            {item.isMerge && (
-              <span
-                style={{
-                  fontSize: 9,
-                  padding: '1px 5px',
-                  borderRadius: 4,
-                  background: 'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 18%)',
-                  color: 'var(--rs-accent)',
-                  fontFamily: 'var(--rs-mono)',
-                  textTransform: 'uppercase',
-                  letterSpacing: 0.5,
-                }}
-              >
-                merge
-              </span>
-            )}
-            {showSig && (
-              <span
-                style={{
-                  fontSize: 9,
-                  padding: '1px 5px',
-                  borderRadius: 4,
-                  background: 'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 15%)',
-                  color: 'var(--rs-warning)',
-                  fontFamily: 'var(--rs-mono)',
-                  textTransform: 'uppercase',
-                  letterSpacing: 0.5,
-                }}
-                title={`signature: ${item.signatureStatus}`}
-              >
-                {item.signatureStatus}
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Top files */}
-        {item.topFiles.length > 0 && (
-          <div style={{ marginTop: 2 }}>
-            {item.topFiles.map((f) => (
-              <div
-                key={f.basename}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  fontFamily: 'var(--rs-mono)',
-                  fontSize: 10,
-                  color: 'var(--rs-text-secondary)',
-                }}
-              >
-                <span style={{ width: 10, color: 'var(--rs-text-muted)' }}>{f.status}</span>
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {f.basename}
-                </span>
-                {f.structuralKind && (
-                  <span style={{ color: 'var(--rs-text-muted)', fontSize: 9 }}>
-                    {f.structuralKind}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+    <RiskFactorsCard
+      factor={item}
+      lowThreshold={lowThreshold}
+      highThreshold={highThreshold}
+    />
   );
 }
 
@@ -603,422 +359,43 @@ function DailyTooltip({ active, payload, lowThreshold, highThreshold }: DailyToo
 }
 
 // ---------------------------------------------------------------------------
-// Self-explanation header (P10 — TODO(LensHeader) で抽出予定)
+// Lens-specific header — LensHeader primitive を使用 (riskScore 用)
 // ---------------------------------------------------------------------------
 
-function LensHeader() {
+function RiskTrendLensHeader() {
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '8px 16px 6px',
-        flexShrink: 0,
-      }}
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-        <div
-          style={{
-            fontFamily: 'var(--rs-sans)',
-            fontSize: 13,
-            fontWeight: 600,
-            color: 'var(--rs-text)',
-          }}
-        >
-          Risk Trend
-        </div>
-        <div
-          style={{
-            fontFamily: 'var(--rs-sans)',
-            fontSize: 11,
-            color: 'var(--rs-text-secondary)',
-          }}
-        >
-          riskScore の時系列推移 — どのコミットがリスクの転機だったかを辿る
-        </div>
-      </div>
-
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            aria-label="riskScore の意味を表示"
-            style={{
-              width: 24,
-              height: 24,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: 'var(--rs-radius-sm)',
-              border: '1px solid var(--rs-border)',
-              background: 'transparent',
-              color: 'var(--rs-text-secondary)',
-              fontFamily: 'var(--rs-sans)',
-              fontSize: 12,
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
-          >
-            ?
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-80 text-xs">
-          <div style={{ fontFamily: 'var(--rs-sans)', lineHeight: 1.5 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
-              riskScore とは
-            </div>
-            <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
-              Risky Diff Detector がコミット毎に算出するスコア。
-              変更行数・ファイル構造・コメントなど複数の特徴から導かれる。
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span
-                  style={{
-                    display: 'inline-block',
-                    width: 10,
-                    height: 10,
-                    borderRadius: '50%',
-                    background: 'var(--rs-text-muted)',
-                  }}
-                />
-                <span style={{ fontFamily: 'var(--rs-mono)', fontSize: 11 }}>0</span>
-                <span style={{ color: 'var(--rs-text-secondary)' }}>リスクなし</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span
-                  style={{
-                    display: 'inline-block',
-                    width: 10,
-                    height: 10,
-                    borderRadius: '50%',
-                    background: 'var(--rs-warning)',
-                  }}
-                />
-                <span style={{ fontFamily: 'var(--rs-mono)', fontSize: 11 }}>1–49</span>
-                <span style={{ color: 'var(--rs-text-secondary)' }}>warning (LOW 閾値)</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span
-                  style={{
-                    display: 'inline-block',
-                    width: 10,
-                    height: 10,
-                    borderRadius: '50%',
-                    background: 'var(--rs-git-deleted)',
-                  }}
-                />
-                <span style={{ fontFamily: 'var(--rs-mono)', fontSize: 11 }}>50+</span>
-                <span style={{ color: 'var(--rs-text-secondary)' }}>danger (HIGH 閾値)</span>
-              </div>
-            </div>
-          </div>
-        </PopoverContent>
-      </Popover>
-    </div>
+    <LensHeader
+      title="Risk Trend"
+      oneLiner="riskScore の時系列推移 — どのコミットがリスクの転機だったかを辿る"
+      helpAriaLabel="riskScore の意味を表示"
+      helpContent={<RiskScoreLegend />}
+    />
   );
 }
 
 // ---------------------------------------------------------------------------
-// Empty state Card — 3 状態を区別 (P10)
+// Lens-specific empty-state messages (3 区別)
 // ---------------------------------------------------------------------------
 
-type EmptyReason = 'no-commits' | 'no-risky' | 'no-author-date';
+const TREND_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> = {
+  'no-commits': {
+    title: '表示するコミットがありません',
+    body: '現在の選択範囲に該当するコミットがありません。ブランチ・期間フィルタを変更してみてください。',
+  },
+  'no-risky': {
+    title: 'リスクスコアの高いコミットがありません',
+    body: '全コミットの riskScore が 0 です。LOW (1) 以上のコミットが見つからないため、トレンドは描画されません。',
+  },
+  'no-author-date': {
+    title: 'authorDate が取得できませんでした',
+    body: 'プロットには各コミットの authorDate が必要です。API の応答に authorDate が含まれているか確認してください。',
+  },
+};
 
-function EmptyStateCard({
-  reason,
-  onChangeLens,
-}: {
-  reason: EmptyReason;
-  onChangeLens?: (lens: LensId) => void;
-}) {
-  const messages: Record<EmptyReason, { title: string; body: string }> = {
-    'no-commits': {
-      title: '表示するコミットがありません',
-      body: '現在の選択範囲に該当するコミットがありません。ブランチ・期間フィルタを変更してみてください。',
-    },
-    'no-risky': {
-      title: 'リスクスコアの高いコミットがありません',
-      body: '全コミットの riskScore が 0 です。LOW (1) 以上のコミットが見つからないため、トレンドは描画されません。',
-    },
-    'no-author-date': {
-      title: 'authorDate が取得できませんでした',
-      body: 'プロットには各コミットの authorDate が必要です。API の応答に authorDate が含まれているか確認してください。',
-    },
-  };
-
-  const m = messages[reason];
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        padding: 24,
-      }}
-    >
-      <div
-        style={{
-          maxWidth: 440,
-          padding: '20px 24px',
-          background: 'var(--rs-bg-elevated)',
-          border: '1px solid var(--rs-border)',
-          borderRadius: 'var(--rs-radius-md)',
-          fontFamily: 'var(--rs-sans)',
-        }}
-      >
-        <div
-          style={{
-            fontSize: 14,
-            fontWeight: 600,
-            color: 'var(--rs-text)',
-            marginBottom: 8,
-          }}
-        >
-          {m.title}
-        </div>
-        <div
-          style={{
-            fontSize: 12,
-            color: 'var(--rs-text-secondary)',
-            lineHeight: 1.6,
-            marginBottom: 16,
-          }}
-        >
-          {m.body}
-        </div>
-
-        <div
-          style={{
-            fontSize: 11,
-            color: 'var(--rs-text-muted)',
-            marginBottom: 12,
-            paddingTop: 12,
-            borderTop: '1px solid var(--rs-border)',
-          }}
-        >
-          riskScore: <span style={{ fontFamily: 'var(--rs-mono)' }}>0</span> リスクなし ·{' '}
-          <span style={{ fontFamily: 'var(--rs-mono)', color: 'var(--rs-warning)' }}>1–49</span> warning ·{' '}
-          <span style={{ fontFamily: 'var(--rs-mono)', color: 'var(--rs-git-deleted)' }}>50+</span> danger
-        </div>
-
-        {onChangeLens && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={() => onChangeLens('risk-heatmap')}
-              style={{
-                height: 28,
-                padding: '0 12px',
-                fontSize: 11,
-                fontFamily: 'var(--rs-sans)',
-                borderRadius: 'var(--rs-radius-sm)',
-                border: '1px solid var(--rs-border)',
-                background: 'transparent',
-                color: 'var(--rs-text-secondary)',
-                cursor: 'pointer',
-              }}
-            >
-              Risk Heatmap を開く
-            </button>
-            <button
-              type="button"
-              onClick={() => onChangeLens('hotspot')}
-              style={{
-                height: 28,
-                padding: '0 12px',
-                fontSize: 11,
-                fontFamily: 'var(--rs-sans)',
-                borderRadius: 'var(--rs-radius-sm)',
-                border: '1px solid var(--rs-border)',
-                background: 'transparent',
-                color: 'var(--rs-text-secondary)',
-                cursor: 'pointer',
-              }}
-            >
-              Hotspot を開く
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Threshold Selector (P9) — Fixed / Auto / Custom 切替 + localStorage 永続化
-// ---------------------------------------------------------------------------
-
-function ThresholdSelector({
-  threshold,
-  onChange,
-}: {
-  threshold: ThresholdState;
-  onChange: (next: ThresholdState) => void;
-}) {
-  const modeLabel: Record<ThresholdMode, string> = {
-    fixed: 'Fixed',
-    auto: 'Auto',
-    custom: 'Custom',
-  };
-
-  const optionRow = (mode: ThresholdMode, title: string, hint: string) => {
-    const active = threshold.mode === mode;
-    return (
-      <button
-        type="button"
-        onClick={() => onChange({ ...threshold, mode })}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-          padding: '6px 8px',
-          textAlign: 'left',
-          background: active
-            ? 'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 15%)'
-            : 'transparent',
-          color: active ? 'var(--rs-accent)' : 'var(--rs-text)',
-          border: '1px solid',
-          borderColor: active
-            ? 'color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)'
-            : 'transparent',
-          borderRadius: 'var(--rs-radius-sm)',
-          fontFamily: 'var(--rs-sans)',
-          fontSize: 11,
-          cursor: 'pointer',
-        }}
-      >
-        <span style={{ fontWeight: 600 }}>{title}</span>
-        <span style={{ color: 'var(--rs-text-secondary)', fontSize: 10 }}>{hint}</span>
-      </button>
-    );
-  };
-
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={`閾値モード: ${modeLabel[threshold.mode]}`}
-          style={{
-            height: 22,
-            padding: '0 8px',
-            fontSize: 10,
-            fontFamily: 'var(--rs-sans)',
-            border: '1px solid var(--rs-border)',
-            borderRadius: 'var(--rs-radius-sm)',
-            background: 'transparent',
-            color: 'var(--rs-text-secondary)',
-            cursor: 'pointer',
-          }}
-        >
-          閾値: {modeLabel[threshold.mode]} ▾
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72">
-        <div style={{ fontFamily: 'var(--rs-sans)', fontSize: 12, lineHeight: 1.5 }}>
-          <div
-            style={{
-              fontWeight: 600,
-              marginBottom: 8,
-              color: 'var(--rs-text)',
-              fontSize: 13,
-            }}
-          >
-            閾値モード
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {optionRow('fixed', 'Fixed (1 / 50)', '仕様デフォルト')}
-            {optionRow('auto', 'Auto (p90 / p99)', '現データの分布から自動算出')}
-            {optionRow('custom', 'Custom', '手動で LOW / HIGH を指定')}
-          </div>
-
-          {threshold.mode === 'custom' && (
-            <div
-              style={{
-                marginTop: 10,
-                padding: 8,
-                borderTop: '1px solid var(--rs-border)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 40, color: 'var(--rs-warning)', fontWeight: 600 }}>LOW</span>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={threshold.customLow}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (Number.isFinite(v)) {
-                      onChange({ ...threshold, customLow: v });
-                    }
-                  }}
-                  style={{
-                    flex: 1,
-                    height: 26,
-                    padding: '0 8px',
-                    fontFamily: 'var(--rs-mono)',
-                    fontSize: 12,
-                    border: '1px solid var(--rs-border)',
-                    borderRadius: 'var(--rs-radius-sm)',
-                    background: 'var(--rs-bg-elevated)',
-                    color: 'var(--rs-text)',
-                  }}
-                />
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 40, color: 'var(--rs-git-deleted)', fontWeight: 600 }}>HIGH</span>
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={threshold.customHigh}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (Number.isFinite(v)) {
-                      onChange({ ...threshold, customHigh: v });
-                    }
-                  }}
-                  style={{
-                    flex: 1,
-                    height: 26,
-                    padding: '0 8px',
-                    fontFamily: 'var(--rs-mono)',
-                    fontSize: 12,
-                    border: '1px solid var(--rs-border)',
-                    borderRadius: 'var(--rs-radius-sm)',
-                    background: 'var(--rs-bg-elevated)',
-                    color: 'var(--rs-text)',
-                  }}
-                />
-              </label>
-            </div>
-          )}
-
-          <div
-            style={{
-              marginTop: 10,
-              paddingTop: 8,
-              borderTop: '1px solid var(--rs-border)',
-              fontSize: 10,
-              color: 'var(--rs-text-muted)',
-            }}
-          >
-            選択は localStorage に保存されます
-          </div>
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
+const TREND_RELATED_LENSES = [
+  { id: 'risk-heatmap' as const, label: 'Risk Heatmap を開く' },
+  { id: 'hotspot' as const, label: 'Hotspot を開く' },
+];
 
 // ---------------------------------------------------------------------------
 // Aggregation Selector (P1) — Per-commit / Per-day + MA toggle
@@ -1208,13 +585,10 @@ export function RiskTrendLens({
   );
 
   // ---------------------------------------------------------------------------
-  // Threshold mode state (P9) — localStorage 永続化
+  // Threshold mode state (P9) — 共通 primitive 経由で永続化
   // ---------------------------------------------------------------------------
 
-  const [threshold, setThreshold] = useState<ThresholdState>(loadThresholdState);
-  useEffect(() => {
-    saveThresholdState(threshold);
-  }, [threshold]);
+  const [threshold, setThreshold] = useThresholdState();
 
   // ---------------------------------------------------------------------------
   // Aggregation view state (P1) — localStorage 永続化
@@ -1311,31 +685,16 @@ export function RiskTrendLens({
     return { x1, x2 };
   }, [dragStartIdx, dragEndIdx, view.aggregation, perCommitSeries, perDaySeries]);
 
-  const { lowThreshold, highThreshold } = useMemo(() => {
-    if (threshold.mode === 'custom') {
-      const lo = Math.max(0, Math.round(threshold.customLow));
-      const hi = Math.max(lo + 1, Math.round(threshold.customHigh));
-      return { lowThreshold: lo, highThreshold: hi };
-    }
-    if (threshold.mode === 'auto') {
-      const nonzero = chartData
-        .map((p) => p.riskScore)
-        .filter((s) => s > 0);
-      if (nonzero.length === 0) {
-        return { lowThreshold: DEFAULT_LOW, highThreshold: DEFAULT_HIGH };
-      }
-      const p90 = Math.max(1, Math.round(percentile(nonzero, 90)));
-      const p99 = Math.max(p90 + 1, Math.round(percentile(nonzero, 99)));
-      return { lowThreshold: p90, highThreshold: p99 };
-    }
-    return { lowThreshold: DEFAULT_LOW, highThreshold: DEFAULT_HIGH };
-  }, [threshold, chartData]);
+  const { lowThreshold, highThreshold } = useMemo(
+    () => computeThresholds(threshold, chartData.map((p) => p.riskScore)),
+    [threshold, chartData],
+  );
 
   // ---------------------------------------------------------------------------
   // Empty-state classification — 3 区別 (P10)
   // ---------------------------------------------------------------------------
 
-  const emptyReason: EmptyReason | null = useMemo(() => {
+  const emptyReason: LensEmptyReason | null = useMemo(() => {
     if (commits.length === 0) return 'no-commits';
     if (chartData.length === 0) return 'no-author-date';
     if (chartData.every((p) => p.riskScore === 0)) return 'no-risky';
@@ -1345,8 +704,14 @@ export function RiskTrendLens({
   if (emptyReason) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <LensHeader />
-        <EmptyStateCard reason={emptyReason} onChangeLens={onChangeLens} />
+        <RiskTrendLensHeader />
+        <EmptyStateCard
+          reason={emptyReason}
+          messages={TREND_EMPTY_MESSAGES}
+          onChangeLens={onChangeLens}
+          relatedLenses={TREND_RELATED_LENSES}
+          footer={<RiskScoreLegendInline />}
+        />
       </div>
     );
   }
@@ -1374,7 +739,7 @@ export function RiskTrendLens({
       }}
     >
       {/* P10: Lens self-explanation header */}
-      <LensHeader />
+      <RiskTrendLensHeader />
 
       {/* Legend strip */}
       <div
