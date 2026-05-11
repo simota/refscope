@@ -53,6 +53,7 @@ import {
   rotScoreLabel,
   type RotScoreLabel,
 } from './BranchSidebar';
+import { estimateBase, shortRefName } from './refUtil';
 import type { LensId } from './LensSwitcher';
 
 // ---------------------------------------------------------------------------
@@ -105,35 +106,6 @@ const RADIUS_SATURATION_DAYS = 180;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Estimate the base branch from the ref list.
- * Priority: main → master → trunk → first ref.
- * Returns null when the ref list is empty.
- */
-function estimateBase(refs: Array<{ name: string }>): string | null {
-  const CANDIDATES = ['main', 'master', 'trunk'];
-  for (const candidate of CANDIDATES) {
-    if (refs.some((r) => r.name === candidate || r.name === `refs/heads/${candidate}`)) {
-      return candidate;
-    }
-  }
-  // Remote tracking variants (refs/remotes/origin/main etc.)
-  for (const candidate of CANDIDATES) {
-    const remote = refs.find(
-      (r) => r.name.endsWith(`/${candidate}`),
-    );
-    if (remote) return remote.name;
-  }
-  return refs[0]?.name ?? null;
-}
-
-function shortRefName(name: string): string {
-  if (name.startsWith('refs/heads/')) return name.slice('refs/heads/'.length);
-  if (name.startsWith('refs/remotes/')) return name.slice('refs/remotes/'.length);
-  if (name.startsWith('refs/tags/')) return name.slice('refs/tags/'.length);
-  return name;
-}
 
 /** daysSinceLast を r=[RADIUS_MIN, RADIUS_MAX] にマップ */
 function daysToRadius(days: number): number {
