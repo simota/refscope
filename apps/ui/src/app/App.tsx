@@ -1075,18 +1075,44 @@ export default function App() {
     });
   }
 
+  // SSE バースト時に setLiveAnnouncement が秒間多数回呼ばれると SR が
+  // 直前メッセージを上書き連発し、ユーザの読み上げ体験が壊れる。
+  // 1.5s ウィンドウで coalesce し、ウィンドウ内に届いた最新メッセージのみを
+  // SR に通知する。pause/resume 等のユーザ起動アクションは throttle せず
+  // 直接 setLiveAnnouncement を呼ぶ。
+  const announceThrottleRef = useRef<{
+    timer: ReturnType<typeof setTimeout> | null;
+    pending: string | null;
+  }>({ timer: null, pending: null });
+
+  const announceLiveThrottled = useCallback((message: string) => {
+    if (announceThrottleRef.current.timer != null) {
+      announceThrottleRef.current.pending = message;
+      return;
+    }
+    setLiveAnnouncement(message);
+    announceThrottleRef.current.timer = setTimeout(() => {
+      announceThrottleRef.current.timer = null;
+      if (announceThrottleRef.current.pending != null) {
+        const next = announceThrottleRef.current.pending;
+        announceThrottleRef.current.pending = null;
+        announceLiveThrottled(next);
+      }
+    }, 1500);
+  }, []);
+
   function handleRealtimeEvent(notice: string, applyEvent: () => void) {
     if (livePausedRef.current) {
       pendingRealtimeEventsRef.current.push(applyEvent);
       setPendingUpdates((count) => {
         const nextCount = count + 1;
-        setLiveAnnouncement(`Live updates paused. ${nextCount} updates pending.`);
+        announceLiveThrottled(`Live updates paused. ${nextCount} updates pending.`);
         return nextCount;
       });
       return;
     }
     applyEvent();
-    setLiveAnnouncement(notice);
+    announceLiveThrottled(notice);
     void refreshTimeline(
       selectedRepo,
       selectedRefRef.current,
@@ -1120,14 +1146,17 @@ export default function App() {
 
   function toggleLiveUpdates() {
     if (!livePaused) {
+      // pause 時は button の aria-pressed + label 変化が SR に伝わるので無音 (Calm)。
       setLivePaused(true);
-      setLiveAnnouncement("Live updates paused.");
       return;
     }
     setLivePaused(false);
-    setLiveAnnouncement("Live updates resumed.");
     if (pendingUpdates > 0) {
+      // resume + 適用件数を 1 件のメッセージとして polite に通知。
+      setLiveAnnouncement(`Live updates resumed. ${pendingUpdates} pending updates applied.`);
       flushPendingRealtimeEvents();
+    } else {
+      setLiveAnnouncement("Live updates resumed.");
     }
   }
 
@@ -1544,9 +1573,96 @@ export default function App() {
         </div>
       )}
       {/* Live lens: render the full existing layout. Hidden (not unmounted) when inactive
-          so that SSE subscriptions, hooks, and resizable-panel refs stay alive. */}
+          so that SSE subscriptions, hooks, and resizable-panel refs stay alive.
+          tabpanel wrapper を持たない唯一の Lens だったが、他 11 Lens と整合するため
+          `role="tabpanel"` で wrap し、Live 固有の context strip と SSE 切断 banner を内包させる。 */}
+      <div
+        id="lens-panel-live"
+        role="tabpanel"
+        aria-labelledby="lens-tab-live"
+        style={{
+          display: (activeLens === 'live' && mode === "detail") ? 'flex' : 'none',
+          flexDirection: 'column',
+          flex: 1,
+          overflow: 'hidden',
+        }}
+      >
+        {/* Live context strip — TopBar はグローバル文脈、本 strip は Lens 文脈
+            (現在観測中の repo/ref と filtered/total commits) を表す。
+            LensHeader component は採用せず軽量な 1 行に留め、Status / Pause は TopBar に残置。 */}
+        <div
+          role="status"
+          aria-label={
+            selectedRepo
+              ? `Live observing ${selectedRepo}${selectedRef ? ` / ${selectedRef}` : ''}, ${filteredCommits.length} of ${commits.length} commits`
+              : 'Live — no repository selected'
+          }
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '4px 12px',
+            borderBottom: '1px solid var(--rs-border)',
+            background: 'var(--rs-bg-panel)',
+            fontFamily: 'var(--rs-sans)',
+            fontSize: 11,
+            color: 'var(--rs-text-secondary)',
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ fontWeight: 600, color: 'var(--rs-text)' }} aria-hidden="true">
+            Live
+          </span>
+          <span aria-hidden="true" style={{ opacity: 0.5 }}>·</span>
+          <span aria-hidden="true">
+            {selectedRepo ? (
+              <>
+                <span style={{ fontFamily: 'var(--rs-mono)' }}>{selectedRepo}</span>
+                {selectedRef && (
+                  <>
+                    <span style={{ opacity: 0.5, margin: '0 4px' }}>/</span>
+                    <span style={{ fontFamily: 'var(--rs-mono)' }}>{selectedRef}</span>
+                  </>
+                )}
+              </>
+            ) : (
+              <span style={{ fontStyle: 'italic' }}>no repository selected</span>
+            )}
+          </span>
+          <span style={{ marginLeft: 'auto', fontFamily: 'var(--rs-mono)' }} aria-hidden="true">
+            {filteredCommits.length === commits.length
+              ? `${commits.length.toLocaleString()} commits`
+              : `${filteredCommits.length.toLocaleString()} / ${commits.length.toLocaleString()} commits`}
+          </span>
+        </div>
+
+        {/* SSE 切断 banner — eventStatus === 'error' のときだけ表示。
+            CommitTimeline 本体に触れず、tabpanel 直下に追加する形で実装。 */}
+        {eventStatus === 'error' && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 12px',
+              borderBottom: '1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 50%)',
+              background: 'color-mix(in oklab, var(--rs-bg-panel), var(--rs-warning) 12%)',
+              fontFamily: 'var(--rs-sans)',
+              fontSize: 11,
+              color: 'var(--rs-text)',
+              flexShrink: 0,
+            }}
+          >
+            <span aria-hidden="true">⚠</span>
+            <span>
+              Live feed が切断されました。自動的に再接続を試みています…
+            </span>
+          </div>
+        )}
+
       <ResizablePanelGroup
-        style={{ display: (activeLens === 'live' && mode === "detail") ? undefined : 'none' }}
         direction="horizontal"
         className="flex flex-1 overflow-hidden"
         onLayout={(layout) => {
@@ -1573,6 +1689,7 @@ export default function App() {
           onCollapse={() => setSidebarCollapsed(true)}
           onExpand={() => setSidebarCollapsed(false)}
         >
+          <aside aria-label="Refs panel: branches, stashes, worktrees, submodules" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
           <BranchSidebar
             repoId={selectedRepo}
             refs={refs}
@@ -1593,15 +1710,16 @@ export default function App() {
             branchGroupPrefix={branchGroupPrefix}
             onSetBranchGroupPrefix={handleSetBranchGroupPrefix}
           />
+          </aside>
         </ResizablePanel>
-        <ResizableHandle withHandle aria-label="Resize branch sidebar" />
+        <ResizableHandle withHandle aria-label="Resize Refs panel (drag to adjust width)" />
         <ResizablePanel
           id="rs-center"
           order={2}
           defaultSize={panelSizes.center}
           minSize={25}
         >
-          <div id="main-content" tabIndex={-1} className="flex flex-col overflow-hidden h-full">
+          <div id="main-content" tabIndex={-1} aria-label="Commit timeline" className="flex flex-col overflow-hidden h-full">
             {summaryViewOpen && selectedRepo ? (
               <div className="overflow-y-auto" style={{ flexShrink: 0, maxHeight: "55%" }}>
                 <PeriodSummaryView
@@ -1667,7 +1785,7 @@ export default function App() {
             />
           </div>
         </ResizablePanel>
-        <ResizableHandle withHandle aria-label="Resize detail panel" />
+        <ResizableHandle withHandle aria-label="Resize Commit details panel (drag to adjust width)" />
         <ResizablePanel
           id="rs-detail"
           order={3}
@@ -1675,30 +1793,33 @@ export default function App() {
           minSize={25}
           maxSize={70}
         >
-          <DetailPanel
-            commit={current}
-            detail={detail}
-            diff={diff}
-            loading={detailLoading}
-            error={error}
-            diffFullscreen={diffFullscreen}
-            onDiffFullscreenChange={setDiffFullscreen}
-            diffViewMode={diffViewMode}
-            onDiffViewModeChange={setDiffViewMode}
-            repoId={selectedRepo}
-            workTreeSelected={selectedWorkTree}
-            workTree={workTree}
-            containingRefs={containingRefs}
-            onOpenFileHistory={submitFileHistoryPath}
-            onFilterByPath={(value) => {
-              setPath(value);
-              setSelected("");
-            }}
-            whyPanelQuery={whyPanelQuery}
-            onWhyPanelQueryChange={setWhyPanelQuery}
-          />
+          <section aria-label="Commit details" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+            <DetailPanel
+              commit={current}
+              detail={detail}
+              diff={diff}
+              loading={detailLoading}
+              error={error}
+              diffFullscreen={diffFullscreen}
+              onDiffFullscreenChange={setDiffFullscreen}
+              diffViewMode={diffViewMode}
+              onDiffViewModeChange={setDiffViewMode}
+              repoId={selectedRepo}
+              workTreeSelected={selectedWorkTree}
+              workTree={workTree}
+              containingRefs={containingRefs}
+              onOpenFileHistory={submitFileHistoryPath}
+              onFilterByPath={(value) => {
+                setPath(value);
+                setSelected("");
+              }}
+              whyPanelQuery={whyPanelQuery}
+              onWhyPanelQueryChange={setWhyPanelQuery}
+            />
+          </section>
         </ResizablePanel>
       </ResizablePanelGroup>
+      </div>
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

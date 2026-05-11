@@ -468,6 +468,11 @@ export function TopBar({
           disabled={status === "error"}
           aria-pressed={livePaused}
           aria-label={livePaused ? "Resume live updates" : "Pause live updates"}
+          title={
+            livePaused
+              ? `Resume live updates${pendingUpdates > 0 ? ` (${pendingUpdates} pending will be applied)` : ''}`
+              : "Pause live updates (events accumulate as 'pending', applied on resume)"
+          }
         >
           {livePaused ? "Resume" : "Pause"}
         </button>

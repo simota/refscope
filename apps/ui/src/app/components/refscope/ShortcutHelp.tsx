@@ -84,6 +84,54 @@ export function ShortcutHelp({
         </div>
 
         <div className="px-2 py-1 max-h-[60vh] overflow-y-auto">
+          {/* Live Lens の 3 ペイン凡例 — 他 11 Lens は専用ファイル (LensHeader)
+              で説明を担うが、Live は基幹 Lens で TopBar / ResizablePanelGroup
+              構成のため、ここに小さな凡例を置いて自己説明性を底上げする。 */}
+          <section className="py-2" aria-label="Live Lens layout">
+            <header
+              className="px-3 pb-1"
+              style={{
+                fontSize: 10,
+                fontFamily: "var(--rs-mono)",
+                color: "var(--rs-text-muted)",
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+              }}
+            >
+              Live Lens — 3 panes
+            </header>
+            <ul role="list">
+              {[
+                { name: "Refs", desc: "左: branches / stashes / worktrees / submodules" },
+                { name: "Timeline", desc: "中央: commit 一覧と filter / compare / activity" },
+                { name: "Details", desc: "右: 選択中 commit の diff と why-context" },
+              ].map((p) => (
+                <li
+                  key={p.name}
+                  className="mx-1 px-3 flex items-center gap-2.5 rounded-md"
+                  style={{
+                    height: 32,
+                    color: "var(--rs-text-primary)",
+                    fontSize: 13,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontFamily: "var(--rs-mono)",
+                      fontWeight: 600,
+                      minWidth: 72,
+                    }}
+                  >
+                    {p.name}
+                  </span>
+                  <span style={{ flex: 1, color: "var(--rs-text-secondary)" }}>
+                    {p.desc}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
           {groups.map(({ category, items }) => (
             <section key={category} className="py-2">
               <header
