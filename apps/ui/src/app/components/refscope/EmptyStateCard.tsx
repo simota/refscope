@@ -16,7 +16,8 @@ export type LensEmptyReason =
   | 'no-commits'
   | 'no-author-date'
   | 'no-risky'
-  | 'no-visible-authors';
+  | 'no-visible-authors'
+  | 'no-rewrite-events';
 
 export type EmptyStateMessage = {
   title: string;
