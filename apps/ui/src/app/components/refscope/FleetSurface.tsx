@@ -30,6 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "../ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +43,49 @@ import {
 } from "../ui/alert-dialog";
 import type { FleetSnapshot } from "../../api";
 import type { LastOpenedEntry } from "../../hooks/useLastOpenedRepos";
+
+// ---------------------------------------------------------------------------
+// Window selector — fleet snapshot 集計窓
+// ---------------------------------------------------------------------------
+export type FleetWindow = "1h" | "6h" | "24h" | "7d";
+const FLEET_WINDOWS: FleetWindow[] = ["1h", "6h", "24h", "7d"];
+
+// ---------------------------------------------------------------------------
+// Glyph legend (Echo S-D1 で確定済の 5 種を visible に表示するヘルパ)
+// ---------------------------------------------------------------------------
+function FleetGlyphLegend({ isCvdSafe }: { isCvdSafe: boolean }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, fontFamily: "var(--rs-sans)" }}>
+      <div style={{ fontWeight: 600, color: "var(--rs-text)" }}>Glyph legend</div>
+      <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: 12, lineHeight: 1.5 }}>
+        <li>
+          <span style={{ display: "inline-block", width: 16, fontFamily: "var(--rs-mono)", color: "var(--rs-git-added)" }}>
+            {isCvdSafe ? "◆" : "●"}
+          </span>{" "}
+          ok / live ping / boolean true
+        </li>
+        <li>
+          <span style={{ display: "inline-block", width: 16, fontFamily: "var(--rs-mono)", color: "var(--rs-warning)" }}>
+            {isCvdSafe ? "◆" : "✶"}
+          </span>{" "}
+          worktree dirty (uncommitted changes)
+        </li>
+        <li>
+          <span style={{ display: "inline-block", width: 16, fontFamily: "var(--rs-mono)", color: "var(--rs-warning)" }}>!</span>{" "}
+          timeout
+        </li>
+        <li>
+          <span style={{ display: "inline-block", width: 16, fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)" }}>×</span>{" "}
+          git error / missing / unauthorized
+        </li>
+        <li>
+          <span style={{ display: "inline-block", width: 16, fontFamily: "var(--rs-mono)", color: "var(--rs-text-muted)" }}>—</span>{" "}
+          no Git event observed (em-dash, never &quot;0&quot;)
+        </li>
+      </ul>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // origin — "env" means from RTGV_REPOS env var, "ui" means added via UI button
@@ -232,24 +276,43 @@ function FleetRow({
       aria-selected={false}
       tabIndex={0}
       style={rowStyle}
+      className="rs-fleet-row"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={() => !isExcluded && onSelectRepo(repo.repoId)}
       onKeyDown={handleKeyDown}
       aria-label={`${repo.repoId}${isExcluded ? ", excluded" : ""}`}
     >
-      {/* Cell 1: dot — status glyph */}
-      <span
-        style={{
-          width: 16,
-          textAlign: "center",
-          color: statusColor(repo.status),
-          flexShrink: 0,
-        }}
-        aria-hidden="true"
-      >
-        {statusGlyph(repo.status, isCvdSafe)}
-      </span>
+      {/* Cell 1: dot — status glyph (Echo A-2: 常設 Tooltip で意味可視化) */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            style={{
+              width: 16,
+              textAlign: "center",
+              color: statusColor(repo.status),
+              flexShrink: 0,
+              cursor: "help",
+            }}
+            aria-hidden="true"
+          >
+            {statusGlyph(repo.status, isCvdSafe)}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {repo.status === "ok"
+            ? "ok: live observation"
+            : repo.status === "timeout"
+              ? "timeout: snapshot collection slow"
+              : repo.status === "git_error"
+                ? "git error: see error banner for details"
+                : repo.status === "missing"
+                  ? "missing: path is no longer a Git working tree"
+                  : repo.status === "unauthorized"
+                    ? "unauthorized: filesystem permission denied"
+                    : "unknown status"}
+        </TooltipContent>
+      </Tooltip>
 
       {/* Cell 2: repo id — truncated, plus origin badge */}
       <span
@@ -275,9 +338,11 @@ function FleetRow({
         >
           {repo.repoId}
         </span>
-        {/* origin badge: env → muted, ui → accent — no tooltip per spec (noise 0) */}
+        {/* origin badge — Echo A-4: aria-label の文言を視覚 (title) にも揃え、
+            "noise 0" は「常設説明テキストを追加しない」と再解釈。tooltip 自体は許容。 */}
         <span
           aria-label={origin === "ui" ? "added via UI" : "from env var"}
+          title={origin === "ui" ? "added via UI" : "from env var"}
           style={{
             flexShrink: 0,
             fontSize: 10,
@@ -329,31 +394,47 @@ function FleetRow({
         )}
       </Tooltip>
 
-      {/* Cell 5: 1h ref move */}
-      <span
-        style={{
-          width: 20,
-          flexShrink: 0,
-          textAlign: "center",
-          color: repo.refMove1h ? "var(--rs-git-added)" : "var(--rs-text-muted)",
-        }}
-        aria-label={repo.refMove1h ? "ref changed in last 1h" : "no ref change in 1h"}
-      >
-        {boolCell(repo.refMove1h, isCvdSafe)}
-      </span>
+      {/* Cell 5: 1h ref move — Echo A-2: 常設 Tooltip */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            style={{
+              width: 20,
+              flexShrink: 0,
+              textAlign: "center",
+              color: repo.refMove1h ? "var(--rs-git-added)" : "var(--rs-text-muted)",
+              cursor: "help",
+            }}
+            aria-label={repo.refMove1h ? "ref changed in last 1h" : "no ref change in 1h"}
+          >
+            {boolCell(repo.refMove1h, isCvdSafe)}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {repo.refMove1h ? "ref changed in last 1h" : "no ref change in last 1h"}
+        </TooltipContent>
+      </Tooltip>
 
-      {/* Cell 6: worktree dirty */}
-      <span
-        style={{
-          width: 20,
-          flexShrink: 0,
-          textAlign: "center",
-          color: repo.worktreeDirty ? "var(--rs-warning)" : "var(--rs-text-muted)",
-        }}
-        aria-label={repo.worktreeDirty ? "worktree has uncommitted changes" : "worktree clean"}
-      >
-        {wtDirtyGlyph(repo.worktreeDirty, isCvdSafe)}
-      </span>
+      {/* Cell 6: worktree dirty — Echo A-2: 常設 Tooltip */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            style={{
+              width: 20,
+              flexShrink: 0,
+              textAlign: "center",
+              color: repo.worktreeDirty ? "var(--rs-warning)" : "var(--rs-text-muted)",
+              cursor: "help",
+            }}
+            aria-label={repo.worktreeDirty ? "worktree has uncommitted changes" : "worktree clean"}
+          >
+            {wtDirtyGlyph(repo.worktreeDirty, isCvdSafe)}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {repo.worktreeDirty ? "worktree has uncommitted changes" : "worktree clean"}
+        </TooltipContent>
+      </Tooltip>
 
       {/* Cell 7: last event time */}
       <span
@@ -368,11 +449,13 @@ function FleetRow({
         {formatRelativeTime(repo.lastEventAt)}
       </span>
 
-      {/* Remove button — ui-origin rows only, hover/focus visible, DOM absent for env-origin */}
+      {/* Remove button — ui-origin rows only。hover / focus-within / 直接 focus で露出 (Echo K-3)。
+          tabIndex は常に 0 にしてキーボード到達性を確保。CSS で opacity を制御。 */}
       {origin === "ui" && !isExcluded && (
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); onRequestRemove(repo.repoId); }}
+          className="rs-fleet-row-action"
           style={{
             width: 20,
             height: 20,
@@ -384,21 +467,21 @@ function FleetRow({
             cursor: "pointer",
             color: "var(--rs-text-muted)",
             flexShrink: 0,
-            opacity: hovered ? 0.8 : 0,
             transition: isQuiet ? "none" : "opacity 80ms",
           }}
-          tabIndex={hovered ? 0 : -1}
           aria-label={`Remove ${repo.repoId} from fleet`}
         >
           <Trash2 size={11} />
         </button>
       )}
 
-      {/* Cell 8: exclude × / restore ↻ on hover/focus */}
+      {/* Cell 8: exclude × / restore ↻ — hover / focus-within / 直接 focus で露出。
+          tabIndex は常に 0、CSS で opacity を制御 (Echo K-3)。 */}
       {isExcluded ? (
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); onRestore(repo.repoId); }}
+          className="rs-fleet-row-action rs-fleet-row-action--restore"
           style={{
             width: 20,
             height: 20,
@@ -410,7 +493,6 @@ function FleetRow({
             cursor: "pointer",
             color: "var(--rs-text-muted)",
             flexShrink: 0,
-            opacity: hovered ? 1 : 0.6,
           }}
           aria-label={`Restore ${repo.repoId}`}
         >
@@ -420,6 +502,7 @@ function FleetRow({
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); onExclude(repo.repoId); }}
+          className="rs-fleet-row-action"
           style={{
             width: 20,
             height: 20,
@@ -431,10 +514,8 @@ function FleetRow({
             cursor: "pointer",
             color: "var(--rs-text-muted)",
             flexShrink: 0,
-            opacity: hovered ? 1 : 0,
             transition: isQuiet ? "none" : "opacity 80ms",
           }}
-          tabIndex={hovered ? 0 : -1}
           aria-label={`Exclude ${repo.repoId}`}
         >
           <X size={11} />
@@ -457,6 +538,8 @@ export function FleetSurface({
   lastOpenedRepos = [],
   repoOrigins = {},
   onRemoveRepo,
+  fleetWindow = "24h",
+  onWindowChange,
 }: {
   snapshot: FleetSnapshot | null;
   error: string | null;
@@ -465,6 +548,10 @@ export function FleetSurface({
   onSelectRepo: (id: string) => void;
   /** Recently opened repos (newest first). Additive display only — does not affect default row order. */
   lastOpenedRepos?: LastOpenedEntry[];
+  /** Current fleet snapshot window (UI segmented control bound to App.tsx state). */
+  fleetWindow?: FleetWindow;
+  /** Called when user clicks a different window pill. App.tsx triggers re-fetch. */
+  onWindowChange?: (next: FleetWindow) => void;
   /**
    * Map of repoId → origin. Missing entries default to "env".
    * Step 7 will wire this from the real allowlist response.
@@ -517,11 +604,13 @@ export function FleetSurface({
     const timer = setInterval(() => {
       const changes = pendingChangesRef.current;
       if (changes.length === 0) return;
-      const names = changes.slice(0, 4).join(", ");
-      const suffix = changes.length > 4 ? ` and ${changes.length - 4} more` : "";
-      setAnnouncement(
-        `Fleet update: ${changes.length} ${changes.length === 1 ? "repo" : "repos"} changed (${names}${suffix})`,
-      );
+      // SR ノイズ低減: 1 件のときは単純文、複数件は件数 + 直近 1 件のみに圧縮。
+      // 長い repo id を 4 件並べると 60s 以内に読み終わらない事象を回避。
+      if (changes.length === 1) {
+        setAnnouncement(`Fleet update: ${changes[0]} changed`);
+      } else {
+        setAnnouncement(`Fleet update: ${changes.length} repos changed, latest: ${changes[changes.length - 1]}`);
+      }
       pendingChangesRef.current = [];
     }, intervalMs);
 
@@ -580,6 +669,37 @@ export function FleetSurface({
   const excludedRepos = repos.filter((r) => excluded.has(r.repoId));
   const cost = snapshot?.estimatedCost;
 
+  // Footer "snapshot: Xs ago" を 1 秒 tick で更新 (Echo J-4)。
+  // document.hidden 時は tick 停止して背景タブの CPU 負担を回避 (Magi R6)。
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!snapshot) return;
+    let cancelled = false;
+    const tick = () => {
+      if (!cancelled && typeof document !== "undefined" && !document.hidden) {
+        setNowMs(Date.now());
+      }
+    };
+    const id = setInterval(tick, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [snapshot]);
+
+  const snapshotAgeText = snapshot
+    ? (() => {
+        const ts = Date.parse(snapshot.snapshotAt);
+        if (!Number.isFinite(ts)) return null;
+        const sec = Math.max(0, Math.floor((nowMs - ts) / 1000));
+        return sec < 60 ? `${sec}s ago` : `${Math.floor(sec / 60)}m ago`;
+      })()
+    : null;
+
+  // poll interval を footer に literal 数値として表示 (charter §5 適合)。
+  // snapshotIntervalMs (server 由来) を単一情報源として使い、UI 側のハードコードを排除 (Echo J-3)。
+  const pollSeconds = cost ? Math.round(cost.snapshotIntervalMs / 1000) : 30;
+
   return (
     <div
       style={{
@@ -591,6 +711,134 @@ export function FleetSurface({
         color: "var(--rs-text-primary)",
       }}
     >
+      <style>{`
+        /* hover / focus-within / 直接 focus で row アクションを露出。
+           tabIndex は常に 0 のためキーボード到達性が確保される (Echo K-3)。 */
+        .rs-fleet-row-action { opacity: 0; }
+        .rs-fleet-row-action--restore { opacity: 0.6; }
+        .rs-fleet-row:hover .rs-fleet-row-action,
+        .rs-fleet-row:focus-within .rs-fleet-row-action,
+        .rs-fleet-row-action:focus-visible { opacity: 1; }
+        .rs-fleet-row:focus-visible {
+          outline: 2px solid var(--rs-accent);
+          outline-offset: -2px;
+        }
+        .rs-fleet-row-action:focus-visible {
+          outline: 2px solid var(--rs-accent);
+          outline-offset: -1px;
+        }
+      `}</style>
+
+      {/* Fleet header — title + oneLiner + window segmented control + glyph legend.
+          直前 12 Lens の LensHeader 規格を Fleet 用に適応 (Spark ID-1a + Echo J-2)。 */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "8px 12px",
+          borderBottom: "1px solid var(--rs-border)",
+          background: "var(--rs-bg-panel)",
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
+          <div
+            style={{
+              fontFamily: "var(--rs-sans)",
+              fontSize: 13,
+              fontWeight: 600,
+              color: "var(--rs-text)",
+            }}
+          >
+            Fleet
+          </div>
+          <div
+            style={{
+              fontFamily: "var(--rs-sans)",
+              fontSize: 11,
+              color: "var(--rs-text-secondary)",
+            }}
+          >
+            {snapshot
+              ? `${snapshot.repos.length} repo${snapshot.repos.length === 1 ? "" : "s"} · window ${fleetWindow}${snapshotAgeText ? ` · snapshot ${snapshotAgeText}` : ""}`
+              : "観測対象リポジトリを一覧で観測"}
+          </div>
+        </div>
+
+        {/* Window segmented control (1h / 6h / 24h / 7d) — Magi 争点 #3 で FleetHeader 配置確定 */}
+        {onWindowChange && (
+          <div
+            role="group"
+            aria-label="Snapshot window"
+            style={{
+              display: "inline-flex",
+              border: "1px solid var(--rs-border)",
+              borderRadius: "var(--rs-radius-sm)",
+              overflow: "hidden",
+              flexShrink: 0,
+            }}
+          >
+            {FLEET_WINDOWS.map((w) => {
+              const active = w === fleetWindow;
+              return (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => onWindowChange(w)}
+                  aria-pressed={active}
+                  className="rs-fleet-window-btn"
+                  style={{
+                    height: 24,
+                    padding: "0 8px",
+                    fontSize: 11,
+                    fontFamily: "var(--rs-mono)",
+                    border: "none",
+                    borderRight: w === "7d" ? undefined : "1px solid var(--rs-border)",
+                    background: active ? "var(--rs-accent)" : "transparent",
+                    color: active ? "var(--rs-bg)" : "var(--rs-text-secondary)",
+                    cursor: "pointer",
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >
+                  {w}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Glyph legend Popover (Spark ID-1b, Echo A-2/A-3) */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Show glyph legend"
+              style={{
+                width: 24,
+                height: 24,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: "var(--rs-radius-sm)",
+                border: "1px solid var(--rs-border)",
+                background: "transparent",
+                color: "var(--rs-text-secondary)",
+                fontFamily: "var(--rs-sans)",
+                fontSize: 12,
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              ?
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-72 text-xs">
+            <FleetGlyphLegend isCvdSafe={isCvdSafe} />
+          </PopoverContent>
+        </Popover>
+      </div>
+
       {/* Error banner */}
       {error && (
         <div
@@ -619,20 +867,22 @@ export function FleetSurface({
         </div>
       )}
 
-      {/* Listbox — ONE aria-live region here (§6.5 per-row aria-live zero). */}
+      {/* Listbox — Vision §6.5 適合: aria-live は internal visually-hidden span のみに集約。
+          listbox 自体に aria-live を付けると SR が row 追加/変化を毎回読み上げ、
+          coalesce が無効化される事象が観察される。 */}
       {snapshot && (
         <div
           role="listbox"
           aria-label="Fleet repos"
-          aria-live={isQuiet ? "off" : "polite"}
-          aria-atomic="false"
           style={{
             flex: 1,
             overflowY: "auto",
             overflowX: "hidden",
+            opacity: error ? 0.6 : 1,
+            transition: isQuiet ? "none" : "opacity 200ms",
           }}
         >
-          {/* Screen-reader announcement target (visually hidden) */}
+          {/* Screen-reader announcement target (visually hidden) — single source of truth. */}
           <span
             style={{
               position: "absolute",
@@ -813,7 +1063,9 @@ export function FleetSurface({
         </div>
       )}
 
-      {/* Footer: literal cost numbers only (charter §5, proposal §6.8). No adjectives. */}
+      {/* Footer: literal cost numbers only (charter §5, proposal §6.8). No adjectives.
+          poll 値は server 由来 snapshotIntervalMs を single source of truth として表示 (Echo J-3)。
+          末尾の "snapshot: Xs ago" は visual transparency 補強 (Echo J-4)。 */}
       {cost && (
         <div
           style={{
@@ -824,7 +1076,8 @@ export function FleetSurface({
             fontFamily: "var(--rs-mono)",
           }}
         >
-          {cost.subscribedRepoCount} repos &middot; git ~{cost.gitCallsPerMin}/min &middot; poll 30s
+          {cost.subscribedRepoCount} repos &middot; git ~{cost.gitCallsPerMin}/min &middot; poll {pollSeconds}s
+          {snapshotAgeText && <> &middot; snapshot {snapshotAgeText}</>}
         </div>
       )}
 
