@@ -1497,7 +1497,7 @@ export default function App() {
               setActiveLens('live');
             }}
             onOpenFileHistory={submitFileHistoryPath}
-            setActiveLens={setActiveLens}
+            onChangeLens={setActiveLens}
           />
         </div>
       )}
