@@ -57,6 +57,10 @@ type GraphLink = d3Force.SimulationLinkDatum<GraphNode> & {
   coChangeCount: number;
   /** normalized 0–1 */
   strength: number;
+  /** 最後に共変化した時刻 (ISO) */
+  lastCoChangeAt: string;
+  /** 新しさ 0..1 (1 = 30 日以内、0 = 365 日超) */
+  recency: number;
 };
 
 /**
@@ -69,7 +73,11 @@ type CoChangeEmptyReason = 'no-center-file' | 'no-related' | 'no-hotspot';
 // Constants
 // ---------------------------------------------------------------------------
 
-const TOP_K = 20;
+const TOP_K_MAX = 20;
+const TOP_K_OPTIONS: readonly number[] = [5, 10, 20];
+const TOP_K_DEFAULT = 20;
+const RECENCY_FRESH_DAYS = 30;
+const RECENCY_STALE_DAYS = 365;
 // All visual sizes below are baseline values for a 600x400 canvas.
 // At runtime they are multiplied by a `scale` factor derived from the actual
 // container dimensions so the graph fills any panel without going tiny.
@@ -112,6 +120,51 @@ function computeScale(width: number, height: number): number {
   return clamp(minDim / SCALE_BASELINE, SCALE_MIN, SCALE_MAX);
 }
 
+/** ISO 文字列を相対表記 (例: "3d ago") に。HotspotLens と挙動を揃える */
+function formatRelative(iso: string): string {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return iso;
+  const days = Math.floor(ms / 86_400_000);
+  if (days === 0) return 'today';
+  if (days === 1) return '1d ago';
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+/** lastCoChangeAt から 0..1 の新しさを算出 (RECENCY_FRESH_DAYS 以内=1, RECENCY_STALE_DAYS 以上=0) */
+function computeRecency(iso: string): number {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return 0;
+  const days = ms / 86_400_000;
+  if (days <= RECENCY_FRESH_DAYS) return 1;
+  if (days >= RECENCY_STALE_DAYS) return 0;
+  const range = RECENCY_STALE_DAYS - RECENCY_FRESH_DAYS;
+  return 1 - (days - RECENCY_FRESH_DAYS) / range;
+}
+
+/**
+ * recency (0..1) から色を生成。HotspotLens.computeHotColor と同じ 3-stop
+ * (blue → amber → red) の色覚多様性配慮パレットを借用。
+ * 新しい (recency=1) ほど accent 寄り、古い (recency=0) ほど muted 寄り。
+ */
+function recencyToColor(recency: number): string {
+  const c = clamp(recency, 0, 1);
+  // stops: cold (border, muted gray) → warm (amber) → hot (red)
+  const stops: Array<[number, number, number]> = [
+    [120, 120, 132], // cold gray
+    [245, 158, 11],  // amber
+    [239, 68, 68],   // red
+  ];
+  const seg = c * 2;
+  const i = Math.min(1, Math.floor(seg));
+  const f = seg - i;
+  const a = stops[i];
+  const b = stops[i + 1];
+  return `rgb(${Math.round(a[0] + (b[0] - a[0]) * f)}, ${Math.round(a[1] + (b[1] - a[1]) * f)}, ${Math.round(a[2] + (b[2] - a[2]) * f)})`;
+}
+
 // ---------------------------------------------------------------------------
 // Help Popover content
 // ---------------------------------------------------------------------------
@@ -124,8 +177,10 @@ function CoChangeHelpContent() {
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
         中心ファイルと <strong>同じコミットで一緒に変更されたファイル</strong>を
-        top-{TOP_K} 件、関連の強さ順に表示します。
+        top-K 件、関連の強さ順に表示します。
         エッジ上の数字は <strong>共に変更されたコミット件数</strong> です。
+        エッジの色は <strong>最後に共変化した時刻の新しさ</strong> を表します
+        (赤=新しい、グレー=古い)。
       </div>
       <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
         操作
@@ -161,6 +216,10 @@ export function CoChangeLens({
   const [error, setError] = useState('');
   const [svgSize, setSvgSize] = useState({ w: 600, h: 400 });
   const [emptyReason, setEmptyReason] = useState<CoChangeEmptyReason | null>(null);
+  const [topK, setTopK] = useState<number>(TOP_K_DEFAULT);
+  const [scannedCommits, setScannedCommits] = useState<number>(0);
+  const [truncated, setTruncated] = useState<boolean>(false);
+  const [lastRelated, setLastRelated] = useState<RelatedFileEntry[]>([]);
 
   const abortRef = useRef<AbortController | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -210,18 +269,20 @@ export function CoChangeLens({
 
       fetchRelatedFiles(
         repoId,
-        { path: center, ref: selectedRef, limit: TOP_K },
+        { path: center, ref: selectedRef, limit: TOP_K_MAX },
         controller.signal,
       )
         .then((res) => {
           if (controller.signal.aborted) return;
+          setScannedCommits(res.scannedCommits);
+          setTruncated(res.truncated);
+          setLastRelated(res.related);
           if (res.related.length === 0) {
             setNodes([]);
             setLinks([]);
             setEmptyReason('no-related');
-            return;
           }
-          buildGraph(center, res.related, svgSize.w, svgSize.h, setNodes, setLinks);
+          // レイアウト計算は topK 変更にも追随するため、別 useEffect で実施
         })
         .catch((err: unknown) => {
           if (controller.signal.aborted) return;
@@ -279,6 +340,12 @@ export function CoChangeLens({
       abortRef.current?.abort();
     };
   }, [centerPath, repoId, selectedRef, doFetch]);
+
+  // topK / svgSize / lastRelated の変化に追随して再レイアウト
+  useEffect(() => {
+    if (!centerPath || lastRelated.length === 0) return;
+    buildGraph(centerPath, lastRelated, topK, svgSize.w, svgSize.h, setNodes, setLinks);
+  }, [centerPath, lastRelated, topK, svgSize.w, svgSize.h]);
 
   // ---------------------------------------------------------------------------
   // Node interaction
@@ -369,13 +436,163 @@ export function CoChangeLens({
         title="Co-change Graph"
         oneLiner={
           centerPath
-            ? `中心: ${shortPath(centerPath)} と共変化する top-${TOP_K} ファイル`
-            : `選択ファイルと共変化するファイルを top-${TOP_K} 件まで表示`
+            ? `中心: ${shortPath(centerPath)} と共変化する top-${topK} ファイル`
+            : `選択ファイルと共変化するファイルを top-${topK} 件まで表示`
         }
         helpContent={<CoChangeHelpContent />}
       />
 
-      {/* T-B5 の領域 (フォールバックバナー) は PR-B で追加 */}
+      {/* T-B1, T-B4, T-B8: コントロールバー (Top-K セレクタ / History ボタン / TruncatedBadge) */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '0 16px 8px',
+          flexWrap: 'wrap',
+          flexShrink: 0,
+        }}
+      >
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontFamily: 'var(--rs-sans)',
+            fontSize: 11,
+            color: 'var(--rs-text-secondary)',
+          }}
+          role="group"
+          aria-label="表示件数 top-K"
+        >
+          <span>top-K:</span>
+          {TOP_K_OPTIONS.map((k) => {
+            const active = topK === k;
+            return (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setTopK(k)}
+                aria-pressed={active}
+                style={{
+                  height: 24,
+                  padding: '0 8px',
+                  border: '1px solid var(--rs-border)',
+                  borderRadius: 'var(--rs-radius-sm)',
+                  background: active ? 'var(--rs-accent)' : 'transparent',
+                  color: active ? 'var(--rs-bg-panel)' : 'var(--rs-text)',
+                  fontFamily: 'var(--rs-mono)',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                }}
+              >
+                {k}
+              </button>
+            );
+          })}
+        </div>
+
+        {centerPath && (
+          <button
+            type="button"
+            onClick={() => onOpenFileHistory(centerPath)}
+            style={{
+              height: 24,
+              padding: '0 10px',
+              border: '1px solid var(--rs-border)',
+              borderRadius: 'var(--rs-radius-sm)',
+              background: 'transparent',
+              color: 'var(--rs-text-secondary)',
+              fontFamily: 'var(--rs-sans)',
+              fontSize: 11,
+              cursor: 'pointer',
+            }}
+            title="中心ファイルの履歴を開く"
+          >
+            中心ファイルの履歴を開く →
+          </button>
+        )}
+
+        <div style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+          {scannedCommits > 0 && (
+            <span
+              style={{
+                fontSize: 10,
+                color: 'var(--rs-text-muted)',
+                fontFamily: 'var(--rs-mono)',
+              }}
+              title={`Co-change 計算のためにスキャンしたコミット数: ${scannedCommits}`}
+            >
+              scanned: {scannedCommits.toLocaleString()}
+            </span>
+          )}
+          {truncated && (
+            <span
+              role="status"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '2px 8px',
+                borderRadius: 'var(--rs-radius-sm)',
+                background: 'color-mix(in oklab, var(--rs-bg-elevated), #b45309 20%)',
+                border: '1px solid #b45309',
+                color: '#b45309',
+                fontSize: 10,
+                fontFamily: 'var(--rs-sans)',
+              }}
+            >
+              ⚠ 結果は上限で打ち切られています
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* T-B5: Hotspot Top-1 フォールバック告知バナー */}
+      {!selectedFilePath && centerPath !== null && !loading && (
+        <div
+          role="status"
+          style={{
+            margin: '0 16px 8px',
+            padding: '6px 10px',
+            background: 'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 8%)',
+            border: '1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 30%)',
+            borderRadius: 'var(--rs-radius-sm)',
+            fontFamily: 'var(--rs-sans)',
+            fontSize: 11,
+            color: 'var(--rs-text-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            flexShrink: 0,
+          }}
+        >
+          <span>
+            ファイル未選択のため <strong style={{ color: 'var(--rs-accent)' }}>Hotspot Top-1</strong> を中心に表示中
+          </span>
+          {onChangeLens && (
+            <button
+              type="button"
+              onClick={() => onChangeLens('hotspot')}
+              style={{
+                height: 22,
+                padding: '0 8px',
+                marginLeft: 'auto',
+                border: '1px solid var(--rs-border)',
+                borderRadius: 'var(--rs-radius-sm)',
+                background: 'transparent',
+                color: 'var(--rs-text)',
+                fontFamily: 'var(--rs-sans)',
+                fontSize: 10,
+                cursor: 'pointer',
+              }}
+            >
+              Hotspot Lens で選び直す
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Loading */}
       {loading && (
@@ -401,26 +618,110 @@ export function CoChangeLens({
         </div>
       )}
 
-      {/* Error */}
+      {/* Error: Retry ボタン + 代替 Lens 誘導 (T-B6) */}
       {!loading && error && (
-        <EmptyStateCard
-          reason={'no-related' as LensEmptyReason}
-          messages={{
-            ['no-related' as LensEmptyReason]: {
-              title: 'データの取得に失敗しました',
-              body: error,
-            },
+        <div
+          style={{
+            display: 'flex',
+            flex: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '100%',
+            padding: 24,
           }}
-          onChangeLens={onChangeLens}
-          relatedLenses={
-            onChangeLens
-              ? [
-                  { id: 'hotspot', label: 'Hotspot を開く' },
-                  { id: 'stream', label: 'Live を開く' },
-                ]
-              : undefined
-          }
-        />
+        >
+          <div
+            style={{
+              maxWidth: 440,
+              padding: '20px 24px',
+              background: 'var(--rs-bg-elevated)',
+              border: '1px solid var(--rs-border)',
+              borderRadius: 'var(--rs-radius-md)',
+              fontFamily: 'var(--rs-sans)',
+            }}
+          >
+            <div
+              style={{
+                fontSize: 14,
+                fontWeight: 600,
+                color: 'var(--rs-git-deleted)',
+                marginBottom: 8,
+              }}
+            >
+              データの取得に失敗しました
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--rs-text-secondary)',
+                lineHeight: 1.6,
+                marginBottom: 16,
+                wordBreak: 'break-word',
+              }}
+            >
+              {error}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => centerPath && doFetch(centerPath)}
+                disabled={!centerPath}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  fontSize: 11,
+                  fontFamily: 'var(--rs-sans)',
+                  borderRadius: 'var(--rs-radius-sm)',
+                  border: '1px solid var(--rs-accent)',
+                  background: 'var(--rs-accent)',
+                  color: 'var(--rs-bg-panel)',
+                  cursor: centerPath ? 'pointer' : 'not-allowed',
+                  opacity: centerPath ? 1 : 0.5,
+                }}
+              >
+                再試行
+              </button>
+              {onChangeLens && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onChangeLens('hotspot')}
+                    style={{
+                      height: 28,
+                      padding: '0 12px',
+                      fontSize: 11,
+                      fontFamily: 'var(--rs-sans)',
+                      borderRadius: 'var(--rs-radius-sm)',
+                      border: '1px solid var(--rs-border)',
+                      background: 'transparent',
+                      color: 'var(--rs-text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Hotspot を開く
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeLens('stream')}
+                    style={{
+                      height: 28,
+                      padding: '0 12px',
+                      fontSize: 11,
+                      fontFamily: 'var(--rs-sans)',
+                      borderRadius: 'var(--rs-radius-sm)',
+                      border: '1px solid var(--rs-border)',
+                      background: 'transparent',
+                      color: 'var(--rs-text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Live を開く
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Empty state */}
@@ -509,7 +810,7 @@ export function CoChangeLens({
           }
           aria-describedby={srDescId}
         >
-          {/* Links */}
+          {/* Links — エッジ太さ=件数, エッジ色=最終共変化の新しさ, 二段ラベル */}
           <g>
             {links.map((link, i) => {
               const strokeW = clamp(
@@ -519,6 +820,8 @@ export function CoChangeLens({
               );
               const midX = (link.source.x + link.target.x) / 2;
               const midY = (link.source.y + link.target.y) / 2;
+              const edgeColor = recencyToColor(link.recency);
+              const relLabel = formatRelative(link.lastCoChangeAt);
               return (
                 <g key={i}>
                   <line
@@ -526,21 +829,35 @@ export function CoChangeLens({
                     y1={link.source.y}
                     x2={link.target.x}
                     y2={link.target.y}
-                    stroke="var(--rs-border)"
+                    stroke={edgeColor}
                     strokeWidth={strokeW}
-                    strokeOpacity={0.7}
-                  />
-                  {/* count label */}
+                    strokeOpacity={0.55 + link.recency * 0.25}
+                  >
+                    <title>{`${link.coChangeCount} commits · last ${relLabel}`}</title>
+                  </line>
+                  {/* count label (上段) */}
                   <text
                     x={midX}
-                    y={midY - 4}
+                    y={midY - linkFont * 0.4}
                     textAnchor="middle"
                     fontSize={linkFont}
+                    fontFamily="var(--rs-mono)"
+                    fill="var(--rs-text-secondary)"
+                    pointerEvents="none"
+                  >
+                    {link.coChangeCount}
+                  </text>
+                  {/* recency label (下段, 小さく) */}
+                  <text
+                    x={midX}
+                    y={midY + linkFont * 0.7}
+                    textAnchor="middle"
+                    fontSize={Math.max(8, linkFont - 2)}
                     fontFamily="var(--rs-mono)"
                     fill="var(--rs-text-muted)"
                     pointerEvents="none"
                   >
-                    {link.coChangeCount}
+                    {relLabel}
                   </text>
                 </g>
               );
@@ -587,6 +904,7 @@ export function CoChangeLens({
                       : `${node.path}。${node.coChangeCount} 件の共変化。Enter で中心を入れ替え、Space で履歴を開く`
                   }
                 >
+                  <title>{node.path}</title>
                   {/* Focus ring (SVG では outline が効かないため独自に描画) */}
                   <circle
                     r={r + 4}
@@ -659,6 +977,7 @@ export function CoChangeLens({
 function buildGraph(
   centerPath: string,
   related: RelatedFileEntry[],
+  topK: number,
   width: number,
   height: number,
   setNodes: (nodes: GraphNode[]) => void,
@@ -688,8 +1007,8 @@ function buildGraph(
     return;
   }
 
-  // top-K は既に API 側で制限済みだが、念のため UI 側でも制限
-  const capped = related.slice(0, TOP_K);
+  // UI 側で動的 top-K (5/10/20) に制限。API は常に limit=TOP_K_MAX で fetch。
+  const capped = related.slice(0, Math.min(topK, TOP_K_MAX));
   const maxCount = Math.max(...capped.map((r) => r.coChangeCount), 1);
 
   const centerNode: GraphNode = {
@@ -716,12 +1035,18 @@ function buildGraph(
 
   const allNodes: GraphNode[] = [centerNode, ...peripheralNodes];
 
-  const graphLinks: GraphLink[] = peripheralNodes.map((n) => ({
-    source: centerNode,
-    target: n,
-    coChangeCount: n.coChangeCount,
-    strength: n.strength,
-  }));
+  const graphLinks: GraphLink[] = peripheralNodes.map((n, i) => {
+    const r = capped[i];
+    const lastCoChangeAt = r.lastCoChangeAt;
+    return {
+      source: centerNode,
+      target: n,
+      coChangeCount: n.coChangeCount,
+      strength: n.strength,
+      lastCoChangeAt,
+      recency: computeRecency(lastCoChangeAt),
+    };
+  });
 
   const simulation = d3Force
     .forceSimulation<GraphNode>(allNodes)
