@@ -5,33 +5,39 @@ import type { Commit, CommitDetail } from './data';
 import { FileContextMenu } from './FileContextMenu';
 import { extractWorkTreeFiles } from '../../lib/workTreeFiles';
 import { classifyFile, colorForKind, labelForKind } from '../../lib/fileKind';
+import { LensHeader } from './LensHeader';
+import {
+  EmptyStateCard,
+  type EmptyStateMessage,
+  type LensEmptyReason,
+} from './EmptyStateCard';
+import type { LensId } from './LensSwitcher';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-const MAX_COMMITS = 30;
+/**
+ * 観測対象とする最新コミットの上限。
+ * UI にも露出 (`?` Popover) して観測窓を自己説明する。
+ */
+export const MAX_COMMITS = 30;
 const HIGHLIGHT_MS = 6000;
 const NEW_BADGE_MS = 3000;
 // 同コミットの行を 1 つの「波」として連鎖スライドインさせる遅延ステップ。
-// Pulse の shockwave に対する Stream 側の対応物 (Commit Echo)。
 const ECHO_STEP_MS = 80;
 const ECHO_MAX_INDEX = 5;
 // 新着 + 数値カウントアップを担当するアニメ窓。HIGHLIGHT_MS とは独立で短く。
 const COUNTER_MS = 600;
-// 新着が走っている間だけ高頻度で再描画してカウンター/トラベラーを滑らかに。
+// 新着が走っている間だけ高頻度で再描画してカウンターを滑らかに。
 const FAST_TICK_MS = 60;
-// Sparkle / Volley Flash 用ウィンドウ — Pulse の花火・"ドン" の Stream 版。
-const SPARKLE_MS = 420;
+// Volley flash の時間窓。"3 ファイル以上が同コミットで同着" のセマンティクスを残し、
+// 視覚刺激は弱化 (header 着色 9%、dot scale 1.2) して Calm 憲章に揃える。
 const VOLLEY_FLASH_MS = 720;
-// 同一コミットでこの件数以上が同時に飛び込んだら "Volley" 扱い。
-const VOLLEY_THRESHOLD = 3;
-// Sparkle burst の各粒子の飛び先 (px, status badge 中心からの相対オフセット)。
-const SPARKLE_VECTORS: Array<[number, number]> = [
-  [-22, -16],
-  [22, -16],
-  [-18, 18],
-  [18, 18],
-];
+/**
+ * 同一コミットでこの件数以上が同時に飛び込んだら "Volley" 扱い。
+ * UI にも露出して閾値の透明性を確保する。
+ */
+export const VOLLEY_THRESHOLD = 3;
 // Live-rate sparkline — 直近 SPARKLINE_WINDOW_MS を SPARKLINE_BUCKETS 本の縦棒で
 // 表示。最右が "now" バケット。Pulse の LivePulse と意味的にペア。
 const SPARKLINE_BUCKETS = 6;
@@ -63,8 +69,8 @@ const WORKING_TREE_HASH = 'WORKING-TREE';
 // ---------------------------------------------------------------------------
 function statusColor(status: string): string {
   switch (status) {
-    case 'A': return '#22c55e';
-    case 'D': return '#ef4444';
+    case 'A': return 'var(--rs-git-added)';
+    case 'D': return 'var(--rs-git-deleted)';
     case 'R': return '#f59e0b';
     default:  return '#64748b';
   }
@@ -77,6 +83,17 @@ function statusLabel(status: string): string {
     case 'R': return 'Renamed';
     case 'M': return 'Modified';
     default:  return status || 'Modified';
+  }
+}
+
+/** SR / aria-label 用の日本語ラベル。視覚は ASCII 1 文字バッジを維持。 */
+function statusLabelJa(status: string): string {
+  switch (status) {
+    case 'A': return '追加';
+    case 'D': return '削除';
+    case 'R': return '名前変更';
+    case 'M': return '変更';
+    default:  return status || '変更';
   }
 }
 
@@ -140,6 +157,61 @@ function usePrefersReducedMotion(): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Self-explanation content (LensHeader / EmptyStateCard)
+// ---------------------------------------------------------------------------
+const STREAM_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> = {
+  'no-commits': {
+    title: 'まだ観測できるコミットがありません',
+    body: 'この Lens は直近のコミットを 1 行 1 件で逆時系列に表示します。コミットが入ると自動でここに流れてきます。',
+  },
+};
+
+function StreamHelpContent() {
+  return (
+    <>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+        Stream Lens の見方
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        直近{' '}
+        <span style={{ fontFamily: 'var(--rs-mono)' }}>{MAX_COMMITS}</span>{' '}
+        コミットの変更ファイルを 1 行 1 件で表示します。新着は薄く強調され、
+        数秒で落ち着きます。
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        左バッジ (status)
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        <span style={{ fontFamily: 'var(--rs-mono)' }}>A</span> 追加 ·{' '}
+        <span style={{ fontFamily: 'var(--rs-mono)' }}>M</span> 変更 ·{' '}
+        <span style={{ fontFamily: 'var(--rs-mono)' }}>D</span> 削除 ·{' '}
+        <span style={{ fontFamily: 'var(--rs-mono)' }}>R</span> 名前変更
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        小さな丸 (kind)
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        ファイル種別を Pulse と共通の色語彙で示します
+        (Code / Test / Doc / Config / Build / Asset / Other)。
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+        ヘッダ
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
+        左の緑ドットは観測継続中の証。隣の縦棒列は直近{' '}
+        <span style={{ fontFamily: 'var(--rs-mono)' }}>30s</span> の流量
+        (Pulse と同じ語彙)。同コミットで{' '}
+        <span style={{ fontFamily: 'var(--rs-mono)' }}>{VOLLEY_THRESHOLD}</span>{' '}
+        ファイル以上が同着するとヘッダが一瞬色付きします (Volley)。
+      </div>
+      <div style={{ color: 'var(--rs-text-muted)', fontSize: 11 }}>
+        observation only — refscope は書き込み操作を行いません。
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 export type FileStreamLensProps = {
@@ -149,6 +221,8 @@ export type FileStreamLensProps = {
   onSelectCommit: (hash: string) => void;
   onOpenFileHistory?: (path: string) => void;
   workTree?: WorkTreeResponse | null;
+  /** 兄弟 Lens への遷移コールバック (EmptyStateCard.relatedLenses で利用) */
+  onChangeLens?: (lens: LensId) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -161,6 +235,7 @@ export function FileStreamLens({
   onSelectCommit,
   onOpenFileHistory,
   workTree,
+  onChangeLens,
 }: FileStreamLensProps) {
   const [detailCache, setDetailCache] = useState<Map<string, CommitDetail>>(
     () => new Map(),
@@ -390,7 +465,31 @@ export function FileStreamLens({
 
   if (allEntries.length === 0) {
     if (commits.length === 0) {
-      return <EmptyState message="No commits yet — waiting for activity…" />;
+      return (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100%',
+            background: 'var(--rs-bg-canvas)',
+          }}
+        >
+          <LensHeader
+            title="Stream"
+            oneLiner="ファイル変更を 1 行 1 件で逆時系列に観測する"
+            helpContent={<StreamHelpContent />}
+          />
+          <EmptyStateCard
+            reason="no-commits"
+            messages={STREAM_EMPTY_MESSAGES}
+            onChangeLens={onChangeLens}
+            relatedLenses={[
+              { id: 'pulse', label: 'Pulse を見る' },
+              { id: 'live', label: 'Live を見る' },
+            ]}
+          />
+        </div>
+      );
     }
     return <EmptyState message="Loading commit details…" />;
   }
@@ -416,12 +515,6 @@ export function FileStreamLens({
           from { opacity: 0; transform: translateY(-6px); }
           to   { opacity: 1; transform: translateY(0); }
         }
-        @keyframes rs-stream-traveler {
-          0%   { top: -22px; opacity: 0; }
-          15%  { opacity: 1; }
-          85%  { opacity: 1; }
-          100% { top: 100%; opacity: 0; }
-        }
         .rs-stream-row-new {
           animation: rs-stream-slidein 280ms ease-out both;
         }
@@ -437,70 +530,19 @@ export function FileStreamLens({
           overflow: hidden;
           pointer-events: none;
         }
-        .rs-stream-stripe__traveler {
-          position: absolute;
-          left: 0;
-          right: 0;
-          height: 22px;
-          background: linear-gradient(
-            to bottom,
-            transparent,
-            color-mix(in oklab, white, transparent 30%),
-            transparent
-          );
-          opacity: 0;
-        }
-        .rs-stream-row-new .rs-stream-stripe__traveler {
-          animation: rs-stream-traveler 720ms cubic-bezier(0.2, 0.7, 0.3, 1) 1;
-        }
-        @keyframes rs-stream-sparkle {
-          0%   { transform: translate(0, 0) scale(0.4); opacity: 0; }
-          18%  { opacity: 1; }
-          100% { transform: var(--rs-spark-end, translate(0, 0)) scale(0.2); opacity: 0; }
-        }
-        @keyframes rs-stream-shockwave {
-          0%   { transform: translate(-50%, -50%) scale(0.2); opacity: 0; }
-          25%  { opacity: 0.55; }
-          100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+        .rs-stream-row:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--rs-accent), 0 1px 2px rgba(0,0,0,0.15);
         }
         @keyframes rs-stream-header-flash {
-          0%   { box-shadow: inset 0 0 0 0 transparent; background-color: var(--rs-bg-panel); }
-          15%  { box-shadow: inset 0 -2px 0 0 var(--rs-volley-color, var(--rs-accent)); background-color: color-mix(in oklab, var(--rs-bg-panel), var(--rs-volley-color, var(--rs-accent)) 18%); }
-          100% { box-shadow: inset 0 0 0 0 transparent; background-color: var(--rs-bg-panel); }
+          0%   { background-color: var(--rs-bg-panel); }
+          18%  { background-color: color-mix(in oklab, var(--rs-bg-panel), var(--rs-volley-color, var(--rs-accent)) 9%); }
+          100% { background-color: var(--rs-bg-panel); }
         }
         @keyframes rs-stream-dot-flash {
           0%   { transform: scale(1); }
-          22%  { transform: scale(1.55); box-shadow: 0 0 0 6px color-mix(in oklab, var(--rs-volley-color, var(--rs-accent)), transparent 40%); }
+          22%  { transform: scale(1.2); box-shadow: 0 0 0 4px color-mix(in oklab, var(--rs-volley-color, var(--rs-accent)), transparent 60%); }
           100% { transform: scale(1); }
-        }
-        .rs-stream-spark {
-          position: absolute;
-          left: 36px;
-          top: 50%;
-          width: 4px;
-          height: 4px;
-          margin: -2px 0 0 -2px;
-          border-radius: 50%;
-          pointer-events: none;
-          opacity: 0;
-        }
-        .rs-stream-row-new .rs-stream-spark {
-          animation: rs-stream-sparkle ${SPARKLE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
-        }
-        .rs-stream-shock {
-          position: absolute;
-          left: 36px;
-          top: 50%;
-          width: 220px;
-          height: 220px;
-          border-radius: 50%;
-          pointer-events: none;
-          opacity: 0;
-          transform: translate(-50%, -50%) scale(0.2);
-          background: radial-gradient(circle, color-mix(in oklab, var(--rs-shock-color, var(--rs-accent)), transparent 65%) 0%, transparent 70%);
-        }
-        .rs-stream-row[data-hoverable="1"]:hover .rs-stream-shock {
-          animation: rs-stream-shockwave 240ms cubic-bezier(0.2, 0.7, 0.3, 1) 1;
         }
         .rs-stream-header--volley {
           animation: rs-stream-header-flash ${VOLLEY_FLASH_MS}ms ease-out 1;
@@ -511,25 +553,36 @@ export function FileStreamLens({
         @media (prefers-reduced-motion: reduce) {
           .rs-stream-row-new,
           .rs-stream-pulse-dot,
-          .rs-stream-row-new .rs-stream-stripe__traveler,
-          .rs-stream-row-new .rs-stream-spark,
-          .rs-stream-row[data-hoverable="1"]:hover .rs-stream-shock,
           .rs-stream-header--volley,
           .rs-stream-header--volley .rs-stream-pulse-dot {
-            animation: none;
+            animation: none !important;
           }
         }
       `}</style>
 
-      {/* Sticky summary header */}
+      {/* Row 1: LensHeader (title + oneLiner + ? Popover) */}
+      <LensHeader
+        title="Stream"
+        oneLiner="ファイル変更を 1 行 1 件で逆時系列に観測する"
+        helpContent={<StreamHelpContent />}
+      />
+
+      {/* Row 2: Sticky summary stats bar */}
       <div
         key={volley?.key ?? 'idle'}
         className={volley ? 'rs-stream-header--volley' : undefined}
+        role="status"
+        aria-live="polite"
+        aria-label={
+          volley
+            ? `同コミットで ${volley.count} ファイル同着`
+            : `観測中: ${summary.changes} 件 / ${summary.commits} コミット`
+        }
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 12,
-          padding: '10px 16px',
+          padding: '8px 16px 10px',
           borderBottom: '1px solid var(--rs-border)',
           background: 'var(--rs-bg-panel)',
           fontFamily: 'var(--rs-sans)',
@@ -545,12 +598,13 @@ export function FileStreamLens({
             width: 9,
             height: 9,
             borderRadius: '50%',
-            background: '#22c55e',
+            background: 'var(--rs-git-added)',
             flexShrink: 0,
           }}
           aria-hidden="true"
         />
         <span
+          title="観測中。SSE で新着を受信中"
           style={{
             fontSize: 12,
             fontWeight: 600,
@@ -561,7 +615,12 @@ export function FileStreamLens({
         >
           Live Stream
         </span>
-        <LiveRateSparkline timestamps={liveTimestamps} nowMs={nowMs} />
+        <span
+          title="直近 30 秒の入着件数 (6 バケット)"
+          style={{ display: 'inline-flex', alignItems: 'center' }}
+        >
+          <LiveRateSparkline timestamps={liveTimestamps} nowMs={nowMs} />
+        </span>
         <div
           style={{
             width: 1,
@@ -571,11 +630,29 @@ export function FileStreamLens({
           }}
           aria-hidden="true"
         />
-        <SummaryStat label="changes" value={summary.changes} />
-        <SummaryStat label="commits" value={summary.commits} />
+        <SummaryStat
+          label="changes"
+          value={summary.changes}
+          title={`${summary.changes} 件のファイル変更を表示中`}
+        />
+        <SummaryStat
+          label={`commits / ${MAX_COMMITS} max`}
+          value={summary.commits}
+          title={`直近 ${MAX_COMMITS} コミットを観測中`}
+        />
         <span style={{ display: 'inline-flex', gap: 6, fontSize: 12, fontFamily: 'var(--rs-mono)' }}>
-          <span style={{ color: '#22c55e', fontWeight: 600 }}>+{summary.added.toLocaleString()}</span>
-          <span style={{ color: '#ef4444', fontWeight: 600 }}>−{summary.deleted.toLocaleString()}</span>
+          <span
+            style={{ color: 'var(--rs-git-added)', fontWeight: 600 }}
+            title="追加行の合計"
+          >
+            +{summary.added.toLocaleString()}
+          </span>
+          <span
+            style={{ color: 'var(--rs-git-deleted)', fontWeight: 600 }}
+            title="削除行の合計"
+          >
+            −{summary.deleted.toLocaleString()}
+          </span>
         </span>
       </div>
 
@@ -593,7 +670,6 @@ export function FileStreamLens({
           const elapsed = nowMs - appearedAt;
           const isHighlighted = elapsed < HIGHLIGHT_MS;
           const isNewBadge = elapsed < NEW_BADGE_MS;
-          const isSparkling = !reducedMotion && elapsed < SPARKLE_MS;
           const highlightAlpha = isHighlighted
             ? Math.max(0, 1 - elapsed / HIGHLIGHT_MS)
             : 0;
@@ -615,7 +691,7 @@ export function FileStreamLens({
                 'rs-stream-row' + (isHighlighted ? ' rs-stream-row-new' : '')
               }
               role="listitem"
-              aria-label={`${statusLabel(entry.status)} ${entry.path}`}
+              aria-label={`${statusLabelJa(entry.status)}: ${entry.path} — ${entry.subject} (${entry.commitShortHash})`}
               onClick={() => {
                 if (entry.isWorkingTree) return;
                 onSelectCommit(entry.commitHash);
@@ -659,15 +735,12 @@ export function FileStreamLens({
                   : '0 1px 2px rgba(0,0,0,0.06)',
                 cursor: entry.isWorkingTree ? 'default' : 'pointer',
                 transition: 'box-shadow 320ms ease-out, border-color 320ms ease-out',
-                outline: 'none',
                 overflow: 'hidden',
                 animationDelay: echoDelayMs > 0 ? `${echoDelayMs}ms` : undefined,
-                ['--rs-shock-color' as string]: kindColor,
               } as CSSProperties}
             >
-              {/* Time Belt — vertical stripe encoding both status (color) and
-                  time flow (top→bottom fade). On new arrivals a soft "traveler"
-                  glides down the belt once (see .rs-stream-stripe__traveler). */}
+              {/* Time Belt — vertical stripe encoding status (color) and
+                  time flow (top→bottom fade). */}
               <div className="rs-stream-stripe" aria-hidden="true">
                 <div
                   style={{
@@ -677,7 +750,6 @@ export function FileStreamLens({
                     opacity: 0.9,
                   }}
                 />
-                <div className="rs-stream-stripe__traveler" />
               </div>
 
               {/* Status badge — large left chip */}
@@ -724,10 +796,10 @@ export function FileStreamLens({
                     minWidth: 0,
                   }}
                 >
-                  {/* Kind signature — shared visual vocabulary with Pulse so a
-                      "blue dot" means Code in both lenses. */}
+                  {/* Kind signature — Pulse と共通の色語彙 (Code/Test/Doc 等)。
+                      意味は row の aria-label に統合済なので装飾扱い。 */}
                   <span
-                    aria-label={`${kindLabel} file`}
+                    aria-hidden="true"
                     title={kindLabel}
                     style={{
                       flexShrink: 0,
@@ -869,31 +941,36 @@ export function FileStreamLens({
                 </div>
               </div>
 
-              {/* Hover shockwave (kind-color ripple anchored on the status badge). */}
-              {!entry.isWorkingTree && (
-                <span className="rs-stream-shock" aria-hidden="true" />
-              )}
-
-              {/* Sparkle burst — 4 tiny particles fly out from the badge on
-                  arrival. Pulse の花火を行レベルに移植した版。 */}
-              {isSparkling &&
-                SPARKLE_VECTORS.map((v, i) => (
-                  <span
-                    key={i}
-                    className="rs-stream-spark"
-                    aria-hidden="true"
-                    style={
-                      {
-                        background: kindColor,
-                        ['--rs-spark-end' as string]: `translate(${v[0]}px, ${v[1]}px)`,
-                      } as CSSProperties
-                    }
-                  />
-                ))}
             </article>
           );
         })}
       </div>
+
+      {/* Screen-reader live region — 視覚的非表示 ul に直近 5 件を流す。
+          Pulse Lens と同じ規格で SR ユーザにも新着が伝わるようにする。 */}
+      <ul
+        role="status"
+        aria-live="polite"
+        aria-label="直近の変更"
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+        }}
+      >
+        {allEntries.slice(0, 5).map((entry) => (
+          <li key={entry.id}>
+            {statusLabelJa(entry.status)}: {entry.path} (
+            {entry.isWorkingTree ? '作業ツリー' : entry.commitShortHash})
+          </li>
+        ))}
+      </ul>
 
       {/* Right-click context menu */}
       <FileContextMenu
@@ -973,7 +1050,7 @@ function DiffStats({
         fontSize: 11,
       }}
     >
-      <span style={{ color: '#22c55e', minWidth: 32, textAlign: 'right', fontWeight: 600 }}>
+      <span style={{ color: 'var(--rs-git-added)', minWidth: 32, textAlign: 'right', fontWeight: 600 }}>
         +{dispAdded}
       </span>
       <span
@@ -991,19 +1068,19 @@ function DiffStats({
         <span
           style={{
             width: `${addedRatio * 100 * phase}%`,
-            background: '#22c55e',
+            background: 'var(--rs-git-added)',
             transition: 'width 200ms ease-out',
           }}
         />
         <span
           style={{
             width: `${deletedRatio * 100 * phase}%`,
-            background: '#ef4444',
+            background: 'var(--rs-git-deleted)',
             transition: 'width 200ms ease-out',
           }}
         />
       </span>
-      <span style={{ color: '#ef4444', minWidth: 32, fontWeight: 600 }}>
+      <span style={{ color: 'var(--rs-git-deleted)', minWidth: 32, fontWeight: 600 }}>
         −{dispDeleted}
       </span>
     </span>
@@ -1079,9 +1156,18 @@ function LiveRateSparkline({
 // ---------------------------------------------------------------------------
 // SummaryStat
 // ---------------------------------------------------------------------------
-function SummaryStat({ label, value }: { label: string; value: number }) {
+function SummaryStat({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: number;
+  title?: string;
+}) {
   return (
     <span
+      title={title}
       style={{
         display: 'inline-flex',
         alignItems: 'baseline',
