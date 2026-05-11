@@ -18,7 +18,9 @@ export type LensEmptyReason =
   | 'no-risky'
   | 'no-visible-authors'
   | 'no-rewrite-events'
-  | 'pulse-quiet';
+  | 'pulse-quiet'
+  | 'symbol-idle'
+  | 'symbol-no-result';
 
 export type EmptyStateMessage = {
   title: string;

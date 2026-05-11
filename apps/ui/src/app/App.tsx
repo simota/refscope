@@ -1538,8 +1538,8 @@ export default function App() {
           <SymbolHistoryView
             repoId={selectedRepo}
             query={symbolHistoryQuery}
-            onClose={() => setActiveLens('live')}
             onQueryChange={setSymbolHistoryQuery}
+            onChangeLens={setActiveLens}
           />
         </div>
       )}

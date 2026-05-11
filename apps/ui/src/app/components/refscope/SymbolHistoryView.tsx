@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowRight, History, X } from "lucide-react";
+import { AlertCircle, ArrowRight } from "lucide-react";
 import {
   fetchSymbolHistory,
   type SymbolHistoryEntry,
   type SymbolHistoryResponse,
 } from "../../api";
+import { LensHeader } from "./LensHeader";
+import {
+  EmptyStateCard,
+  type EmptyStateMessage,
+  type LensEmptyReason,
+} from "./EmptyStateCard";
+import type { LensId } from "./LensSwitcher";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +47,96 @@ function formatTime(isoDate: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Self-explanation (LensHeader.helpContent / EmptyStateCard messages)
+// ---------------------------------------------------------------------------
+
+function SymbolHelpContent() {
+  return (
+    <>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--rs-text)" }}>
+        Symbol Lens の見方
+      </div>
+      <div style={{ color: "var(--rs-text-secondary)", marginBottom: 8 }}>
+        指定したファイル内の <strong>関数 / メソッド 1 つ</strong> の履歴を
+        Git の <code style={{ fontFamily: "var(--rs-mono)" }}>git log -L</code>{" "}
+        で辿ります。Refscope は推論を行わず、Git の出力をそのまま観測します。
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
+        構文
+      </div>
+      <div
+        style={{
+          fontFamily: "var(--rs-mono)",
+          color: "var(--rs-text)",
+          marginBottom: 8,
+          padding: "4px 8px",
+          background: "var(--rs-bg-canvas)",
+          borderRadius: "var(--rs-radius-sm)",
+        }}
+      >
+        git log -L :&lt;funcname&gt;:&lt;path&gt;
+      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
+        入力例
+      </div>
+      <ul
+        style={{
+          margin: "0 0 8px 16px",
+          padding: 0,
+          color: "var(--rs-text-secondary)",
+          lineHeight: 1.6,
+        }}
+      >
+        <li>
+          Go:{" "}
+          <code style={{ fontFamily: "var(--rs-mono)" }}>src/parser/scope.go</code> ×{" "}
+          <code style={{ fontFamily: "var(--rs-mono)" }}>parseRefScope</code>
+        </li>
+        <li>
+          TS:{" "}
+          <code style={{ fontFamily: "var(--rs-mono)" }}>apps/ui/src/app/App.tsx</code> ×{" "}
+          <code style={{ fontFamily: "var(--rs-mono)" }}>useSymbolHistory</code>
+        </li>
+        <li>
+          Python:{" "}
+          <code style={{ fontFamily: "var(--rs-mono)" }}>lib/scope.py</code> ×{" "}
+          <code style={{ fontFamily: "var(--rs-mono)" }}>_resolve_scope</code>
+        </li>
+      </ul>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
+        範囲と制約
+      </div>
+      <ul
+        style={{
+          margin: "0 0 8px 16px",
+          padding: 0,
+          color: "var(--rs-text-secondary)",
+          lineHeight: 1.6,
+        }}
+      >
+        <li>追跡対象は関数 / メソッドのみ (変数は不可)</li>
+        <li>rename は Git の literal diff (heuristic similarity) に依存</li>
+        <li>HEAD 由来の履歴を server 側上限で打ち切り</li>
+      </ul>
+      <div style={{ color: "var(--rs-text-muted)", fontSize: 11 }}>
+        observation only — refscope は書き込み操作を行いません。
+      </div>
+    </>
+  );
+}
+
+const SYMBOL_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> = {
+  "symbol-idle": {
+    title: "関数 / メソッドの履歴を辿る",
+    body: "ファイルパスとシンボル名 (関数 / メソッド名) を入力すると、git log -L で履歴を表示します。? アイコンに入力例が載っています。",
+  },
+  "symbol-no-result": {
+    title: "該当するコミットが見つかりませんでした",
+    body: "シンボル名の綴り違い、ファイルパスの相違、または現 HEAD で該当する関数が見つからない可能性があります。Stream や Hotspot でファイル全体の履歴を確認してください。",
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
 
@@ -64,8 +161,8 @@ function CommitEntry({ entry }: { entry: SymbolHistoryEntry }) {
             marginBottom: 6,
             padding: "3px 8px",
             borderRadius: "var(--rs-radius-sm)",
-            background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 12%)",
-            border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 40%)",
+            background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 8%)",
+            border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 30%)",
             fontSize: 11,
             color: "var(--rs-accent)",
           }}
@@ -185,22 +282,23 @@ function CommitEntry({ entry }: { entry: SymbolHistoryEntry }) {
 export function SymbolHistoryView({
   repoId,
   query,
-  onClose,
   onQueryChange,
+  onChangeLens,
 }: {
   repoId: string;
   /** Current search query. null = show the empty input form. */
   query: { path: string; funcname: string } | null;
-  onClose: () => void;
   /** Called when the user submits a new search. */
   onQueryChange: (q: { path: string; funcname: string } | null) => void;
+  /** Optional sibling Lens routing for EmptyStateCard.relatedLenses. */
+  onChangeLens?: (lens: LensId) => void;
 }) {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "idle" });
   const [localPath, setLocalPath] = useState(query?.path ?? "");
   const [localFuncname, setLocalFuncname] = useState(query?.funcname ?? "");
+  const [validationMessage, setValidationMessage] = useState("");
   const abortRef = useRef<AbortController | null>(null);
-  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const pathInputRef = useRef<HTMLInputElement | null>(null);
 
   // Sync local inputs when parent changes query
   useEffect(() => {
@@ -210,23 +308,16 @@ export function SymbolHistoryView({
     }
   }, [query]);
 
-  // Focus close button on mount
+  // mount: query 未指定 (=これから検索する) のときだけ path input にフォーカス。
+  // 旧実装は close ボタンに自動フォーカスしていたが、能動検索 Lens の意図と逆。
+  // WAI-ARIA APG の search dialog パターンに整合させ、検索フォーム入口へ案内する。
   useEffect(() => {
-    closeButtonRef.current?.focus();
-  }, []);
-
-  // Trap focus within overlay
-  useEffect(() => {
-    const overlay = overlayRef.current;
-    if (!overlay) return;
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        onClose();
-      }
+    if (query == null) {
+      pathInputRef.current?.focus();
     }
-    overlay.addEventListener("keydown", handleKeyDown);
-    return () => overlay.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+    // 意図的に空依存配列 — マウント時 1 回のみ。query 変化での再フォーカスはしない。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fetch when query changes
   useEffect(() => {
@@ -272,7 +363,11 @@ export function SymbolHistoryView({
       e.preventDefault();
       const trimPath = localPath.trim();
       const trimFuncname = localFuncname.trim();
-      if (!trimPath || !trimFuncname) return;
+      if (!trimPath || !trimFuncname) {
+        setValidationMessage("ファイルパスとシンボル名の両方を入力してください。");
+        return;
+      }
+      setValidationMessage("");
       onQueryChange({ path: trimPath, funcname: trimFuncname });
     },
     [localPath, localFuncname, onQueryChange],
@@ -281,15 +376,26 @@ export function SymbolHistoryView({
   const handleClear = useCallback(() => {
     setLocalPath("");
     setLocalFuncname("");
+    setValidationMessage("");
     onQueryChange(null);
     setLoadState({ kind: "idle" });
   }, [onQueryChange]);
 
+  // 結果件数を SR に通知するためのテキスト。
+  // 旧実装は results コンテナ全体に aria-live="polite" を当てており、commit
+  // 一覧の追加要素すべてが冗長に読み上げられていた。件数のみを polite に通知。
+  const statusText: string = (() => {
+    if (loadState.kind === "loading") return "履歴を取得中";
+    if (loadState.kind === "success") {
+      const n = loadState.data.entries.length;
+      const truncated = loadState.data.truncated ? " (一部省略)" : "";
+      return `${n} 件のコミットが見つかりました${truncated}`;
+    }
+    return "";
+  })();
+
   return (
     <div
-      ref={overlayRef}
-      role="region"
-      aria-label="Symbol History"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -299,53 +405,50 @@ export function SymbolHistoryView({
         overflow: "hidden",
       }}
     >
-      {/* Header */}
-      <div
+      <style>{`
+        .rs-symbol-input:focus-visible {
+          outline: 2px solid var(--rs-accent);
+          outline-offset: -1px;
+        }
+        .rs-symbol-btn:focus-visible {
+          outline: 2px solid var(--rs-accent);
+          outline-offset: 1px;
+        }
+      `}</style>
+
+      {/* Lens self-explanation header */}
+      <LensHeader
+        title="Symbol"
+        oneLiner="関数 / メソッド 1 つの履歴を git log -L で辿る"
+        helpContent={<SymbolHelpContent />}
+      />
+
+      {/* SR-only status: 件数 / loading のみを polite 通知 */}
+      <span
+        role="status"
+        aria-live="polite"
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "8px 12px",
-          borderBottom: "1px solid var(--rs-border)",
-          flexShrink: 0,
+          position: "absolute",
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: "hidden",
+          clip: "rect(0, 0, 0, 0)",
+          whiteSpace: "nowrap",
+          border: 0,
         }}
       >
-        <History size={14} aria-hidden style={{ color: "var(--rs-accent)" }} />
-        <span
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: "var(--rs-text)",
-            flex: 1,
-          }}
-        >
-          Symbol History
-        </span>
-        <button
-          ref={closeButtonRef}
-          type="button"
-          aria-label="Close symbol history"
-          onClick={onClose}
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            padding: 4,
-            borderRadius: "var(--rs-radius-sm)",
-            color: "var(--rs-text-secondary)",
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          <X size={14} aria-hidden />
-        </button>
-      </div>
+        {statusText}
+      </span>
 
       {/* Search form */}
       <form
         onSubmit={handleSubmit}
+        aria-label="Symbol 検索フォーム"
         style={{
           padding: "10px 12px",
+          borderTop: "1px solid var(--rs-border)",
           borderBottom: "1px solid var(--rs-border)",
           display: "flex",
           flexDirection: "column",
@@ -361,12 +464,14 @@ export function SymbolHistoryView({
         </label>
         <input
           id="sym-hist-path"
+          ref={pathInputRef}
           type="text"
           value={localPath}
           onChange={(e) => setLocalPath(e.target.value)}
-          placeholder="e.g. src/parser/scope.go"
+          placeholder="例: apps/ui/src/app/App.tsx"
           autoComplete="off"
           spellCheck={false}
+          className="rs-symbol-input"
           style={{
             fontSize: 12,
             fontFamily: "var(--rs-mono)",
@@ -382,16 +487,17 @@ export function SymbolHistoryView({
           htmlFor="sym-hist-func"
           style={{ fontSize: 11, color: "var(--rs-text-secondary)" }}
         >
-          Symbol name
+          Symbol name (関数 / メソッド)
         </label>
         <input
           id="sym-hist-func"
           type="text"
           value={localFuncname}
           onChange={(e) => setLocalFuncname(e.target.value)}
-          placeholder="e.g. parseRefScope"
+          placeholder="例: parseRefScope"
           autoComplete="off"
           spellCheck={false}
+          className="rs-symbol-input"
           style={{
             fontSize: 12,
             fontFamily: "var(--rs-mono)",
@@ -403,10 +509,24 @@ export function SymbolHistoryView({
             outline: "none",
           }}
         />
+        {validationMessage && (
+          <p
+            role="status"
+            aria-live="polite"
+            style={{
+              margin: 0,
+              fontSize: 11,
+              color: "var(--rs-warning, var(--rs-text-secondary))",
+            }}
+          >
+            {validationMessage}
+          </p>
+        )}
         <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
           <button
             type="submit"
             disabled={!localPath.trim() || !localFuncname.trim()}
+            className="rs-symbol-btn"
             style={{
               flex: 1,
               fontSize: 12,
@@ -425,6 +545,8 @@ export function SymbolHistoryView({
             <button
               type="button"
               onClick={handleClear}
+              className="rs-symbol-btn"
+              title="検索クエリと結果をクリアします"
               style={{
                 fontSize: 12,
                 padding: "4px 10px",
@@ -441,24 +563,17 @@ export function SymbolHistoryView({
         </div>
       </form>
 
-      {/* Results */}
+      {/* Results — aria-live は外し、件数通知は上の SR-only status に集約 */}
       <div
         style={{ flex: 1, overflow: "auto" }}
-        tabIndex={-1}
-        aria-live="polite"
         aria-busy={loadState.kind === "loading"}
       >
         {loadState.kind === "idle" && (
-          <p
-            style={{
-              padding: "20px 16px",
-              fontSize: 12,
-              color: "var(--rs-text-secondary)",
-              textAlign: "center",
-            }}
-          >
-            Enter a file path and symbol name to view its history.
-          </p>
+          <EmptyStateCard
+            reason="symbol-idle"
+            messages={SYMBOL_EMPTY_MESSAGES}
+            onChangeLens={onChangeLens}
+          />
         )}
 
         {loadState.kind === "loading" && (
@@ -481,8 +596,8 @@ export function SymbolHistoryView({
               padding: "16px",
               margin: "12px",
               borderRadius: "var(--rs-radius-sm)",
-              border: "1px solid color-mix(in oklab, var(--rs-border), red 40%)",
-              background: "color-mix(in oklab, var(--rs-bg-elevated), red 8%)",
+              border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-git-deleted) 40%)",
+              background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-git-deleted) 8%)",
               fontSize: 12,
               color: "var(--rs-text)",
             }}
@@ -566,16 +681,15 @@ export function SymbolHistoryView({
 
             {/* No results */}
             {loadState.data.entries.length === 0 && (
-              <p
-                style={{
-                  padding: "20px 16px",
-                  fontSize: 12,
-                  color: "var(--rs-text-secondary)",
-                  textAlign: "center",
-                }}
-              >
-                No commits found for this symbol.
-              </p>
+              <EmptyStateCard
+                reason="symbol-no-result"
+                messages={SYMBOL_EMPTY_MESSAGES}
+                onChangeLens={onChangeLens}
+                relatedLenses={[
+                  { id: "stream", label: "Stream で見る" },
+                  { id: "hotspot", label: "Hotspot で見る" },
+                ]}
+              />
             )}
 
             {/* Commit list */}
@@ -594,8 +708,8 @@ export function SymbolHistoryView({
                   borderTop: "1px solid var(--rs-border)",
                 }}
               >
-                Showing {loadState.data.limit} of more commits. Increase{" "}
-                <code style={{ fontFamily: "var(--rs-mono)" }}>limit</code> to see more.
+                先頭 {loadState.data.limit} 件まで表示しています。
+                さらに古いコミットは server 側上限により省略されました。
               </p>
             )}
           </>
