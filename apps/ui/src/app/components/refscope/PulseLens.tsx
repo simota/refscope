@@ -1647,7 +1647,6 @@ export function PulseLens({
           <canvas
             ref={canvasRef}
             className="rs-pulse-canvas"
-            aria-label={`Particle field — ${summary.files} files`}
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: 'default' }}
             aria-label={`Particle field — ${summary.files} files. 同じ情報のテキスト一覧は隣のリストにあります。`}
           />
