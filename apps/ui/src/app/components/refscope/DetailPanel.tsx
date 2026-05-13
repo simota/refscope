@@ -1,11 +1,13 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
   Copy,
   ExternalLink,
   FileSearch,
+  FolderTree,
   History,
+  List as ListIcon,
   Search,
   ShieldCheck,
 } from "lucide-react";
@@ -21,6 +23,7 @@ import type {
 import { fetchRangeHistory } from "../../api";
 import { DiffViewer } from "./DiffViewer";
 import { StructuralDiffBadge } from "./StructuralDiffBadge";
+import { ChangedFilesTree } from "./ChangedFilesTree";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -34,6 +37,30 @@ export type WhyPanelQuery = {
   lineStart: number;
   lineEnd: number;
 };
+
+type ChangedFilesView = "list" | "tree";
+
+const CHANGED_FILES_VIEW_STORAGE_KEY = "rs.changedFilesView";
+
+function readChangedFilesView(): ChangedFilesView {
+  if (typeof window === "undefined") return "list";
+  try {
+    const raw = window.localStorage.getItem(CHANGED_FILES_VIEW_STORAGE_KEY);
+    return raw === "tree" ? "tree" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+function writeChangedFilesView(view: ChangedFilesView): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CHANGED_FILES_VIEW_STORAGE_KEY, view);
+  } catch {
+    // Ignore storage failures — view preference simply won't persist
+    // across reloads in private-mode browsers or when quota is exhausted.
+  }
+}
 
 export function DetailPanel({
   commit,
@@ -84,6 +111,12 @@ export function DetailPanel({
   // declared `useState` after the worktree early return — we move the hook
   // ahead so both code paths visit the same hook order.
   const [copyStatus, setCopyStatus] = useState("");
+  const [filesView, setFilesView] = useState<ChangedFilesView>(() =>
+    readChangedFilesView(),
+  );
+  useEffect(() => {
+    writeChangedFilesView(filesView);
+  }, [filesView]);
 
   // Working-tree view takes precedence over commit detail when selected.
   // Rendered before any commit lookup so the panel can show a useful state
@@ -300,9 +333,20 @@ export function DetailPanel({
           <FileStatusMix files={files} />
         </Section>
 
-        <Section title="CHANGED FILES" hint={`${files.length} files`}>
+        <ChangedFilesSection
+          fileCount={files.length}
+          view={filesView}
+          onViewChange={setFilesView}
+        >
           {files.length === 0 ? (
             <Empty>{loading ? "Loading changed files…" : "No file changes returned for this commit."}</Empty>
+          ) : filesView === "tree" ? (
+            <ChangedFilesTree
+              files={files}
+              repoId={repoId}
+              onOpenFileHistory={onOpenFileHistory}
+              onFilterByPath={onFilterByPath}
+            />
           ) : (
             files.map((f) => (
               <ContextMenu key={f.path}>
@@ -367,7 +411,7 @@ export function DetailPanel({
               </ContextMenu>
             ))
           )}
-        </Section>
+        </ChangedFilesSection>
 
         <Section
           title="DIFF"
@@ -1404,6 +1448,111 @@ function Section({
   );
 }
 
+function ChangedFilesSection({
+  fileCount,
+  view,
+  onViewChange,
+  children,
+}: {
+  fileCount: number;
+  view: ChangedFilesView;
+  onViewChange: (next: ChangedFilesView) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ borderBottom: "1px solid var(--rs-border)" }}>
+      <div
+        className="px-4 flex items-center justify-between gap-2"
+        style={{
+          height: 30,
+          fontSize: 10,
+          letterSpacing: "0.08em",
+          fontWeight: 600,
+          color: "var(--rs-text-muted)",
+          background: "var(--rs-bg-canvas)",
+          borderBottom: "1px solid var(--rs-border)",
+        }}
+      >
+        <span>CHANGED FILES</span>
+        <div className="flex items-center gap-2">
+          <span
+            style={{
+              fontFamily: "var(--rs-mono)",
+              fontWeight: 400,
+              textTransform: "none",
+              letterSpacing: 0,
+            }}
+          >
+            {fileCount} files
+          </span>
+          <div
+            role="group"
+            aria-label="Changed files view mode"
+            className="flex items-center"
+            style={{
+              border: "1px solid var(--rs-border)",
+              borderRadius: "var(--rs-radius-sm)",
+              overflow: "hidden",
+            }}
+          >
+            <ChangedFilesViewButton
+              active={view === "list"}
+              label="List"
+              icon={<ListIcon size={11} />}
+              onClick={() => onViewChange("list")}
+            />
+            <ChangedFilesViewButton
+              active={view === "tree"}
+              label="Tree"
+              icon={<FolderTree size={11} />}
+              onClick={() => onViewChange("tree")}
+            />
+          </div>
+        </div>
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function ChangedFilesViewButton({
+  active,
+  label,
+  icon,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      title={`${label} view`}
+      className="flex items-center gap-1"
+      style={{
+        height: 20,
+        padding: "0 6px",
+        background: active ? "var(--rs-bg-elevated)" : "transparent",
+        color: active ? "var(--rs-text-primary)" : "var(--rs-text-muted)",
+        fontSize: 10,
+        fontFamily: "var(--rs-mono)",
+        textTransform: "none",
+        letterSpacing: 0,
+        fontWeight: active ? 600 : 400,
+        cursor: "pointer",
+        border: "none",
+      }}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
 function Empty({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -1522,7 +1671,7 @@ function RefRow({
   );
 }
 
-function FileBadge({ status }: { status: string }) {
+export function FileBadge({ status }: { status: string }) {
   const map = {
     M: { color: "var(--rs-git-modified)", bg: "var(--rs-git-modified)" },
     A: { color: "var(--rs-git-added)", bg: "var(--rs-git-added)" },
