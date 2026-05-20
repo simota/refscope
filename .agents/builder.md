@@ -263,3 +263,20 @@ Extend existing cherry-pick equivalence panel (8e90179) to grade equivalent entr
 - `pnpm build:api`: PASS
 - gitRunner allowlist: unchanged (diff/log already allowed)
 - App.tsx D-7 (rewriteRescueEntries) + D-3 (branchGroupPrefix): preserved
+
+## 2026-05-21 — PulseLens Fleet Cosmos 3D リライト
+
+### Task scope
+Canvas 2D パーティクル実装（d3-force + requestAnimationFrame）を React Three Fiber + @react-three/drei + @react-three/postprocessing による Fleet Cosmos 風 3D メッセージウィンドウ宇宙に完全置換。
+
+### Domain decisions
+- **コード分割の責務分離**: `buildCosmos` 純関数と `SpacePoint` 型を `cosmosUtils.ts` に独立させ、`PulseCosmosStage.tsx` を `React.lazy` で正しくコード分割（Three.js 一式を別チャンクへ）。
+- **d3-force 削除**: `PulseLens.tsx` のみで利用していた `forceSimulation` を完全削除。`CoChangeLens.tsx` は d3-force を継続使用するため package.json からは削除しない。
+- **Billboard + group 分離**: `<Billboard follow>` と `<group ref={groupRef} position={...}>` を分離して Three.js の position 操作を `useFrame` で制御できるようにした。
+- **isSelected の安全な判定**: `selectedCommitHash?.startsWith(shortHash)` でプレフィックス照合（full hash と 7 char short hash の非対称を吸収）。
+
+### Verification
+- `pnpm build:ui`: PASS (TypeScript エラー 0)
+- `PulseCosmosStage-*.js` 分割チャンク: 1076KB / 300KB gzip で Three.js が独立
+- `pnpm audit --audit-level high`: high 脆弱性は全て apps__web (Astro) 起因、本変更無関係
+- `PulseLensProps` 契約: 変更なし (App.tsx 無修正で動作)

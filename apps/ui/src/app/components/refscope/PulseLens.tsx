@@ -1,16 +1,18 @@
 /**
- * Pulse Lens — コードベースの"鼓動"をリアルタイムに見せる Canvas パーティクル・ビジュアライザ。
+ * Pulse Lens — コードベースの"鼓動"を Fleet Cosmos 風 3D メッセージウィンドウ宇宙で可視化。
  *
- *   - ファイル変更 = 粒子（パーティクル）として描画
- *   - 変更回数    = 粒子サイズ
- *   - ファイル種別 = 色（code / style / config / docs / test / asset / markup / other）
- *   - 直近の更新  = グロー & パルスリング + 花火スパーク
- *   - 新規ファイル = radial shockwave + 花火バースト
- *   - Idle        = sin ベースの breathing + ポップコーン pop
+ *   - ファイル変更 = 3D カード（Billboard + Text）
+ *   - 位置 = ハッシュ由来の固定座標 (X/Y) + 鮮度 (Z: 手前=新)
+ *   - 色  = 変更量 (added + deleted の log スケール: 青=軽微→赤=巨大)
+ *   - 不透明度 = 鮮度（古いほど霧化）
+ *   - 金枠 + 拡大 = 5 分以内に更新
+ *   - OrbitControls: 左ドラッグ回転 / 右ドラッグパン / ホイールズーム
  *
  * ログ的な「Activity」ではなく、コードベースが今動いている感覚を映すレイヤー。
  */
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -18,10 +20,6 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
-import {
-  forceSimulation,
-  type Simulation,
-} from 'd3-force';
 import { getCommit, type WorkTreeResponse } from '../../api';
 import type { Commit, CommitDetail } from './data';
 import { FileContextMenu } from './FileContextMenu';
@@ -35,6 +33,22 @@ import {
   type EmptyStateMessage,
 } from './EmptyStateCard';
 import type { LensId } from './LensSwitcher';
+import {
+  buildCosmos,
+  type SpacePoint,
+  type SpacePointInput,
+} from './cosmosUtils';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog';
+
+// PulseCosmosStage を React.lazy で遅延ロード (Three.js 一式を分割)
+const CosmosStage = lazy(() => import('./PulseCosmosStage'));
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -42,34 +56,11 @@ import type { LensId } from './LensSwitcher';
 const MAX_COMMITS = 30;
 const HIGHLIGHT_MS = 4000;
 const NEW_FILE_MS = 3500;
-const BURST_MS = 600;
-// 既存ファイルの変更検知時の "大爆発" 持続時間。スケール曲線とリング寿命が共有する。
-// 200 (旧) は控えめすぎて気づかれにくかったので、新規ファイルの shockwave と同等まで延ばす。
-const CHANGE_BURST_MS = 700;
-// 変更検知バーストのピーク倍率 (1 + N)。1.2 (旧) → 2.5 で 3.5x まで膨らむ。
-const CHANGE_BURST_SCALE = 2.5;
 const RECENT_CHANGES_MAX = 30;
-const RECENCY_FADE_MS = 30 * 60 * 1000; // 30 分以上で明度低下
-const TAU = Math.PI * 2;
-const MAX_SPARKS = 360;
-
-// ---------------------------------------------------------------------------
-// File-kind helpers (classification/colors live in lib/fileKind, shared with
-// FileStreamLens — keep visual vocabulary identical across lenses).
-// ---------------------------------------------------------------------------
-function fingerprint(stat: FileStat): string {
-  return `${stat.lastSeenHash}::${stat.commitCount}::${stat.totalAdded}::${stat.totalDeleted}::${stat.lastStatus}`;
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function radiusForCount(count: number): number {
-  if (count >= 6) return 12;
-  if (count >= 4) return 10;
-  if (count >= 2) return 8;
-  return 6.5;
-}
 
 // 上位 2 セグメントでグループ化。ルート直下は (root)
 function topGroupForPath(path: string): string {
@@ -107,7 +98,6 @@ function statusGlyph(status: string): string {
 
 /**
  * statusGlyph (装飾) の代わりに SR が読み上げる自然語ラベル。
- * Echo #10 Minor 対応: 全角 ＋ / − を SR で「全角プラス」と読まれないようにする。
  */
 function statusName(status: string): string {
   switch (status) {
@@ -118,95 +108,6 @@ function statusName(status: string): string {
     case 'C': return 'コピー';
     default:  return status || '変更';
   }
-}
-
-// hex color → { r, g, b } (simple 6-digit hex)
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const n = parseInt(hex.slice(1), 16);
-  return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
-}
-
-// hexToRgb 結果キャッシュ — per-frame 計算を避ける
-const rgbCache = new Map<string, { r: number; g: number; b: number }>();
-function cachedHexToRgb(hex: string): { r: number; g: number; b: number } {
-  let v = rgbCache.get(hex);
-  if (!v) { v = hexToRgb(hex); rgbCache.set(hex, v); }
-  return v;
-}
-
-// ---------------------------------------------------------------------------
-// Sprite cache — shadowBlur/radialGradient をオフスクリーンに焼き込む
-// ---------------------------------------------------------------------------
-type SpriteKey = `${FileKind}-${number}`;
-const spriteCache = new Map<SpriteKey, HTMLCanvasElement>();
-
-// radius バケット: radiusForCount の返値と揃える
-const SIZE_RADII = [6.5, 8, 10, 12] as const;
-function getSizeBucket(radius: number): number {
-  if (radius >= 12) return 3;
-  if (radius >= 10) return 2;
-  if (radius >= 8)  return 1;
-  return 0;
-}
-
-function getSprite(kind: FileKind, bucket: number, dpr: number): HTMLCanvasElement {
-  const key: SpriteKey = `${kind}-${bucket}`;
-  const cached = spriteCache.get(key);
-  if (cached) return cached;
-
-  const radius = SIZE_RADII[bucket];
-  const margin = radius * 4; // shadowBlur 用余白
-  const size = (radius + margin) * 2;
-
-  const sprite = document.createElement('canvas');
-  sprite.width = Math.ceil(size * dpr);
-  sprite.height = Math.ceil(size * dpr);
-  const sctx = sprite.getContext('2d')!;
-  sctx.scale(dpr, dpr);
-
-  const cx = size / 2;
-  const cy = size / 2;
-  const { r, g, b } = cachedHexToRgb(colorForKind(kind));
-
-  sctx.shadowBlur = radius * 1.8;
-  sctx.shadowColor = `rgba(${r},${g},${b},0.65)`;
-
-  const grad = sctx.createRadialGradient(
-    cx - radius * 0.25, cy - radius * 0.25, 0,
-    cx, cy, radius,
-  );
-  grad.addColorStop(0, `rgba(${Math.min(255, r + 80)},${Math.min(255, g + 80)},${Math.min(255, b + 80)},1)`);
-  grad.addColorStop(0.65, `rgba(${r},${g},${b},1)`);
-  grad.addColorStop(1, `rgba(${Math.round(r * 0.7)},${Math.round(g * 0.7)},${Math.round(b * 0.7)},1)`);
-
-  sctx.beginPath();
-  sctx.arc(cx, cy, radius, 0, TAU);
-  sctx.fillStyle = grad;
-  sctx.fill();
-
-  spriteCache.set(key, sprite);
-  return sprite;
-}
-
-// spark 用スプライト (白 1px、drawImage でスケール + compositeOperation 'lighter' でカラーティント)
-let sparkSprite: HTMLCanvasElement | null = null;
-function getSparkSprite(dpr: number): HTMLCanvasElement {
-  if (sparkSprite) return sparkSprite;
-  const size = 8; // 内部サイズ (px)
-  sparkSprite = document.createElement('canvas');
-  sparkSprite.width = Math.ceil(size * dpr);
-  sparkSprite.height = Math.ceil(size * dpr);
-  const sctx = sparkSprite.getContext('2d')!;
-  sctx.scale(dpr, dpr);
-  const cx = size / 2;
-  // shadowBlur をスプライトに焼き込む
-  sctx.shadowBlur = size * 2;
-  sctx.shadowColor = 'rgba(255,255,255,0.9)';
-  sctx.beginPath();
-  sctx.arc(cx, cx, size / 4, 0, TAU);
-  sctx.fillStyle = 'rgba(255,255,255,1)';
-  sctx.fill();
-  return sparkSprite;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,58 +149,6 @@ type RecentEntry = {
   isWorkingTree: boolean;
 };
 
-// d3-force ノード (FileStat を拡張)
-type ParticleNode = {
-  stat: FileStat;
-  // d3-force が書き込む座標
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  // idle breathing 用固有位相 (rad)
-  phase: number;
-  // breathing 周期 (ms)
-  period: number;
-  // ポップコーン pop 終了時刻 (0 = 非アクティブ)
-  popUntil: number;
-  // 前フレームでハイライトされていたか (ラベル強調用)
-  wasHighlighted: boolean;
-  // 発火直後のスケールバースト終了時刻 (0 = 非アクティブ)
-  burstUntil: number;
-  // 前回爆発を発火したときの fingerprint — 変化検知用
-  lastFiredHash: string;
-  // ラベル文字列をキャッシュ (per-frame 計算回避)
-  truncatedName: string;
-};
-
-// 花火スパーク粒子
-type Spark = {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;   // 残り life (0–1)
-  decay: number;  // life/frame の減衰率
-  color: string;  // hex
-  size: number;   // px
-};
-
-// 発火点のホワイトフラッシュ
-type Flash = { x: number; y: number; color: string; until: number };
-
-// 背景に漂う twinkle dot
-type Twinkle = {
-  x: number;
-  y: number;
-  radius: number;
-  baseAlpha: number;
-  phase: number;
-  period: number; // ms
-  r: number;
-  g: number;
-  b: number;
-};
-
 const WORKING_TREE_HASH = 'WORKING-TREE';
 
 // ---------------------------------------------------------------------------
@@ -323,662 +172,7 @@ export type PulseLensProps = {
 };
 
 // ---------------------------------------------------------------------------
-// Canvas particle field hook
-// ---------------------------------------------------------------------------
-type UseCanvasParticleFieldParams = {
-  canvasRef: React.RefObject<HTMLCanvasElement | null>;
-  groups: Array<{ key: string; files: FileStat[]; total: number }>;
-  reducedMotion: boolean;
-  onClickFile: (stat: FileStat) => void;
-  onContextMenu: (event: React.MouseEvent, path: string) => void;
-};
-
-function useCanvasParticleField({
-  canvasRef,
-  groups,
-  reducedMotion,
-  onClickFile,
-  onContextMenu,
-}: UseCanvasParticleFieldParams) {
-  // stable refs for callbacks — avoids tearing down the sim on every render
-  const onClickRef = useRef(onClickFile);
-  const onContextMenuRef = useRef(onContextMenu);
-  useEffect(() => { onClickRef.current = onClickFile; }, [onClickFile]);
-  useEffect(() => { onContextMenuRef.current = onContextMenu; }, [onContextMenu]);
-
-  const groupsRef = useRef(groups);
-  useEffect(() => { groupsRef.current = groups; }, [groups]);
-
-  // groups 変化時に sim を再構築するためのシグナル ref
-  const rebuildRef = useRef<(() => void) | null>(null);
-
-  // groups が変わったら rebuildSim を呼ぶ
-  useEffect(() => {
-    rebuildRef.current?.();
-  }, [groups]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    let cancelled = false;
-    let rafId = 0;
-
-    // --- DPI スケーリング ---
-    const dpr = window.devicePixelRatio || 1;
-
-    function resizeCanvas() {
-      if (!canvas) return;
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-    }
-    resizeCanvas();
-
-    const ro = new ResizeObserver(() => {
-      resizeCanvas();
-      rebuildSim();
-    });
-    ro.observe(canvas);
-
-    // --- 粒子リスト & d3-force シミュレーション ---
-    let nodes: ParticleNode[] = [];
-    let sim: Simulation<ParticleNode, undefined> | null = null;
-
-    // 花火スパーク配列
-    let sparks: Spark[] = [];
-
-    // 発火フラッシュ配列
-    let flashes: Flash[] = [];
-
-    // ポップコーン pop タイムスタンプ
-    let lastPopAt = 0;
-
-    const MARGIN = 30;
-
-    // ラベル文字列をノード生成時に1回だけ計算
-    function truncateName(basename: string): string {
-      return basename.length > 18 ? basename.slice(0, 17) + '…' : basename;
-    }
-
-    function buildNodes(gs: typeof groups): ParticleNode[] {
-      const canvasW = canvas!.clientWidth;
-      const canvasH = canvas!.clientHeight;
-      const MARGIN = 50;
-
-      return gs.flatMap((g) =>
-        g.files.map((stat) => ({
-          stat,
-          x: MARGIN + Math.random() * (canvasW - MARGIN * 2),
-          y: MARGIN + Math.random() * (canvasH - MARGIN * 2),
-          vx: 0,
-          vy: 0,
-          phase: Math.random() * TAU,
-          period: 1000 + Math.random() * 800,
-          popUntil: 0,
-          wasHighlighted: false,
-          burstUntil: 0,
-          // 新規 untracked は通常の "初回観測 = stamp のみ" を抜けて、次の
-          // 描画フレームで lastFiredHash !== fp となり大爆発する sentinel。
-          lastFiredHash: stat.isNewFile && stat.isWorkingTree ? '__FRESH_UNTRACKED__' : '',
-          truncatedName: truncateName(stat.basename),
-        })),
-      );
-    }
-
-    // twinkle dots (80個、リサイズ時に再生成)
-    const TWINKLE_COLORS = ['#3b82f6','#ec4899','#f59e0b','#8b5cf6','#22c55e','#14b8a6'];
-    let twinkles: Twinkle[] = [];
-
-    function buildTwinkles(w: number, h: number): Twinkle[] {
-      return Array.from({ length: 80 }, () => {
-        const hex = TWINKLE_COLORS[Math.floor(Math.random() * TWINKLE_COLORS.length)];
-        const { r, g, b } = cachedHexToRgb(hex);
-        return {
-          x: Math.random() * w,
-          y: Math.random() * h,
-          radius: 0.5 + Math.random() * 1.0,
-          baseAlpha: 0.12 + Math.random() * 0.18,
-          phase: Math.random() * TAU,
-          period: 1500 + Math.random() * 2500,
-          r, g, b,
-        };
-      });
-    }
-
-    function spawnFireworks(px: number, py: number, color: string) {
-      // 二重シェル: 内側 = 速い細い火花、外側 = 遅い太い火花。同心円的に
-      // 弾けて見えるよう速度差を付け、視覚的に "大きく" 弾けた感を出す。
-      const inner = 28 + Math.floor(Math.random() * 10); // 28-37
-      for (let i = 0; i < inner; i++) {
-        const angle = (i / inner) * TAU + (Math.random() - 0.5) * 0.4;
-        const speed = 8 + Math.random() * 6; // 8-14
-        sparks.push({
-          x: px,
-          y: py,
-          vx: Math.cos(angle) * speed,
-          vy: Math.sin(angle) * speed,
-          life: 1,
-          decay: 0.012,
-          color,
-          size: 2 + Math.random() * 2,
-        });
-      }
-      const outer = 18 + Math.floor(Math.random() * 8); // 18-25
-      for (let i = 0; i < outer; i++) {
-        const angle = (i / outer) * TAU + (Math.random() - 0.5) * 0.6;
-        const speed = 14 + Math.random() * 10; // 14-24 — 外殻ほど速く、遠くまで飛ぶ
-        sparks.push({
-          x: px,
-          y: py,
-          vx: Math.cos(angle) * speed,
-          vy: Math.sin(angle) * speed,
-          life: 1,
-          decay: 0.008, // 寿命を伸ばして残光を強く
-          color,
-          size: 3 + Math.random() * 3,
-        });
-      }
-      // hard cap — oldest を drop
-      if (sparks.length > MAX_SPARKS) {
-        sparks.splice(0, sparks.length - MAX_SPARKS);
-      }
-      // 中央フラッシュも長め (100ms → 180ms) にして "ドン" の余韻を残す
-      flashes.push({ x: px, y: py, color, until: Date.now() + 180 });
-    }
-
-    function rebuildSim() {
-      if (cancelled) return;
-      if (sim) sim.stop();
-
-      const gs = groupsRef.current;
-      const canvasW = canvas!.clientWidth;
-      const canvasH = canvas!.clientHeight;
-
-      twinkles = buildTwinkles(canvasW, canvasH);
-
-      const prevByPath = new Map(nodes.map((n) => [n.stat.path, n]));
-      nodes = buildNodes(gs).map((n) => {
-        const prev = prevByPath.get(n.stat.path);
-        if (prev) {
-          n.x = prev.x;
-          n.y = prev.y;
-          n.vx = prev.vx;
-          n.vy = prev.vy;
-          n.phase = prev.phase;
-          n.period = prev.period;
-          n.popUntil = prev.popUntil;
-          n.wasHighlighted = prev.wasHighlighted;
-          n.burstUntil = prev.burstUntil;
-          n.lastFiredHash = prev.lastFiredHash;
-          n.truncatedName = truncateName(n.stat.basename);
-        }
-        return n;
-      });
-
-      // velocity integrator のみ — forceCollide/forceManyBody による集団圧力を排除。
-      // 粒子間の重なり解消は draw ループ内の manual elastic collision が単独で担う。
-      sim = forceSimulation(nodes)
-        .velocityDecay(0.02)
-        .alphaTarget(0.05)
-        .alphaDecay(0)
-        .stop();
-    }
-
-    rebuildSim();
-    rebuildRef.current = rebuildSim;
-
-    // canvas 背景色を CSS変数から 1 回だけ取得 (per-frame getComputedStyle を排除)
-    function getBgRgb(): { r: number; g: number; b: number } {
-      const raw = getComputedStyle(canvas!).getPropertyValue('--rs-bg-canvas').trim();
-      if (raw && /^#[0-9a-f]{6}$/i.test(raw)) return hexToRgb(raw);
-      return { r: 10, g: 13, b: 18 };
-    }
-    const bgRgb = getBgRgb();
-    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const trailFill = `rgba(${bgRgb.r},${bgRgb.g},${bgRgb.b},${isDark ? 0.18 : 0.30})`;
-
-    // --- 描画ループ ---
-    function draw() {
-      if (cancelled) return;
-      rafId = requestAnimationFrame(draw);
-
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      if (sim) sim.tick();
-
-      const nowMs = Date.now();
-      const w = canvas.width / dpr;
-      const h = canvas.height / dpr;
-
-      // 粒子同士の弾性衝突 (O(n²), 200粒子 = ~40k checks/frame で 60fps OK)
-      if (!reducedMotion) {
-        const len = nodes.length;
-        for (let i = 0; i < len; i++) {
-          const a = nodes[i];
-          const ra = radiusForCount(a.stat.commitCount);
-          for (let j = i + 1; j < len; j++) {
-            const b = nodes[j];
-            const rb = radiusForCount(b.stat.commitCount);
-            const dx = b.x - a.x;
-            const dy = b.y - a.y;
-            const minDist = ra + rb + 2;
-            const dist2 = dx * dx + dy * dy;
-            if (dist2 >= minDist * minDist || dist2 < 0.0001) continue;
-            const dist = Math.sqrt(dist2);
-            const nx = dx / dist;
-            const ny = dy / dist;
-            const vRelN = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
-            if (vRelN >= 0) continue; // 既に離れる方向なので無視
-            // 等質量弾性衝突: 法線方向の速度を交換
-            const restitution = 0.95;
-            const impulse = vRelN * (1 + restitution) * 0.5;
-            a.vx += impulse * nx;
-            a.vy += impulse * ny;
-            b.vx -= impulse * nx;
-            b.vy -= impulse * ny;
-            // めり込み解消
-            const overlap = (minDist - dist) * 0.5;
-            a.x -= nx * overlap;
-            a.y -= ny * overlap;
-            b.x += nx * overlap;
-            b.y += ny * overlap;
-          }
-        }
-      }
-
-      // ランダムドリフト + 壁バウンス
-      if (!reducedMotion) {
-        const BOUNCE_MARGIN = 30;
-        const BOUNCE_DAMPING = 0.85;
-        // 集団圧力がなくなったので穏やかな最低反発速度で十分
-        const MIN_BOUNCE_V = 1.0;
-
-        for (const node of nodes) {
-          // 集団圧力なし → ドリフト入力を少し戻して拡散を促進
-          node.vx += (Math.random() - 0.5) * 0.05;
-          node.vy += (Math.random() - 0.5) * 0.05;
-
-          if (node.x < BOUNCE_MARGIN) {
-            node.x = BOUNCE_MARGIN;
-            node.vx = Math.max(Math.abs(node.vx) * BOUNCE_DAMPING, MIN_BOUNCE_V);
-          } else if (node.x > w - BOUNCE_MARGIN) {
-            node.x = w - BOUNCE_MARGIN;
-            node.vx = -Math.max(Math.abs(node.vx) * BOUNCE_DAMPING, MIN_BOUNCE_V);
-          }
-          if (node.y < BOUNCE_MARGIN) {
-            node.y = BOUNCE_MARGIN;
-            node.vy = Math.max(Math.abs(node.vy) * BOUNCE_DAMPING, MIN_BOUNCE_V);
-          } else if (node.y > h - BOUNCE_MARGIN) {
-            node.y = h - BOUNCE_MARGIN;
-            node.vy = -Math.max(Math.abs(node.vy) * BOUNCE_DAMPING, MIN_BOUNCE_V);
-          }
-        }
-
-        const MAX_V = 2.0;
-        for (const node of nodes) {
-          if (node.vx > MAX_V) node.vx = MAX_V;
-          else if (node.vx < -MAX_V) node.vx = -MAX_V;
-          if (node.vy > MAX_V) node.vy = MAX_V;
-          else if (node.vy < -MAX_V) node.vy = -MAX_V;
-        }
-      }
-
-      // 花火トリガー検出: フィンガープリント差分検知
-      // 初回観測 (lastFiredHash === '') は stamp のみ — マウント直後の一斉爆発を防ぐ
-      if (!reducedMotion) {
-        for (const node of nodes) {
-          const isHighlighted = nowMs < node.stat.highlightedUntil;
-          const fp = fingerprint(node.stat);
-          if (node.lastFiredHash === '') {
-            // 初回観測 — stamp のみ、爆発しない
-            node.lastFiredHash = fp;
-          } else if (node.lastFiredHash !== fp) {
-            // 変更を検知 — 大爆発: スケールバースト + 二重シェル花火 + 中央フラッシュ
-            spawnFireworks(node.x, node.y, colorForKind(node.stat.kind));
-            node.burstUntil = nowMs + CHANGE_BURST_MS;
-            node.lastFiredHash = fp;
-          }
-          node.wasHighlighted = isHighlighted;  // ラベル強調用に維持
-        }
-      }
-
-      // ポップコーン pop トリガー (1.2–2.2秒間隔)
-      if (!reducedMotion && nodes.length > 0 &&
-          nowMs - lastPopAt > 1200 + Math.random() * 1000) {
-        lastPopAt = nowMs;
-        const idx = Math.floor(Math.random() * nodes.length);
-        nodes[idx].popUntil = nowMs + 250;
-      }
-
-      // spark 物理更新
-      for (const sp of sparks) {
-        sp.vy += 0.08;
-        sp.x += sp.vx;
-        sp.y += sp.vy;
-        sp.life -= sp.decay;
-      }
-      sparks = sparks.filter((sp) => sp.life > 0);
-      flashes = flashes.filter((f) => nowMs < f.until);
-
-      ctx.save();
-      ctx.scale(dpr, dpr);
-
-      // モーションブラー trail
-      if (!reducedMotion) {
-        ctx.fillStyle = trailFill;
-        ctx.fillRect(0, 0, w, h);
-      } else {
-        ctx.clearRect(0, 0, w, h);
-      }
-
-      // --- Twinkles ---
-      if (!reducedMotion) {
-        for (const tw of twinkles) {
-          const alpha = tw.baseAlpha * (0.5 + 0.5 * Math.sin((nowMs / tw.period) * TAU + tw.phase));
-          ctx.beginPath();
-          ctx.arc(tw.x, tw.y, tw.radius, 0, TAU);
-          ctx.fillStyle = `rgba(${tw.r},${tw.g},${tw.b},${alpha})`;
-          ctx.fill();
-        }
-      }
-
-      // ホワイトフラッシュ描画
-      if (!reducedMotion && flashes.length > 0) {
-        for (const f of flashes) {
-          const t = (f.until - nowMs) / 100;
-          const fr = Math.min(1, Math.max(0, t));
-          const fRgb = cachedHexToRgb(f.color);
-          const baseR = 30;
-          const grad = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, baseR * 3);
-          grad.addColorStop(0, `rgba(255,255,255,${0.9 * fr})`);
-          grad.addColorStop(0.4, `rgba(${fRgb.r},${fRgb.g},${fRgb.b},${0.7 * fr})`);
-          grad.addColorStop(1, `rgba(${fRgb.r},${fRgb.g},${fRgb.b},0)`);
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(f.x, f.y, baseR * 3, 0, TAU);
-          ctx.fill();
-        }
-      }
-
-      // 粒子描画
-      for (const node of nodes) {
-        const { stat, x, y, phase, period } = node;
-        const baseRadius = radiusForCount(stat.commitCount);
-        const bucket = getSizeBucket(baseRadius);
-
-        const age = nowMs - new Date(stat.lastSeenTime).getTime();
-        const isFaded = age > RECENCY_FADE_MS;
-        const litMul = isFaded ? 0.85 : 1;
-
-        const { r, g, b } = cachedHexToRgb(colorForKind(stat.kind));
-
-        // --- Idle breathing / burst / pop scale ---
-        let breatheScale = 1;
-        if (!reducedMotion) {
-          const isBurst = nowMs < node.burstUntil;
-          const isPop = nowMs < node.popUntil;
-          if (isBurst) {
-            const tBurst = 1 - (node.burstUntil - nowMs) / CHANGE_BURST_MS;
-            // sin² の山に小さなジッターを加えて "弾けた" 印象を強調
-            const burstScale = 1 + CHANGE_BURST_SCALE * Math.pow(Math.sin(tBurst * Math.PI), 2);
-            const popScale = isPop
-              ? 1 + 0.6 * Math.pow(Math.sin((1 - (node.popUntil - nowMs) / 250) * Math.PI), 2)
-              : 1;
-            breatheScale = Math.max(burstScale, popScale);
-          } else if (isPop) {
-            const t = 1 - (node.popUntil - nowMs) / 250;
-            breatheScale = 1 + 0.6 * Math.pow(Math.sin(t * Math.PI), 2);
-          } else {
-            breatheScale = 1 + 0.14 * Math.sin((nowMs / period) * TAU + phase);
-          }
-        }
-        const drawRadius = baseRadius * breatheScale;
-
-        const isHighlighted = nowMs < stat.highlightedUntil;
-        const isNew = stat.isNewFile && nowMs < stat.appearedAt + NEW_FILE_MS;
-        const isDeleted = stat.lastStatus === 'D';
-
-        // --- Hot pulse ring ---
-        if (isHighlighted && !reducedMotion) {
-          const progress = (nowMs - (stat.highlightedUntil - HIGHLIGHT_MS)) / HIGHLIGHT_MS;
-          const ringR = baseRadius * (1 + Math.min(progress, 1) * 7);
-          const ringAlpha = (1 - Math.min(progress, 1)) * 0.6;
-          ctx.beginPath();
-          ctx.arc(x, y, ringR, 0, TAU);
-          ctx.strokeStyle = `rgba(${r},${g},${b},${ringAlpha})`;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-        }
-
-        // --- New file shockwave ---
-        if (isNew && !reducedMotion) {
-          const burstProgress = Math.min((nowMs - stat.appearedAt) / BURST_MS, 1);
-          const burstR = baseRadius * (1 + burstProgress * 5);
-          const burstAlpha = (1 - burstProgress) * 0.7;
-          ctx.beginPath();
-          ctx.arc(x, y, burstR, 0, TAU);
-          ctx.strokeStyle = `rgba(${r},${g},${b},${burstAlpha})`;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-        }
-
-        // --- Change-detected shockwave (二重リング) ---
-        // 既存ファイルが変わったときの "弾けた" 感を視覚化。新規ファイル
-        // shockwave とは別レイヤーで、内側速い・外側遅いの 2 リング。
-        if (!reducedMotion && nowMs < node.burstUntil) {
-          const tBurst = 1 - (node.burstUntil - nowMs) / CHANGE_BURST_MS;
-          const innerR = baseRadius * (1 + tBurst * 6);
-          const innerAlpha = (1 - tBurst) * 0.85;
-          ctx.beginPath();
-          ctx.arc(x, y, innerR, 0, TAU);
-          ctx.strokeStyle = `rgba(${r},${g},${b},${innerAlpha})`;
-          ctx.lineWidth = 2.5;
-          ctx.stroke();
-          const outerR = baseRadius * (1 + tBurst * 11);
-          const outerAlpha = (1 - tBurst) * 0.5;
-          ctx.beginPath();
-          ctx.arc(x, y, outerR, 0, TAU);
-          ctx.strokeStyle = `rgba(${r},${g},${b},${outerAlpha})`;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-        }
-
-        // --- Pop ring ---
-        if (!reducedMotion && nowMs < node.popUntil) {
-          const t = 1 - (node.popUntil - nowMs) / 250;
-          const ringR = baseRadius * (1.5 + t * 1.5);
-          const ringAlpha = (1 - t) * 0.5;
-          ctx.beginPath();
-          ctx.arc(x, y, ringR, 0, TAU);
-          ctx.strokeStyle = `rgba(${r},${g},${b},${ringAlpha})`;
-          ctx.lineWidth = 1;
-          ctx.stroke();
-        }
-
-        // --- 粒子本体 ---
-        if (isDeleted) {
-          const fr = Math.round(r * litMul);
-          const fg = Math.round(g * litMul);
-          const fb = Math.round(b * litMul);
-          ctx.beginPath();
-          ctx.arc(x, y, drawRadius, 0, TAU);
-          ctx.strokeStyle = `rgba(${fr},${fg},${fb},0.5)`;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-        } else {
-          // sprite キャッシュから drawImage — shadowBlur/gradient はスプライトに焼き込み済み
-          const sprite = getSprite(stat.kind, bucket, dpr);
-          const spW = sprite.width / dpr;
-          const spH = sprite.height / dpr;
-          const dw = spW * breatheScale;
-          const dh = spH * breatheScale;
-
-          // isFaded 時は globalAlpha で明度低下
-          if (isFaded) {
-            ctx.globalAlpha = 0.85;
-          }
-          ctx.drawImage(sprite, x - dw / 2, y - dh / 2, dw, dh);
-          if (isFaded) {
-            ctx.globalAlpha = 1;
-          }
-
-          // isHighlighted 時: stroke ring で追加グロー (sprite の shadowBlur は既に機能してる)
-          if ((isHighlighted || nowMs < node.popUntil) && !reducedMotion) {
-            ctx.beginPath();
-            ctx.arc(x, y, drawRadius + 2, 0, TAU);
-            ctx.strokeStyle = `rgba(${r},${g},${b},0.45)`;
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-          }
-        }
-
-        // --- ファイル名ラベル ---
-        {
-          const isHot = isHighlighted || isNew;
-          const fadeAlpha = isFaded ? 0.6 : 1;
-          const labelOffset = drawRadius + 4;
-
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'top';
-
-          if (isHot) {
-            const labelText = `${node.truncatedName}  +${stat.totalAdded} −${stat.totalDeleted}`;
-            ctx.font = 'bold 12px system-ui';
-            ctx.shadowBlur = 6;
-            ctx.shadowColor = `rgba(${r},${g},${b},${0.6 * fadeAlpha})`;
-            ctx.fillStyle = `rgba(${r},${g},${b},${0.95 * fadeAlpha})`;
-            ctx.fillText(labelText, x, y + labelOffset);
-            ctx.shadowBlur = 0;
-            ctx.shadowColor = 'transparent';
-          } else {
-            ctx.font = '10px system-ui';
-            ctx.fillStyle = `rgba(${r},${g},${b},${0.55 * fadeAlpha})`;
-            ctx.fillText(node.truncatedName, x, y + labelOffset);
-          }
-        }
-      }
-
-      // --- 花火スパーク描画 (加算ブレンド + sprite) ---
-      if (!reducedMotion && sparks.length > 0) {
-        ctx.globalCompositeOperation = 'lighter';
-        const ss = getSparkSprite(dpr);
-        const ssNativeW = ss.width / dpr;
-        const ssNativeH = ss.height / dpr;
-        for (const sp of sparks) {
-          const { r, g, b } = cachedHexToRgb(sp.color);
-          const alpha = sp.life * 0.9;
-          const sz = sp.size * sp.life;
-          // tint: 白スプライトを color で着色
-          ctx.globalAlpha = alpha;
-          // color tint via fillRect + compositeOperation はコストが高いので
-          // 代わりに白スプライト (lighter ブレンド) に色フィルタをかける:
-          // 白スプライトに fillStyle をかけても compositeOp が 'lighter' なので明るくなるだけ。
-          // 実用上、少量の色差は許容して白スプライトのまま描画する。
-          // 完全な色忠実度が必要な場合は kindSprite を使う。
-          ctx.drawImage(ss, sp.x - sz, sp.y - sz, ssNativeW * (sz / (ssNativeW / 2)), ssNativeH * (sz / (ssNativeH / 2)));
-          // 色付きオーバーレイ (arc 1個、shadowBlur なし)
-          ctx.beginPath();
-          ctx.arc(sp.x, sp.y, sz * 0.5, 0, TAU);
-          ctx.fillStyle = `rgba(${r},${g},${b},1)`;
-          ctx.fill();
-        }
-        ctx.globalAlpha = 1;
-        ctx.globalCompositeOperation = 'source-over';
-      }
-
-      ctx.restore();
-    }
-
-    draw();
-
-    // --- Hit test ---
-    function handleClick(e: MouseEvent) {
-      const rect = canvas!.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      for (let i = nodes.length - 1; i >= 0; i--) {
-        const { stat, x, y } = nodes[i];
-        const r = radiusForCount(stat.commitCount) + 4;
-        if ((mx - x) ** 2 + (my - y) ** 2 < r * r) {
-          onClickRef.current(stat);
-          return;
-        }
-      }
-    }
-
-    function handleContextMenu(e: MouseEvent) {
-      const rect = canvas!.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      for (let i = nodes.length - 1; i >= 0; i--) {
-        const { stat, x, y } = nodes[i];
-        const r = radiusForCount(stat.commitCount) + 4;
-        if ((mx - x) ** 2 + (my - y) ** 2 < r * r) {
-          e.preventDefault();
-          onContextMenuRef.current(e as unknown as React.MouseEvent, stat.path);
-          return;
-        }
-      }
-    }
-
-    // Cursor scope: pointer のみ粒子ヒット時に表示 (Echo #9 Major)
-    // mousemove ヒットテストは hit-radius のみ計算する軽量版で rAF debounce 等は省略
-    let lastCursor: 'pointer' | 'default' = 'default';
-    function handleMouseMove(e: MouseEvent) {
-      const rect = canvas!.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      let hit = false;
-      for (let i = nodes.length - 1; i >= 0; i--) {
-        const { stat, x, y } = nodes[i];
-        const r = radiusForCount(stat.commitCount) + 4;
-        if ((mx - x) ** 2 + (my - y) ** 2 < r * r) {
-          hit = true;
-          break;
-        }
-      }
-      const next: 'pointer' | 'default' = hit ? 'pointer' : 'default';
-      if (next !== lastCursor) {
-        canvas!.style.cursor = next;
-        lastCursor = next;
-      }
-    }
-    function handleMouseLeave() {
-      if (lastCursor !== 'default') {
-        canvas!.style.cursor = 'default';
-        lastCursor = 'default';
-      }
-    }
-
-    canvas.addEventListener('click', handleClick);
-    canvas.addEventListener('contextmenu', handleContextMenu);
-    canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('mouseleave', handleMouseLeave);
-
-    return () => {
-      cancelled = true;
-      rebuildRef.current = null;
-      cancelAnimationFrame(rafId);
-      ro.disconnect();
-      if (sim) sim.stop();
-      canvas.removeEventListener('click', handleClick);
-      canvas.removeEventListener('contextmenu', handleContextMenu);
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      canvas.removeEventListener('mouseleave', handleMouseLeave);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canvasRef, reducedMotion]);
-}
-
-// ---------------------------------------------------------------------------
-// PulseLens main
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Help content + i18n labels (T2 / T3 / T9 / T11 / T12)
+// Help content + i18n labels
 // ---------------------------------------------------------------------------
 
 const KIND_LABEL_JA: Record<FileKind, string> = {
@@ -1018,27 +212,27 @@ function PulseHelpContent() {
         Pulse Lens とは
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
-        コードベースの<strong>今の鼓動</strong>を粒子フィールドで可視化する Lens。
-        ログ的な「Activity」ではなく、リポジトリが今動いている感覚を映します。
+        コードベースの<strong>今の鼓動</strong>を 3D 宇宙で可視化する Lens。
+        1 カード = 1 ファイル。ログ的な「Activity」ではなく、リポジトリが今動いている感覚を映します。
       </div>
 
       <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
-        粒子の読み方
+        カードの読み方
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
-        ・<strong>1 粒 = 1 ファイル</strong><br />
-        ・<strong>サイズ = 変更回数</strong> (2回 → 4回 → 6回以上で段階的に拡大)<br />
-        ・<strong>色 = ファイル種別</strong> (重要度ではない — 凡例参照)<br />
-        ・<strong>グロー + パルスリング</strong> = 直近 {Math.round(HIGHLIGHT_MS / 1000)} 秒以内に更新<br />
-        ・<strong>花火バースト</strong> = 新規ファイル出現<br />
-        ・<strong>breathing</strong> = idle 時のリズム
+        ・<strong>1 カード = 1 ファイル</strong><br />
+        ・<strong>位置</strong> = ハッシュ由来の固定座標 (X/Y) + 鮮度 (Z: 手前=新)<br />
+        ・<strong>色 = 変更量</strong> (added + deleted の log スケール: 青=軽微 / 緑=小 / 黄=中 / 橙=大 / 赤=巨大)<br />
+        ・<strong>不透明度 = 鮮度</strong>（古いほど霧化、6 時間で最小）<br />
+        ・<strong>金枠 + 拡大</strong> = 5 分以内に更新<br />
+        ・カードのアクセント帯（左縦線）= ファイル種別 (kind)
       </div>
 
       <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
         対象データ
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
-        <strong>直近 {MAX_COMMITS} commits + working tree</strong> の変更を粒子化。
+        <strong>直近 {MAX_COMMITS} commits + working tree</strong> の変更を 3D カード化。
         累計 +N / -N も同じ範囲の合計です。
       </div>
 
@@ -1055,9 +249,19 @@ function PulseHelpContent() {
         操作
       </div>
       <div style={{ color: 'var(--rs-text-secondary)' }}>
-        ・粒子<strong>クリック</strong> → ファイル履歴を開く<br />
-        ・粒子<strong>右クリック</strong> → コンテキストメニュー (Live で表示、Co-change を見る等)<br />
+        ・<strong>左ドラッグ</strong>で回転<br />
+        ・<strong>右ドラッグ</strong>でパン<br />
+        ・<strong>ホイール</strong>でズーム<br />
+        ・カード<strong>クリック</strong> → ファイル履歴を開く<br />
+        ・カード<strong>右クリック</strong> → コンテキストメニュー<br />
         ・右側の "Recent changes" リスト → コミット選択
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, marginTop: 8, color: 'var(--rs-text)' }}>
+        凡例 (kind アクセント帯)
+      </div>
+      <div style={{ color: 'var(--rs-text-secondary)', fontSize: 11 }}>
+        カード左端の縦帯がファイル種別 (kind) を示します。色は下記の凡例と同じです。
       </div>
     </>
   );
@@ -1067,10 +271,13 @@ const PULSE_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>> 
   ['pulse-quiet' as LensEmptyReason]: {
     title: '鼓動を待っています',
     body:
-      'コミットや working tree の変更がまだ観測されていません。リポジトリで何か作業が起きると粒子が現れます。別の Lens で別の観点を確認するか、しばらく待ってみてください。',
+      'コミットや working tree の変更がまだ観測されていません。リポジトリで何か作業が起きるとカードが現れます。別の Lens で別の観点を確認するか、しばらく待ってみてください。',
   },
 };
 
+// ---------------------------------------------------------------------------
+// PulseLens main
+// ---------------------------------------------------------------------------
 export function PulseLens({
   repoId,
   commits,
@@ -1094,20 +301,25 @@ export function PulseLens({
 
   const processedHashesRef = useRef<Set<string>>(new Set());
 
-  // Map<untracked-path, first-observed-timestamp>. Lets us classify "this
-  // untracked file just appeared" vs "this one has been hanging around since
-  // mount" so only the former triggers the new-file shockwave + change burst.
-  // Mutating refs inside useMemo is fine — refs are not React state and don't
-  // drive renders; the next render simply reads the updated map.
+  // Map<untracked-path, first-observed-timestamp>
   const untrackedFirstSeenRef = useRef<Map<string, number>>(new Map());
 
   // ---- Right-click context menu ----------------------------------------
   const [menuState, setMenuState] = useState<{ x: number; y: number; path: string } | null>(null);
 
   const handleContextMenu = useCallback(
-    (event: React.MouseEvent | MouseEvent, path: string) => {
+    (event: ReactMouseEvent | MouseEvent, path: string) => {
       const e = event as MouseEvent;
       setMenuState({ x: e.clientX, y: e.clientY, path });
+    },
+    [],
+  );
+
+  // Three.js の onContextMenu イベント経由 (nativeEvent を使う)
+  const handleContextMenuPoint = useCallback(
+    (nativeEvent: MouseEvent, key: string) => {
+      // key は path と同一
+      setMenuState({ x: nativeEvent.clientX, y: nativeEvent.clientY, path: key });
     },
     [],
   );
@@ -1120,7 +332,19 @@ export function PulseLens({
     [],
   );
 
-  // ---- Tick: keep highlight/new fade state alive -----------------------
+  // ---- now ドリフト (30 秒インターバル + データ変化時即時更新) -----------
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // commits / detailCache / workTree 変化時に即時更新
+  useEffect(() => {
+    setNow(Date.now());
+  }, [commits, detailCache, workTree]);
+
+  // ---- nowMs for summary (800ms 更新で hot カウント正確化) ---------------
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 800);
@@ -1143,7 +367,7 @@ export function PulseLens({
             return next;
           });
         } catch {
-          // Non-critical — particle will appear once data lands
+          // Non-critical — card will appear once data lands
         }
       })();
     }
@@ -1212,8 +436,6 @@ export function PulseLens({
   const mergedStats = useMemo<Map<string, FileStat>>(() => {
     const wtFiles = extractWorkTreeFiles(workTree);
     if (wtFiles.length === 0) {
-      // Worktree is clean / unavailable — drop the first-seen ledger so a
-      // future re-appearance gets a fresh burst.
       untrackedFirstSeenRef.current.clear();
       return statistics;
     }
@@ -1245,10 +467,6 @@ export function PulseLens({
       }
     }
 
-    // Reconcile the first-seen ledger:
-    // - Stamp a timestamp the first time we observe an untracked path.
-    // - Drop entries for paths no longer untracked (file was committed,
-    //   removed, or otherwise left the working tree).
     const t = Date.now();
     const currentUntracked = new Set<string>();
     for (const [path, agg] of wtByPath) {
@@ -1269,9 +487,6 @@ export function PulseLens({
 
     for (const [path, agg] of wtByPath) {
       const existing = merged.get(path);
-      // Treat an untracked path as "fresh" within NEW_FILE_MS of first sight.
-      // After that window the shockwave + burst stop firing, but the particle
-      // remains on screen as an ordinary working-tree file.
       const firstSeen = agg.isUntracked
         ? untrackedFirstSeenRef.current.get(path)
         : undefined;
@@ -1317,26 +532,45 @@ export function PulseLens({
     return merged;
   }, [statistics, workTree]);
 
-  // ---- Group by top-level directory ----
-  const groups = useMemo(() => {
-    const m = new Map<string, FileStat[]>();
+  // ---- buildCosmos 入力を生成 (useMemo) ---------------------------------
+  const cosmosInputs = useMemo<SpacePointInput[]>(() => {
+    const inputs: SpacePointInput[] = [];
     for (const stat of mergedStats.values()) {
-      const arr = m.get(stat.topGroup) ?? [];
-      arr.push(stat);
-      m.set(stat.topGroup, arr);
-    }
-    for (const arr of m.values()) {
-      arr.sort((a, b) => {
-        if (b.commitCount !== a.commitCount) return b.commitCount - a.commitCount;
-        return a.path.localeCompare(b.path);
+      // lastSeenTime → epoch ms
+      let ts = now;
+      if (stat.lastSeenTime) {
+        try {
+          const parsed = new Date(stat.lastSeenTime).getTime();
+          if (!isNaN(parsed)) ts = parsed;
+        } catch {
+          /* フォールバック: now */
+        }
+      }
+      inputs.push({
+        key: stat.path,
+        groupKey: stat.topGroup,
+        ts,
+        basename: stat.basename,
+        parentDir: stat.parentDir,
+        subject: stat.lastSeenSubject || 'No commit message',
+        meta: {
+          shortHash: stat.lastSeenShortHash,
+          added: stat.totalAdded,
+          deleted: stat.totalDeleted,
+          status: stat.lastStatus || '·',
+          kind: stat.kind,
+          isWorkingTree: stat.isWorkingTree,
+        },
       });
     }
-    return Array.from(m.entries()).map(([key, files]) => ({
-      key,
-      files,
-      total: files.reduce((s, f) => s + f.commitCount, 0),
-    }));
-  }, [mergedStats]);
+    return inputs;
+  }, [mergedStats, now]);
+
+  // ---- SpacePoint 配列 (buildCosmos, useMemo) ---------------------------
+  const spacePoints = useMemo<SpacePoint[]>(
+    () => buildCosmos(cosmosInputs, now),
+    [cosmosInputs, now],
+  );
 
   // ---- Recent changes feed ---------------------------------------------
   const recentEntries = useMemo<RecentEntry[]>(() => {
@@ -1396,19 +630,72 @@ export function PulseLens({
     return out.slice(0, RECENT_CHANGES_MAX);
   }, [workTree, commits, detailCache]);
 
-  // ---- Click handler — open the file's history modal -------------------
-  const handleParticleClick = useCallback(
-    (stat: FileStat) => {
-      if (onOpenFileHistory) {
-        onOpenFileHistory(stat.path);
-        return;
-      }
-      if (!stat.isWorkingTree) {
-        onSelectCommit(stat.lastSeenHash);
-      }
+  // ---- Activity Ticker — リアルタイム俯瞰用の最近の新着ピル群 -----------
+  // recentEntries が一度でも観測された時刻を記録し、TICKER_LIFE_MS 以内のものを
+  // 上部にピル表示する。time フィールドだと commit.time が author date になり
+  // 「ファイルが画面に出現した瞬間」とずれるため、独立 ledger を使う。
+  const TICKER_LIFE_MS = 8000;
+  const tickerObservedAtRef = useRef<Map<string, number>>(new Map());
+
+  useEffect(() => {
+    const t = Date.now();
+    const seen = tickerObservedAtRef.current;
+    const currentIds = new Set<string>();
+    for (const e of recentEntries) {
+      currentIds.add(e.id);
+      if (!seen.has(e.id)) seen.set(e.id, t);
+    }
+    // 消えた id を ledger からも除去（メモリリーク防止）
+    for (const id of [...seen.keys()]) {
+      if (!currentIds.has(id)) seen.delete(id);
+    }
+  }, [recentEntries]);
+
+  const newlyArrived = useMemo<RecentEntry[]>(() => {
+    const cutoff = nowMs - TICKER_LIFE_MS;
+    const seen = tickerObservedAtRef.current;
+    return recentEntries
+      .filter((e) => (seen.get(e.id) ?? 0) >= cutoff)
+      .slice(0, 5);
+  }, [recentEntries, nowMs]);
+
+  // ---- カードクリック — 詳細モーダルを開く -----------------------------
+  // 旧実装は onOpenFileHistory or onSelectCommit を直接呼んでいたが、
+  // クリックで情報を一度見せてからユーザにアクションを選ばせる UX に変更。
+  const [detailPoint, setDetailPoint] = useState<SpacePoint | null>(null);
+
+  const handlePick = useCallback((point: SpacePoint) => {
+    setDetailPoint(point);
+  }, []);
+
+  // shortHash → フルハッシュ逆引き。working tree や見つからない場合は null。
+  const resolveFullHash = useCallback(
+    (point: SpacePoint): string | null => {
+      if (point.meta.isWorkingTree || point.meta.shortHash === 'WT') return null;
+      const fullHash = commits.find(
+        (c) =>
+          (c.shortHash ?? c.hash.slice(0, 7)) === point.meta.shortHash ||
+          c.hash.startsWith(point.meta.shortHash),
+      )?.hash;
+      return fullHash ?? null;
     },
-    [onOpenFileHistory, onSelectCommit],
+    [commits],
   );
+
+  const handleDetailOpenHistory = useCallback(() => {
+    if (!detailPoint) return;
+    onOpenFileHistory?.(detailPoint.key);
+    setDetailPoint(null);
+  }, [detailPoint, onOpenFileHistory]);
+
+  const handleDetailSelectCommit = useCallback(() => {
+    if (!detailPoint) return;
+    const fullHash = resolveFullHash(detailPoint);
+    if (fullHash) {
+      onSelectCommit(fullHash);
+      setDetailPoint(null);
+    }
+  }, [detailPoint, resolveFullHash, onSelectCommit]);
 
   // ---- Header summary ---------------------------------------------------
   const summary = useMemo(() => {
@@ -1432,17 +719,6 @@ export function PulseLens({
     };
   }, [mergedStats, commits.length, nowMs]);
 
-  // ---- Canvas ref ------------------------------------------------------
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useCanvasParticleField({
-    canvasRef,
-    groups,
-    reducedMotion,
-    onClickFile: handleParticleClick,
-    onContextMenu: handleContextMenu,
-  });
-
   // ---- Empty state ------------------------------------------------------
   if (commits.length === 0 && summary.workingTreeCount === 0) {
     return (
@@ -1456,7 +732,7 @@ export function PulseLens({
       >
         <LensHeader
           title="Pulse"
-          oneLiner="コードベースの今の鼓動 — ファイル変更を粒子として可視化"
+          oneLiner="コードベースの今の鼓動 — ファイル変更を 3D 宇宙で可視化"
           helpContent={<PulseHelpContent />}
         />
         <EmptyStateCard
@@ -1507,7 +783,7 @@ export function PulseLens({
       {/* Row 1: LensHeader (title + oneLiner + ? Popover) */}
       <LensHeader
         title="Pulse"
-        oneLiner="コードベースの今の鼓動 — ファイル変更を粒子として可視化"
+        oneLiner="コードベースの今の鼓動 — ファイル変更を 3D 宇宙で可視化"
         helpContent={<PulseHelpContent />}
       />
 
@@ -1593,6 +869,40 @@ export function PulseLens({
         </div>
       </header>
 
+      {/* Activity Ticker — 直近 8 秒以内に観測した新着を右から流れるピルで表示。
+          画面のどこかに目を向けていても変更検知に気づける。 */}
+      {newlyArrived.length > 0 && (
+        <div
+          className="rs-pulse-ticker"
+          role="status"
+          aria-live="polite"
+          aria-label="Recent changes"
+        >
+          <span className="rs-pulse-ticker__caption" aria-hidden="true">
+            ✦ live
+          </span>
+          {newlyArrived.map((entry) => (
+            <span key={entry.id} className="rs-pulse-ticker__item">
+              <span
+                className="rs-pulse-ticker__dot"
+                style={{ background: colorForKind(entry.kind) }}
+                aria-hidden="true"
+              />
+              <span className="rs-pulse-ticker__status" aria-hidden="true">
+                {statusGlyph(entry.status)}
+              </span>
+              <span className="rs-pulse-ticker__path" title={entry.path}>
+                {entry.path}
+              </span>
+              <span className="rs-pulse-ticker__diff">
+                <span style={{ color: 'var(--rs-git-added)' }}>+{entry.added}</span>
+                <span style={{ color: 'var(--rs-git-deleted)' }}>−{entry.deleted}</span>
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+
       {showStatusBanner && (
         <div
           role="status"
@@ -1635,22 +945,39 @@ export function PulseLens({
             borderBottom: '1px solid var(--rs-border)',
           }}
         >
-          Reduced motion: 鼓動アニメーションを抑制しています (Lens は動作中)。
+          Reduced motion: カードアニメーションを抑制しています (Lens は動作中)。
         </div>
       )}
 
-      {/* Body: canvas stage (left) + sidebar (right) */}
+      {/* Body: 3D stage (left) + sidebar (right) */}
       <div className="rs-pulse-body">
-        <div className="rs-pulse-stage" role="region" aria-label="Codebase pulse field">
-          {/* canvas は常時マウント。条件付きマウントだと useCanvasParticleField の
-              useEffect が deps 変化を観測できず resizeCanvas/draw が一度も走らない */}
-          <canvas
-            ref={canvasRef}
-            className="rs-pulse-canvas"
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: 'default' }}
-            aria-label={`Particle field — ${summary.files} files. 同じ情報のテキスト一覧は隣のリストにあります。`}
-          />
-          {/* Visually-hidden SR live region: surfaces recent file changes for SR users (Echo #4) */}
+        <div
+          className="rs-pulse-stage"
+          role="region"
+          aria-label="Codebase pulse 3D cosmos field"
+          style={{
+            background:
+              'radial-gradient(ellipse at 60% 40%, #0a1040 0%, #000814 70%)',
+          }}
+        >
+          {/* React.lazy でロードされる 3D ステージ */}
+          <Suspense
+            fallback={
+              <div className="rs-pulse-stage__empty">
+                Loading 3D field…
+              </div>
+            }
+          >
+            <CosmosStage
+              points={spacePoints}
+              selectedCommitHash={selectedCommitHash}
+              reducedMotion={reducedMotion}
+              onPick={handlePick}
+              onContextMenuPoint={handleContextMenuPoint}
+            />
+          </Suspense>
+
+          {/* Visually-hidden SR live region: surfaces recent file changes for SR users */}
           <ul
             role="status"
             aria-live="polite"
@@ -1674,14 +1001,6 @@ export function PulseLens({
               </li>
             ))}
           </ul>
-          {groups.length === 0 && (
-            <div
-              className="rs-pulse-stage__empty"
-              style={{ position: 'absolute', inset: 0 }}
-            >
-              Loading file activity…
-            </div>
-          )}
         </div>
 
         {/* Recent changes — right sidebar */}
@@ -1762,7 +1081,342 @@ export function PulseLens({
           onOpenFileHistory?.(p);
         }}
       />
+
+      {/* カードクリックで開く詳細モーダル */}
+      <PulseDetailDialog
+        point={detailPoint}
+        onClose={() => setDetailPoint(null)}
+        onOpenHistory={handleDetailOpenHistory}
+        onSelectCommit={handleDetailSelectCommit}
+        canSelectCommit={detailPoint ? resolveFullHash(detailPoint) !== null : false}
+        canOpenHistory={Boolean(onOpenFileHistory)}
+      />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PulseDetailDialog — カードクリックで開く詳細モーダル
+//   refscope の Dialog primitive (Radix) を使い、トークンに溶け込ませる。
+// ---------------------------------------------------------------------------
+type PulseDetailDialogProps = {
+  point: SpacePoint | null;
+  onClose: () => void;
+  onOpenHistory: () => void;
+  onSelectCommit: () => void;
+  canSelectCommit: boolean;
+  canOpenHistory: boolean;
+};
+
+function PulseDetailDialog({
+  point,
+  onClose,
+  onOpenHistory,
+  onSelectCommit,
+  canSelectCommit,
+  canOpenHistory,
+}: PulseDetailDialogProps) {
+  const isOpen = point !== null;
+  const isoTime = point ? new Date(point.ts).toISOString() : '';
+  const kindLabel = point ? labelForKind(point.meta.kind) : '';
+  const kindColor = point ? colorForKind(point.meta.kind) : 'transparent';
+
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        className="sm:max-w-2xl"
+        style={{
+          background: 'var(--rs-bg-panel)',
+          border: '1px solid var(--rs-border)',
+          color: 'var(--rs-text-primary)',
+          fontFamily: 'var(--rs-sans)',
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              fontSize: 15,
+              color: 'var(--rs-text-primary)',
+              fontFamily: 'var(--rs-mono)',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: 2,
+                background: kindColor,
+                flexShrink: 0,
+              }}
+            />
+            <span style={{ wordBreak: 'break-all' }}>
+              {point?.basename ?? ''}
+            </span>
+            {point?.isFresh && (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontFamily: 'var(--rs-sans)',
+                  fontWeight: 700,
+                  padding: '2px 6px',
+                  borderRadius: 999,
+                  color: 'var(--rs-warning)',
+                  background:
+                    'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 18%)',
+                  border:
+                    '1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 45%)',
+                  letterSpacing: 0.5,
+                }}
+              >
+                ✦ NEW
+              </span>
+            )}
+          </DialogTitle>
+          <DialogDescription
+            style={{
+              fontFamily: 'var(--rs-mono)',
+              color: 'var(--rs-text-secondary)',
+              fontSize: 11,
+              wordBreak: 'break-all',
+            }}
+          >
+            {point?.parentDir || '(root)'}
+          </DialogDescription>
+        </DialogHeader>
+
+        {point && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* commit subject */}
+            <div
+              style={{
+                fontSize: 13,
+                lineHeight: 1.5,
+                color: 'var(--rs-text-primary)',
+                padding: '10px 12px',
+                background: 'var(--rs-bg-elevated)',
+                border: '1px solid var(--rs-border)',
+                borderRadius: 'var(--rs-radius-sm)',
+              }}
+            >
+              {point.subject}
+            </div>
+
+            {/* metadata grid */}
+            <dl
+              style={{
+                margin: 0,
+                display: 'grid',
+                gridTemplateColumns: 'auto 1fr',
+                rowGap: 6,
+                columnGap: 12,
+                fontSize: 12,
+              }}
+            >
+              <DetailRow label="状態">
+                {statusName(point.meta.status)}{' '}
+                <span style={{ color: 'var(--rs-text-muted)' }}>
+                  ({point.meta.status})
+                </span>
+              </DetailRow>
+              <DetailRow label="種別">
+                <span style={{ color: 'var(--rs-text-secondary)' }}>
+                  {kindLabel}
+                </span>
+              </DetailRow>
+              <DetailRow label="差分">
+                <span
+                  style={{
+                    fontFamily: 'var(--rs-mono)',
+                    color: 'var(--rs-git-added)',
+                    marginRight: 8,
+                  }}
+                >
+                  +{point.meta.added}
+                </span>
+                <span
+                  style={{
+                    fontFamily: 'var(--rs-mono)',
+                    color: 'var(--rs-git-deleted)',
+                  }}
+                >
+                  −{point.meta.deleted}
+                </span>
+              </DetailRow>
+              <DetailRow label="コミット">
+                <span style={{ fontFamily: 'var(--rs-mono)' }}>
+                  {point.meta.shortHash}
+                </span>
+                {point.meta.isWorkingTree && (
+                  <span
+                    style={{
+                      marginLeft: 6,
+                      color: 'var(--rs-warning)',
+                      fontSize: 11,
+                    }}
+                  >
+                    (working tree)
+                  </span>
+                )}
+              </DetailRow>
+              <DetailRow label="時刻">
+                <span
+                  style={{
+                    fontFamily: 'var(--rs-mono)',
+                    color: 'var(--rs-text-secondary)',
+                  }}
+                  title={isoTime}
+                >
+                  {relativeTime(isoTime)}
+                  <span
+                    style={{
+                      color: 'var(--rs-text-muted)',
+                      marginLeft: 6,
+                      fontSize: 11,
+                    }}
+                  >
+                    {isoTime ? isoTime.replace('T', ' ').slice(0, 19) : ''}
+                  </span>
+                </span>
+              </DetailRow>
+              <DetailRow label="パス">
+                <span
+                  style={{
+                    fontFamily: 'var(--rs-mono)',
+                    color: 'var(--rs-text-secondary)',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {point.key}
+                </span>
+              </DetailRow>
+            </dl>
+          </div>
+        )}
+
+        <DialogFooter
+          style={{
+            marginTop: 8,
+            display: 'flex',
+            gap: 6,
+            justifyContent: 'flex-end',
+          }}
+        >
+          <DialogActionButton onClick={onClose} variant="ghost">
+            閉じる
+          </DialogActionButton>
+          <DialogActionButton
+            onClick={onSelectCommit}
+            disabled={!canSelectCommit}
+            variant="secondary"
+            title={
+              canSelectCommit
+                ? 'このコミットを Timeline で選択'
+                : 'working tree は Timeline 選択できません'
+            }
+          >
+            コミットを表示
+          </DialogActionButton>
+          <DialogActionButton
+            onClick={onOpenHistory}
+            disabled={!canOpenHistory}
+            variant="primary"
+          >
+            ファイル履歴を開く
+          </DialogActionButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DetailRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      <dt
+        style={{
+          color: 'var(--rs-text-muted)',
+          fontSize: 11,
+          letterSpacing: 0.3,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </dt>
+      <dd style={{ margin: 0, color: 'var(--rs-text-primary)' }}>
+        {children}
+      </dd>
+    </>
+  );
+}
+
+function DialogActionButton({
+  children,
+  onClick,
+  disabled,
+  title,
+  variant,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  variant: 'primary' | 'secondary' | 'ghost';
+}) {
+  const styleByVariant: Record<
+    'primary' | 'secondary' | 'ghost',
+    React.CSSProperties
+  > = {
+    primary: {
+      background:
+        'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 28%)',
+      borderColor:
+        'color-mix(in oklab, var(--rs-border), var(--rs-accent) 55%)',
+      color: 'var(--rs-text-primary)',
+    },
+    secondary: {
+      background: 'var(--rs-bg-elevated)',
+      borderColor: 'var(--rs-border)',
+      color: 'var(--rs-text-primary)',
+    },
+    ghost: {
+      background: 'transparent',
+      borderColor: 'transparent',
+      color: 'var(--rs-text-secondary)',
+    },
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={{
+        ...styleByVariant[variant],
+        borderStyle: 'solid',
+        borderWidth: 1,
+        borderRadius: 'var(--rs-radius-sm)',
+        padding: '6px 12px',
+        fontSize: 12,
+        fontFamily: 'var(--rs-sans)',
+        fontWeight: 500,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        transition:
+          'background 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out',
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -1910,11 +1564,6 @@ const PULSE_STYLES = `
   font-size: 13px;
 }
 
-/* canvas は absolute fill で stage の computed width/height に追従する */
-.rs-pulse-canvas {
-  display: block;
-}
-
 .rs-pulse-sidebar {
   width: 280px;
   flex-shrink: 0;
@@ -2027,8 +1676,88 @@ const PULSE_STYLES = `
   padding: 6px 8px;
 }
 
+/* Activity Ticker — リアルタイム俯瞰用の新着ピル */
+.rs-pulse-ticker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 16px;
+  background: color-mix(in oklab, var(--rs-bg-panel), transparent 22%);
+  border-bottom: 1px solid var(--rs-border);
+  overflow-x: hidden;
+  min-height: 30px;
+  font-family: var(--rs-mono);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.rs-pulse-ticker__caption {
+  font-family: var(--rs-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--rs-warning);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 18%);
+  border: 1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 45%);
+  flex-shrink: 0;
+  animation: rs-pulse-ticker-caption 2.4s ease-in-out infinite;
+}
+@keyframes rs-pulse-ticker-caption {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.7; transform: scale(0.96); }
+}
+.rs-pulse-ticker__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 14%);
+  border: 1px solid color-mix(in oklab, var(--rs-border), var(--rs-accent) 35%);
+  color: var(--rs-text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  animation: rs-pulse-ticker-in 360ms cubic-bezier(.2,.7,.3,1);
+  box-shadow: 0 0 12px color-mix(in oklab, var(--rs-accent), transparent 65%);
+}
+@keyframes rs-pulse-ticker-in {
+  from { opacity: 0; transform: translateX(28px) scale(0.85); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+.rs-pulse-ticker__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.rs-pulse-ticker__status {
+  color: var(--rs-text-secondary);
+  font-size: 10px;
+  width: 10px;
+  text-align: center;
+}
+.rs-pulse-ticker__path {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--rs-text-primary);
+}
+.rs-pulse-ticker__diff {
+  display: inline-flex;
+  gap: 4px;
+  font-weight: 600;
+  font-size: 10px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rs-pulse-header__dot {
+    animation: none !important;
+  }
+  .rs-pulse-ticker__item,
+  .rs-pulse-ticker__caption {
     animation: none !important;
   }
 }
