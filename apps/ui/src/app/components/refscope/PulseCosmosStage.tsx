@@ -38,7 +38,10 @@ import type { SpacePoint } from './cosmosUtils';
 // SCALE: カード全体（geometry / fontSize / 内部 offset）を一括スケール。
 // 1.0 = Builder 初版 (4.8×3.0)。視認性は SCALE 1 つで調整できる。
 const SCALE = 0.3;
-const CARD_W = 4.8 * SCALE;
+// CARD_W_BOOST: 横幅だけを追加で広げる係数 (高さは据え置き)。
+// アスペクト比を横長に振り、basename / subject が枠からはみ出しにくくする。
+const CARD_W_BOOST = 1.4;
+const CARD_W = 4.8 * SCALE * CARD_W_BOOST;
 const CARD_H = 3.0 * SCALE;
 const HEADER_H = 0.64 * SCALE;
 const MAX_CHARS = 180;
@@ -82,10 +85,13 @@ const PAD_X_RIGHT = 0.18 * SCALE;
 const ACCENT_W = 0.16 * SCALE;
 const ACCENT_OFFSET = 0.08 * SCALE;
 const ROW_GAP_TOP = 0.24 * SCALE;
-const ROW_GAP_SUBJECT = 0.56 * SCALE;
-const ROW_GAP_ADDED = 0.22 * SCALE;
-const ROW_GAP_DELETED = 0.44 * SCALE;
+// ROW_GAP_SUBJECT: basename と subject の縦間隔。差分 (SUBJECT - TOP) が
+// 大きいほど両者の間に余白が生まれる。0.32 (旧) → 0.48 で約 +50%。
+const ROW_GAP_SUBJECT = 0.72 * SCALE;
 const ROW_GAP_META_BOTTOM = 0.28 * SCALE;
+// subject (本文 4 行目以降) が右下 diff と被らないよう、右側に diff 用領域を空ける。
+// 縦 2 行レイアウトなので幅は控えめでよい (`-99999` の幅 ≈ 0.3 unit + 余白)。
+const SUBJECT_RIGHT_RESERVE = 0.6 * SCALE;
 const MAXW_REDUCE_BODY = 0.4 * SCALE;
 const MAXW_REDUCE_SUBJECT = 0.6 * SCALE;
 
@@ -98,6 +104,16 @@ const FONT_DIFF = 0.16 * SCALE * FONT_SCALE;
 const FONT_META = 0.13 * SCALE * FONT_SCALE;
 const FONT_HEADER = 0.17 * SCALE * FONT_SCALE;
 const FONT_PARENT = 0.12 * SCALE * FONT_SCALE;
+
+// 右下に +N / -N を 2 行で並べる際の行間。FONT_DIFF * 1.15 で 1 行分強。
+const DIFF_LINE_HEIGHT = FONT_DIFF * 1.15;
+
+// drei <Text> の letterSpacing は world unit。
+// LETTER_SPACING       : 通常テキスト (subject / meta / parentDir)
+// LETTER_SPACING_BOLD  : bold テキスト (basename / diff / header / NEW) は
+//                        詰まって見えがちなので、ベース + 0.003 で余白を足す。
+const LETTER_SPACING = 0.005;
+const LETTER_SPACING_BOLD = 0.008;
 
 // ---------------------------------------------------------------------------
 // ユーティリティ
@@ -149,6 +165,69 @@ function FreshHalo({ hue, opacity }: { hue: number; opacity: number }) {
   );
 }
 
+/**
+ * git の status 文字をグリフに変換。本文 basename の左に出して
+ * 「新規 / 変更 / 削除 / 名前変更」を一目で識別できるようにする。
+ *
+ *   A: 追加 (new file)      → ＋
+ *   M: 変更                  → ●
+ *   D: 削除                  → −
+ *   R: 名前変更 (rename)     → ↦
+ *   C: コピー (copy)         → ↗
+ *   その他 / 不明            → ·
+ */
+function statusGlyph(status: string): string {
+  switch (status) {
+    case 'A':
+      return '＋';
+    case 'D':
+      return '−';
+    case 'R':
+      return '↦';
+    case 'C':
+      return '↗';
+    case 'M':
+      return '●';
+    default:
+      return '·';
+  }
+}
+
+/** グリフの色も status 由来。diff 表示の色と一貫させる。 */
+function statusColor(status: string): string {
+  switch (status) {
+    case 'A':
+      return COSMOS_THEME.gitAdded;
+    case 'D':
+      return COSMOS_THEME.gitDeleted;
+    case 'R':
+    case 'C':
+      return COSMOS_THEME.accent;
+    case 'M':
+      return COSMOS_THEME.gitModified;
+    default:
+      return COSMOS_THEME.textMuted;
+  }
+}
+
+/** スクリーンリーダー向けの自然語ラベル。 */
+function statusName(status: string): string {
+  switch (status) {
+    case 'A':
+      return '新規';
+    case 'D':
+      return '削除';
+    case 'M':
+      return '変更';
+    case 'R':
+      return '名前変更';
+    case 'C':
+      return 'コピー';
+    default:
+      return status || '変更';
+  }
+}
+
 function relativeTimeFromTs(ts: number): string {
   const diff = Date.now() - ts;
   const secs = Math.floor(diff / 1000);
@@ -187,6 +266,13 @@ function MessageWindow({
   const entryStart = useRef(Date.now());
   const [entryScale, setEntryScale] = useState(0);
   const flashOpacityRef = useRef(1);
+
+  // ホバー追従用: マウスの world 座標へ lerp で寄せる現在位置と raycaster。
+  // canvas の pointer (NDC) を raycaster で hovered 平面 (z = basePos.z + HOVER_Z)
+  // に交差させ、その world 座標 = カードの目標位置にする。
+  const hoverPosRef = useRef(new THREE.Vector3(...point.position));
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const { pointer, camera } = useThree();
 
   // ターゲットスケール
   const targetScale = point.isFresh ? 1.5 : isSelected ? 1.1 : 1.0;
@@ -236,24 +322,50 @@ function MessageWindow({
       zPop = lerp(5, 0, eased);
     }
 
-    // 通常の揺れ + Z swoop を合算して position に書き出す。
+    // ホバー追従: hovered なら「マウス world 座標 + 手前 HOVER_Z」を目標、
+    // 非ホバーなら定位置 basePos を目標として、現在位置を lerp で滑らかに追う。
+    const HOVER_Z = 6;
+    let targetX = basePos.current[0];
+    let targetY = basePos.current[1];
+    let targetZ = basePos.current[2];
+    if (hovered) {
+      // hovered 時の平面 z = basePos.z + HOVER_Z にマウスを投影。
+      // raycaster.ray.origin + t * direction の z 成分が planeZ になる t を解く。
+      const planeZ = basePos.current[2] + HOVER_Z;
+      raycaster.setFromCamera(pointer, camera);
+      const dirZ = raycaster.ray.direction.z;
+      if (Math.abs(dirZ) > 1e-6) {
+        const tRay = (planeZ - raycaster.ray.origin.z) / dirZ;
+        if (tRay > 0 && Number.isFinite(tRay)) {
+          targetX = raycaster.ray.origin.x + tRay * raycaster.ray.direction.x;
+          targetY = raycaster.ray.origin.y + tRay * raycaster.ray.direction.y;
+          targetZ = planeZ;
+        }
+      }
+    }
+    // 18%/frame の lerp で滑らかに追従 (体感は即時)。
+    hoverPosRef.current.x += (targetX - hoverPosRef.current.x) * 0.18;
+    hoverPosRef.current.y += (targetY - hoverPosRef.current.y) * 0.18;
+    hoverPosRef.current.z += (targetZ - hoverPosRef.current.z) * 0.18;
+
+    // 通常の揺れ (hover 中は揺れ抑止) + Z swoop を hoverPos に合算。
+    const wiggle = hovered ? 0 : 1;
     if (!reducedMotion) {
       const t = clock.elapsedTime;
       const seedX = basePos.current[1] * 0.17;
       const seedY = basePos.current[0] * 0.13;
       const seedZ = basePos.current[2] * 0.11;
-      groupRef.current.position.x =
-        basePos.current[0] + Math.sin(t * 0.27 + seedX) * 0.45;
-      groupRef.current.position.y =
-        basePos.current[1] + Math.cos(t * 0.31 + seedY) * 0.5;
-      groupRef.current.position.z =
-        basePos.current[2] + zPop + Math.sin(t * 0.19 + seedZ) * 0.4;
-    } else if (zPop > 0) {
-      // reducedMotion 中も着地中だけは swoop を反映 (それ以外は静止)。
       groupRef.current.position.set(
-        basePos.current[0],
-        basePos.current[1],
-        basePos.current[2] + zPop,
+        hoverPosRef.current.x + Math.sin(t * 0.27 + seedX) * 0.45 * wiggle,
+        hoverPosRef.current.y + Math.cos(t * 0.31 + seedY) * 0.5 * wiggle,
+        hoverPosRef.current.z + zPop + Math.sin(t * 0.19 + seedZ) * 0.4 * wiggle,
+      );
+    } else {
+      // reducedMotion 中も hover 追従 + swoop は反映 (情報伝達優先、揺れなし)。
+      groupRef.current.position.set(
+        hoverPosRef.current.x,
+        hoverPosRef.current.y,
+        hoverPosRef.current.z + zPop,
       );
     }
   });
@@ -372,31 +484,56 @@ function MessageWindow({
             />
           </lineSegments>
 
-          {/* basename テキスト (本文エリア) — 暗テーマ向け text-primary、軽いアウトライン */}
+          {/* status グリフ (basename の左) — 新規/変更/削除/名前変更を色付きで表示。
+              status により色: A=緑 / M=黄 / D=赤 / R,C=青 / 他=灰。 */}
           <Text
             position={[-(CARD_W / 2) + PAD_X, (CARD_H / 2) - HEADER_H - ROW_GAP_TOP, 0.003]}
             fontSize={FONT_BASENAME}
+            color={statusColor(point.meta.status)}
+            fontWeight="bold"
+            anchorX="left"
+            anchorY="top"
+            renderOrder={ro + 3}
+            toneMapped={false}
+          >
+            {statusGlyph(point.meta.status)}
+          </Text>
+
+          {/* basename テキスト (本文エリア) — status グリフの右に配置。
+              暗テーマ向け text-primary、軽いアウトラインで滲み防止。
+              maxWidth を超えるパスは break-word で折り返す。*/}
+          <Text
+            position={[
+              -(CARD_W / 2) + PAD_X + FONT_BASENAME * 1.1,
+              (CARD_H / 2) - HEADER_H - ROW_GAP_TOP,
+              0.003,
+            ]}
+            fontSize={FONT_BASENAME}
             color={COSMOS_THEME.textPrimary}
             fontWeight="bold"
+            letterSpacing={LETTER_SPACING_BOLD}
             outlineWidth={0.002}
             outlineColor={COSMOS_THEME.bgCanvas}
             anchorX="left"
             anchorY="top"
-            maxWidth={CARD_W - MAXW_REDUCE_BODY}
+            maxWidth={CARD_W - MAXW_REDUCE_BODY - FONT_BASENAME * 1.1}
+            overflowWrap="break-word"
             renderOrder={ro + 3}
             toneMapped={false}
           >
             {point.basename}
           </Text>
 
-          {/* subject テキスト — text-secondary */}
+          {/* subject テキスト — text-secondary
+              右下の diff (+/-) と被らないよう SUBJECT_RIGHT_RESERVE を引いて折り返す。*/}
           <Text
             position={[-(CARD_W / 2) + PAD_X, (CARD_H / 2) - HEADER_H - ROW_GAP_SUBJECT, 0.003]}
             fontSize={FONT_SUBJECT}
             color={COSMOS_THEME.textSecondary}
+            letterSpacing={LETTER_SPACING}
             anchorX="left"
             anchorY="top"
-            maxWidth={CARD_W - MAXW_REDUCE_SUBJECT}
+            maxWidth={CARD_W - MAXW_REDUCE_SUBJECT - SUBJECT_RIGHT_RESERVE}
             renderOrder={ro + 3}
             toneMapped={false}
             overflowWrap="break-word"
@@ -404,32 +541,42 @@ function MessageWindow({
             {truncate(point.subject, MAX_CHARS)}
           </Text>
 
-          {/* +added (右上) — git-added トークン */}
+          {/* 差分 +added (右下 上段) — git-added。横並びは文字数で被るので 2 行に。*/}
           <Text
-            position={[(CARD_W / 2) - PAD_X_RIGHT, (CARD_H / 2) - HEADER_H - ROW_GAP_ADDED, 0.003]}
+            position={[
+              (CARD_W / 2) - PAD_X_RIGHT,
+              -(CARD_H / 2) + ROW_GAP_META_BOTTOM + DIFF_LINE_HEIGHT,
+              0.003,
+            ]}
             fontSize={FONT_DIFF}
             color={COSMOS_THEME.gitAdded}
             fontWeight="bold"
+            letterSpacing={LETTER_SPACING_BOLD}
             anchorX="right"
-            anchorY="top"
+            anchorY="bottom"
             renderOrder={ro + 3}
             toneMapped={false}
           >
             {`+${point.meta.added}`}
           </Text>
 
-          {/* -deleted (右上) — git-deleted トークン */}
+          {/* 差分 -deleted (右下 下段) — git-deleted */}
           <Text
-            position={[(CARD_W / 2) - PAD_X_RIGHT, (CARD_H / 2) - HEADER_H - ROW_GAP_DELETED, 0.003]}
+            position={[
+              (CARD_W / 2) - PAD_X_RIGHT,
+              -(CARD_H / 2) + ROW_GAP_META_BOTTOM,
+              0.003,
+            ]}
             fontSize={FONT_DIFF}
             color={COSMOS_THEME.gitDeleted}
             fontWeight="bold"
+            letterSpacing={LETTER_SPACING_BOLD}
             anchorX="right"
-            anchorY="top"
+            anchorY="bottom"
             renderOrder={ro + 3}
             toneMapped={false}
           >
-            {`-${point.meta.deleted}`}
+            {`−${point.meta.deleted}`}
           </Text>
 
           {/* メタ情報 (左下: shortHash + relativeTime) — text-muted */}
@@ -437,6 +584,7 @@ function MessageWindow({
             position={[-(CARD_W / 2) + PAD_X, -(CARD_H / 2) + ROW_GAP_META_BOTTOM, 0.003]}
             fontSize={FONT_META}
             color={COSMOS_THEME.textMuted}
+            letterSpacing={LETTER_SPACING}
             anchorX="left"
             anchorY="bottom"
             renderOrder={ro + 3}
@@ -445,14 +593,18 @@ function MessageWindow({
             {`${point.meta.shortHash} · ${relativeTimeFromTs(point.ts)}`}
           </Text>
 
-          {/* ヘッダ basename (白抜き) — bold + bg-canvas アウトラインで滲み防止 */}
+          {/* ヘッダ basename — Bloom 閾値 (0.85) を超えないトーンに抑える。
+              純白に近い textPrimary (#e6eaf2) は Bloom で滲むので、
+              一段落とした #d6dde8 + 太めアウトラインでエッジを保つ。*/}
           <Text
             position={[-(CARD_W / 2) + ROW_GAP_META_BOTTOM, (CARD_H / 2) - HEADER_H / 2, 0.003]}
             fontSize={FONT_HEADER}
-            color={COSMOS_THEME.textPrimary}
+            color="#d6dde8"
             fontWeight="bold"
-            outlineWidth={0.003}
-            outlineColor="#00000080"
+            letterSpacing={LETTER_SPACING_BOLD}
+            outlineWidth={0.006}
+            outlineColor="#0a0e16"
+            outlineOpacity={0.85}
             anchorX="left"
             anchorY="middle"
             maxWidth={CARD_W * 0.7}
@@ -468,6 +620,8 @@ function MessageWindow({
               position={[(CARD_W / 2) - PAD_X_RIGHT, (CARD_H / 2) - HEADER_H / 2, 0.003]}
               fontSize={FONT_PARENT * 1.05}
               color={COSMOS_THEME.freshHighlight}
+              fontWeight="bold"
+              letterSpacing={LETTER_SPACING_BOLD}
               outlineWidth={0.004}
               outlineColor="#00000088"
               anchorX="right"
@@ -483,6 +637,7 @@ function MessageWindow({
                 position={[(CARD_W / 2) - PAD_X_RIGHT, (CARD_H / 2) - HEADER_H / 2, 0.003]}
                 fontSize={FONT_PARENT}
                 color="#ffffffaa"
+                letterSpacing={LETTER_SPACING}
                 anchorX="right"
                 anchorY="middle"
                 maxWidth={CARD_W * 0.5}

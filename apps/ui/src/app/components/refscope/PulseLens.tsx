@@ -535,16 +535,15 @@ export function PulseLens({
   // ---- buildCosmos 入力を生成 (useMemo) ---------------------------------
   const cosmosInputs = useMemo<SpacePointInput[]>(() => {
     const inputs: SpacePointInput[] = [];
+    // lastSeenTime が空 / parse 失敗のときの fallback。
+    // now にすると age=0 で全部 NEW (isFresh) になってしまうので、
+    // 「やや古い時刻 = 1 時間前」を使い fresh 判定 (5 分) から確実に外す。
+    const UNKNOWN_TS_FALLBACK = now - 60 * 60 * 1000;
     for (const stat of mergedStats.values()) {
-      // lastSeenTime → epoch ms
-      let ts = now;
+      let ts = UNKNOWN_TS_FALLBACK;
       if (stat.lastSeenTime) {
-        try {
-          const parsed = new Date(stat.lastSeenTime).getTime();
-          if (!isNaN(parsed)) ts = parsed;
-        } catch {
-          /* フォールバック: now */
-        }
+        const parsed = new Date(stat.lastSeenTime).getTime();
+        if (!isNaN(parsed)) ts = parsed;
       }
       inputs.push({
         key: stat.path,
