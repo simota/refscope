@@ -88,7 +88,7 @@ const fleetNoteId = "lenses-fleet-note";
 <section id="lenses" class="rs-section" aria-labelledby="lenses-heading">
   <div class="rs-container">
     <p class="rs-eyebrow">Lenses</p>
-    <h2 id="lenses-heading">Twelve lenses over the same repository.</h2>
+    <h2 id="lenses-heading">Twelve stable lenses over the same repository.</h2>
     <p class="rs-lede">
       Switch perspectives without losing the active ref, the selected commit, or any filters.
       Each lens is a different way to read the same observed facts.
@@ -124,6 +124,21 @@ const fleetNoteId = "lenses-fleet-note";
         </p>
         <p class="rs-fleet__body">
           Click a row to open that repository in the lens you were last using.
+        </p>
+      </div>
+    </aside>
+
+    <aside class="rs-fleet" aria-label="Feature-flagged Flight lens">
+      <div class="rs-fleet__head">
+        <p class="rs-eyebrow">Flagged lens</p>
+        <h3 class="rs-fleet__title">Ref Incident Flight Recorder.</h3>
+      </div>
+      <div class="rs-fleet__copy">
+        <p class="rs-fleet__body">
+          Append <code>?flight=1</code> or build with
+          <code>VITE_REFSCOPE_FLIGHT_RECORDER=1</code> to add a read-only
+          incident timeline for observed ref movements. It separates observed
+          facts from derived explanations and keeps server-side state memory-only.
         </p>
       </div>
     </aside>

@@ -93,6 +93,8 @@ function RescueHelpContent(): ReactNode {
         <strong>force-push / rebase</strong> でブランチの履歴が書き換えられたとき、
         <strong>書き換え直前のコミットハッシュ</strong>を SSE で受け取って localStorage に
         保存します。誤って消えそうになったコミットを救出するためのコマンドを表示します。
+        ref movement 全体の時系列と incident note は、feature flag 付きの
+        <strong> Ref Incident Flight Recorder</strong> が担当します。
       </div>
 
       <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
@@ -664,4 +666,3 @@ export function RewriteRescuePanel({
     </div>
   );
 }
-

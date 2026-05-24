@@ -46,10 +46,11 @@ Full options and the CLI security model are in [`apps/cli/README.md`](apps/cli/R
 
 ## What you see in the UI
 
-- **Twelve lenses over the same repository.** Each lens is a different way to read the same observed facts. Refs, filters, and the selected commit are shared across lenses — switching is local.
+- **Twelve stable lenses over the same repository.** Each lens is a different way to read the same observed facts. Refs, filters, and the selected commit are shared across lenses — switching is local.
   - *Timeline lenses* — `Live` (the commit timeline as a single calm column), `Pulse` (a canvas of file-change particles that burst when a file changes), `Stream` (one row per file change in reverse chronological order).
   - *Risk lenses* — `Hotspot` (LOC × churn scatter for refactor ROI), `Risk Trend` (`riskScore` over time with brush-to-zoom), `Risk Heatmap` (author × date or date × hour intensity), `Co-change` (force-directed graph of files that move together), `Drift` (local branches plotted by ahead/behind and staleness), `Outbox` (uncommitted / stashed / ahead-of-upstream in three columns).
   - *Specialist lenses* — `Digest` (24h / 7d activity summary across contributors, hotspots, risky commits, and ref activity), `Rescue` (history-rewritten snapshots with copyable `git reflog` / branch-recovery commands), `Symbol` (per-symbol history when a file is opened from a code location).
+- **Feature-flagged Ref Incident Flight Recorder** (`?flight=1` or `VITE_REFSCOPE_FLIGHT_RECORDER=1`) — a read-only incident timeline for observed ref movements. It separates observed facts (ref, previous hash, current hash, observed time, detection source) from derived explanations, and provides copyable incident notes plus investigation commands. The recorder is memory-only on the server and only covers events observed while Refscope is running.
 - **Fleet mode** (`?fleet=1`) — a multi-repository overview that polls allowlisted repositories at 30s intervals, aggregates activity across a `1h` / `6h` / `24h` / `7d` window, and surfaces per-repo SSE availability and untracked exclusions. Click a row to switch into Detail mode for that repository.
 - **Working-tree changes** are surfaced as a first-class entry alongside committed history, and uncommitted edits feed into the Pulse, Stream, and Outbox lenses too.
 - **File history with co-change** — right-click any file row to open its history view, complete with a hunk timeline, branch-drift halo, and a related-files (co-change) panel.
@@ -207,6 +208,7 @@ Available read-only endpoints:
 - `GET /api/repos/:repoId/commits/:hash/diff`
 - `GET /api/repos/:repoId/compare?base=main&target=feature/refscope`
 - `GET /api/repos/:repoId/events`
+- `GET /api/repos/:repoId/ref-flight/events?limit=100`
 - `GET /api/fleet/snapshot?window=24h&include=repoA,repoB`
 
 Commit detail responses include metadata, refs, and a bounded changed-file summary
@@ -270,6 +272,10 @@ show synthetic rewrite warnings before the API observes one.
 Rewrite alerts show observed facts (ref, previous hash, current hash, observed
 time, and detection source) separately from the interpretation, and include a
 copyable incident note for team coordination.
+When the Flight Recorder flag is enabled, the UI also exposes the in-memory
+`ref-flight` event log as an incident timeline with the same observed/derived
+separation. It is read-only, allowlist-scoped, and does not persist server-side
+state; restarting the API clears the server-side flight log.
 The web UI also marks commits observed through real `commit_added` SSE events as
 new in the timeline after the refreshed commit list includes those hashes. The
 highlight state is local to the current browser session and clears when

@@ -5,7 +5,7 @@
  * facts captured while Refscope is running.
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { AlertTriangle, Copy, RefreshCw } from "lucide-react";
+import { AlertTriangle, ClipboardList, Copy, RefreshCw } from "lucide-react";
 import {
   fetchRefFlightEvents,
   type RefFlightEvent,
@@ -30,12 +30,12 @@ function helpContent(): ReactNode {
   return (
     <>
       <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--rs-text)" }}>
-        Git Ref Flight Recorder とは
+        Ref Incident Flight Recorder とは
       </div>
       <div style={{ color: "var(--rs-text-secondary)", lineHeight: 1.6, marginBottom: 8 }}>
-        Refscope が接続中に観測した ref の移動だけを時系列で表示します。
-        force-push / rebase / reset のように履歴が書き換わった可能性があるイベントは
-        dangerous として分けます。
+        Refscope が接続中に観測した ref の移動を、incident review で使える証拠列として
+        時系列に表示します。force-push / rebase / reset のように履歴が書き換わった
+        可能性があるイベントは dangerous として分けます。
       </div>
       <div style={{ color: "var(--rs-text-secondary)", lineHeight: 1.6 }}>
         読み取り専用です。復旧・調査コマンドはテキストとして表示するだけで、
@@ -83,6 +83,30 @@ function eventLabel(type: RefFlightEvent["type"]): string {
     default:
       return type;
   }
+}
+
+function formatDetectionSource(source: RefFlightEvent["detectionSource"]): string {
+  switch (source) {
+    case "polling":
+      return "polling";
+    default:
+      return source;
+  }
+}
+
+function buildIncidentNote(event: RefFlightEvent): string {
+  const label = eventLabel(event.type);
+  const refName = event.ref.name;
+  const previous = event.previousHash ?? "none";
+  const current = event.currentHash ?? "none";
+  return [
+    `${label} observed on ${refName}`,
+    `previous: ${previous}`,
+    `current: ${current}`,
+    `observedAt: ${event.observedAt}`,
+    `source: ${formatDetectionSource(event.detectionSource)}`,
+    `interpretation: ${event.explanation}`,
+  ].join("\n");
 }
 
 function buildCommands(event: RefFlightEvent): string[] {
@@ -134,8 +158,83 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+function CopyTextButton({
+  text,
+  label,
+  icon,
+}: {
+  text: string;
+  label: string;
+  icon?: ReactNode;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1600);
+        });
+      }}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        border: "1px solid var(--rs-border)",
+        borderRadius: 4,
+        padding: "5px 8px",
+        background: copied
+          ? "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-git-added) 18%)"
+          : "var(--rs-bg-elevated)",
+        color: copied ? "var(--rs-git-added)" : "var(--rs-text-secondary)",
+        cursor: "pointer",
+        fontSize: 12,
+      }}
+    >
+      {icon}
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+function FactRow({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "86px minmax(0, 1fr)",
+        gap: 8,
+        alignItems: "baseline",
+      }}
+    >
+      <dt style={{ color: "var(--rs-text-muted)" }}>{label}</dt>
+      <dd
+        style={{
+          margin: 0,
+          minWidth: 0,
+          color: "var(--rs-text-secondary)",
+          fontFamily: mono ? "var(--rs-mono)" : undefined,
+          wordBreak: "break-word",
+        }}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
 function EventRow({ event }: { event: RefFlightEvent }) {
   const commands = buildCommands(event);
+  const incidentNote = buildIncidentNote(event);
   return (
     <article
       style={{
@@ -190,9 +289,76 @@ function EventRow({ event }: { event: RefFlightEvent }) {
             {shortHash(event.previousHash)} <span aria-hidden="true">→</span>{" "}
             {shortHash(event.currentHash)}
           </div>
-          <p style={{ margin: "8px 0 0", color: "var(--rs-text-secondary)", fontSize: 12 }}>
-            {event.explanation}
-          </p>
+          <div
+            style={{
+              display: "grid",
+              gap: 8,
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              marginTop: 10,
+            }}
+          >
+            <section
+              aria-label="Observed facts"
+              style={{
+                border: "1px solid var(--rs-border)",
+                borderRadius: 6,
+                background: "var(--rs-bg-panel)",
+                padding: 10,
+                minWidth: 0,
+              }}
+            >
+              <div
+                style={{
+                  color: "var(--rs-text)",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  marginBottom: 7,
+                  textTransform: "uppercase",
+                }}
+              >
+                Observed facts
+              </div>
+              <dl style={{ display: "grid", gap: 5, margin: 0, fontSize: 11 }}>
+                <FactRow label="Ref" value={event.ref.name} mono />
+                <FactRow label="Previous" value={event.previousHash ?? "none"} mono />
+                <FactRow label="Current" value={event.currentHash ?? "none"} mono />
+                <FactRow label="Observed" value={event.observedAt} />
+                <FactRow label="Source" value={formatDetectionSource(event.detectionSource)} />
+              </dl>
+            </section>
+            <section
+              aria-label="Derived explanation"
+              style={{
+                border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-warning) 24%)",
+                borderRadius: 6,
+                background: "color-mix(in oklab, var(--rs-bg-panel), var(--rs-warning) 5%)",
+                padding: 10,
+                minWidth: 0,
+              }}
+            >
+              <div
+                style={{
+                  color: "var(--rs-text)",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  marginBottom: 7,
+                  textTransform: "uppercase",
+                }}
+              >
+                Derived explanation
+              </div>
+              <p style={{ margin: 0, color: "var(--rs-text-secondary)", fontSize: 12, lineHeight: 1.5 }}>
+                {event.explanation}
+              </p>
+            </section>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+            <CopyTextButton
+              text={incidentNote}
+              label="Copy incident note"
+              icon={<ClipboardList size={13} aria-hidden="true" />}
+            />
+          </div>
           {commands.length > 0 && (
             <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
               {commands.map((command) => (
@@ -272,9 +438,9 @@ export function RefFlightRecorderLens({
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <LensHeader
-        title="Git Ref Flight Recorder"
-        oneLiner="refs の移動を証拠付きで再生する read-only timeline"
-        helpAriaLabel="Flight Recorder の説明を表示"
+        title="Ref Incident Flight Recorder"
+        oneLiner="ref 事故の観測事実・判定理由・次の調査コマンドを分けて残す read-only recorder"
+        helpAriaLabel="Incident Flight Recorder の説明を表示"
         helpContent={helpContent()}
       />
       <div
@@ -294,6 +460,8 @@ export function RefFlightRecorderLens({
         <span>{dangerousCount} dangerous</span>
         <span aria-hidden="true">·</span>
         <span>memory-only</span>
+        <span aria-hidden="true">·</span>
+        <span>read-only</span>
         <button
           type="button"
           onClick={() => setManualRefresh((value) => value + 1)}
@@ -314,6 +482,21 @@ export function RefFlightRecorderLens({
           <RefreshCw size={13} aria-hidden="true" />
           Refresh
         </button>
+      </div>
+      <div
+        style={{
+          padding: "10px 16px",
+          borderBottom: "1px solid var(--rs-border)",
+          color: "var(--rs-text-secondary)",
+          fontSize: 12,
+          lineHeight: 1.5,
+          background: "color-mix(in oklab, var(--rs-bg-panel), var(--rs-accent) 4%)",
+          flexShrink: 0,
+        }}
+      >
+        記録対象は Refscope が起動中に polling で観測した ref movement のみです。
+        起動前・切断中・Git GC 後の commit は復元できない場合があります。
+        この画面はコマンドを表示するだけで、Git へ書き込みません。
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 16 }}>
         {state.status === "error" ? (
