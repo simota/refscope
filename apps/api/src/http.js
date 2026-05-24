@@ -18,6 +18,8 @@ import {
   HOTSPOT_MAX_LIMIT,
   RANGE_HISTORY_DEFAULT_LIMIT,
   RANGE_HISTORY_MAX_LIMIT,
+  REF_FLIGHT_DEFAULT_LIMIT,
+  REF_FLIGHT_MAX_LIMIT,
   SYMBOL_HISTORY_DEFAULT_LIMIT,
   SYMBOL_HISTORY_MAX_LIMIT,
 } from "./gitService.js";
@@ -124,6 +126,20 @@ export function createRequestHandler(config, gitService, fleetService) {
       }
       if (route.name === "refsDrift") {
         const result = await gitService.getRefDrift(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "refFlightEvents") {
+        const limitResult = parseLimitQuery(
+          url.searchParams.get("limit"),
+          REF_FLIGHT_DEFAULT_LIMIT,
+          REF_FLIGHT_MAX_LIMIT,
+        );
+        if (!limitResult.ok) {
+          sendJson(res, 400, { error: limitResult.error });
+          return;
+        }
+        const result = await gitService.listRefFlightEvents(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
         return;
       }
@@ -322,6 +338,9 @@ function matchRoute(method, pathname) {
   // pattern used elsewhere in this router.
   if (parts.length === 5 && parts[3] === "refs" && parts[4] === "drift") {
     return { name: "refsDrift", params: { repoId } };
+  }
+  if (parts.length === 5 && parts[3] === "ref-flight" && parts[4] === "events") {
+    return { name: "refFlightEvents", params: { repoId } };
   }
   if (parts.length === 4 && parts[3] === "commits") return { name: "commits", params: { repoId } };
   if (parts.length === 4 && parts[3] === "compare") return { name: "compare", params: { repoId } };

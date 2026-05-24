@@ -18,6 +18,7 @@ import { CoChangeLens } from "./components/refscope/CoChangeLens";
 import { DriftLens } from "./components/refscope/DriftLens";
 import { OutboxLens } from "./components/refscope/OutboxLens";
 import { DigestLens } from "./components/refscope/DigestLens";
+import { RefFlightRecorderLens } from "./components/refscope/RefFlightRecorderLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -96,6 +97,21 @@ const EMPTY_DIFF: DiffPayload = { diff: "", truncated: false, maxBytes: 0 };
 const RECENT_FILE_HISTORY_PATHS_STORAGE_KEY = "refscope.fileHistory.recentPaths.v1";
 const RECENT_FILE_HISTORY_PATHS_MAX = 10;
 const RECENT_FILE_HISTORY_PATHS_SCHEMA_VERSION = 1;
+const FLIGHT_RECORDER_FLAG_STORAGE_KEY = "refscope.flags.flightRecorder.v1";
+const BASE_LENSES: readonly LensId[] = [
+  "live",
+  "pulse",
+  "stream",
+  "hotspot",
+  "risk-trend",
+  "risk-heatmap",
+  "co-change",
+  "drift",
+  "outbox",
+  "digest",
+  "rescue",
+  "symbol",
+];
 
 type RecentFileHistoryPathsPayload = {
   v: typeof RECENT_FILE_HISTORY_PATHS_SCHEMA_VERSION;
@@ -151,7 +167,31 @@ function persistRecentFileHistoryPaths(paths: string[]): void {
   }
 }
 
+function isFlightRecorderEnabled(): boolean {
+  if (import.meta.env.VITE_REFSCOPE_FLIGHT_RECORDER === "1") return true;
+  if (typeof window === "undefined") return false;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("flight") === "1") {
+    try {
+      window.localStorage.setItem(FLIGHT_RECORDER_FLAG_STORAGE_KEY, "1");
+    } catch {
+      // Storage is optional; URL flag still enables the lens for this session.
+    }
+    return true;
+  }
+  try {
+    return window.localStorage.getItem(FLIGHT_RECORDER_FLAG_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
+  const flightRecorderEnabled = useMemo(() => isFlightRecorderEnabled(), []);
+  const availableLenses = useMemo<readonly LensId[]>(
+    () => (flightRecorderEnabled ? [...BASE_LENSES, "flight"] : BASE_LENSES),
+    [flightRecorderEnabled],
+  );
   // Fleet/Detail mode state — 'detail' is the default (preserves existing behavior).
   // URL sync: ?fleet=1 ↔ mode='fleet' via replaceState (no pushState to avoid history pollution,
   // per proposal §10.1). Mount reads URL to restore mode.
@@ -296,6 +336,11 @@ export default function App() {
 
   // Lens switcher state — 'live' is the default; other lenses are placeholders.
   const [activeLens, setActiveLens] = useState<LensId>('live');
+  useEffect(() => {
+    if (!availableLenses.includes(activeLens)) {
+      setActiveLens("live");
+    }
+  }, [activeLens, availableLenses]);
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [refs, setRefs] = useState<GitRef[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
@@ -445,6 +490,7 @@ export default function App() {
   // active; null clears the view. Owned here so CommandPalette / LensSwitcher
   // can drive the same view without parallel state copies.
   const [symbolHistoryQuery, setSymbolHistoryQuery] = useState<{ path: string; funcname: string } | null>(null);
+  const [flightRefreshKey, setFlightRefreshKey] = useState(0);
   const workTreeAbortRef = useRef<AbortController | null>(null);
   const workTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRefRef = useRef(selectedRef);
@@ -869,6 +915,7 @@ export default function App() {
       });
       // History rewrites change ahead/behind against base, so refresh drift.
       scheduleDriftRefresh(selectedRepo);
+      setFlightRefreshKey((value) => value + 1);
     });
     for (const type of ["ref_created", "ref_updated", "ref_deleted"] as const) {
       source.addEventListener(type, () => {
@@ -878,6 +925,7 @@ export default function App() {
         // moving HEAD changes ahead/behind for all branches). Debounced
         // refresh coalesces bursts.
         scheduleDriftRefresh(selectedRepo);
+        setFlightRefreshKey((value) => value + 1);
       });
     }
     source.onerror = (event) => {
@@ -1434,6 +1482,7 @@ export default function App() {
         activeLens={activeLens}
         onLensChange={setActiveLens}
         hidden={mode === "fleet"}
+        availableLenses={availableLenses}
       />
       {dateRangeFilter && mode !== "fleet" && (
         <DateRangeFilterBanner
@@ -1613,6 +1662,15 @@ export default function App() {
             repoId={selectedRepo}
             query={symbolHistoryQuery}
             onQueryChange={setSymbolHistoryQuery}
+            onChangeLens={setActiveLens}
+          />
+        </div>
+      )}
+      {flightRecorderEnabled && activeLens === 'flight' && mode === "detail" && selectedRepo && (
+        <div className="flex-1 overflow-hidden" id="lens-panel-flight" role="tabpanel" aria-labelledby="lens-tab-flight">
+          <RefFlightRecorderLens
+            repoId={selectedRepo}
+            refreshKey={flightRefreshKey}
             onChangeLens={setActiveLens}
           />
         </div>

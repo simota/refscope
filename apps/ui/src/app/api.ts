@@ -92,7 +92,12 @@ export type ViewerEvent =
       detectionSource?: "polling" | "reconnect_recovery" | "direct_ref_change";
       explanation?: string;
     }
-  | { type: "ref_created" | "ref_updated" | "ref_deleted"; repoId: string; ref: GitRef }
+  | {
+      type: "ref_created" | "ref_updated" | "ref_deleted";
+      repoId: string;
+      ref: GitRef;
+      previousHash?: string;
+    }
   | { type: "error"; error: string; timedOut?: boolean; truncated?: boolean };
 
 export function eventsUrl(repoId: string) {
@@ -107,6 +112,54 @@ export async function listRepositories() {
 export async function listRefs(repoId: string) {
   const body = await getJson<{ refs: GitRef[] }>(`/api/repos/${encodeURIComponent(repoId)}/refs`);
   return body.refs;
+}
+
+export type RefFlightEventType =
+  | "ref_created"
+  | "ref_deleted"
+  | "ref_updated"
+  | "ref_fast_forward"
+  | "history_rewritten";
+
+export type RefFlightEvent = {
+  id: string;
+  repoId: string;
+  type: RefFlightEventType;
+  ref: GitRef;
+  previousHash: string | null;
+  currentHash: string | null;
+  observedAt: string;
+  detectionSource: "polling";
+  dangerous: boolean;
+  explanation: string;
+};
+
+export type RefFlightEventsResponse = {
+  repoId: string;
+  events: RefFlightEvent[];
+  limit: number;
+  truncated: boolean;
+  notes: {
+    persistence: "memory";
+    readOnly: boolean;
+    observedOnly: boolean;
+  };
+};
+
+export async function fetchRefFlightEvents(
+  repoId: string,
+  params: { limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<RefFlightEventsResponse> {
+  const search = new URLSearchParams();
+  if (typeof params.limit === "number" && Number.isFinite(params.limit)) {
+    search.set("limit", String(params.limit));
+  }
+  const suffix = search.toString();
+  return getJson<RefFlightEventsResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/ref-flight/events${suffix ? `?${suffix}` : ""}`,
+    signal,
+  );
 }
 
 export type StashEntry = {

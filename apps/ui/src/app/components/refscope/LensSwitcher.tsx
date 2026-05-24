@@ -1,4 +1,4 @@
-export type LensId = 'live' | 'pulse' | 'stream' | 'hotspot' | 'risk-trend' | 'risk-heatmap' | 'co-change' | 'drift' | 'outbox' | 'digest' | 'rescue' | 'symbol';
+export type LensId = 'live' | 'pulse' | 'stream' | 'hotspot' | 'risk-trend' | 'risk-heatmap' | 'co-change' | 'drift' | 'outbox' | 'digest' | 'rescue' | 'symbol' | 'flight';
 
 const LENSES: Array<{ id: LensId; label: string; labelJa: string }> = [
   { id: 'live',          label: 'Live',          labelJa: 'ライブ' },
@@ -13,19 +13,24 @@ const LENSES: Array<{ id: LensId; label: string; labelJa: string }> = [
   { id: 'digest',        label: 'Digest',        labelJa: 'ダイジェスト' },
   { id: 'rescue',        label: 'Rescue',        labelJa: 'レスキュー' },
   { id: 'symbol',        label: 'Symbol',        labelJa: 'シンボル' },
+  { id: 'flight',        label: 'Flight',        labelJa: 'フライト' },
 ];
 
 export function LensSwitcher({
   activeLens,
   onLensChange,
   hidden,
+  availableLenses,
 }: {
   activeLens: LensId;
   onLensChange: (lens: LensId) => void;
   /** When true, the switcher is not rendered (Fleet mode hides it). */
   hidden?: boolean;
+  availableLenses?: readonly LensId[];
 }) {
   if (hidden) return null;
+  const available = availableLenses ? new Set(availableLenses) : null;
+  const lenses = available ? LENSES.filter((lens) => available.has(lens.id)) : LENSES;
   return (
     <div
       role="tablist"
@@ -37,7 +42,7 @@ export function LensSwitcher({
         background: 'var(--rs-bg-panel)',
       }}
     >
-      {LENSES.map((lens) => {
+      {lenses.map((lens) => {
         const isActive = lens.id === activeLens;
         return (
           <button

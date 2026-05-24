@@ -20,7 +20,9 @@ import {
   compareNumstatArgs,
   compareRefSnapshots,
   compareRevListArgs,
+  appendRefFlightEvent,
   createGitService,
+  createRefFlightEvent,
   escapeGitRegexLiteral,
   formatLiteralPathspec,
   parseChangedFiles,
@@ -811,6 +813,68 @@ test("classifies created, updated, and deleted refs", () => {
       ref: previous.get("refs/tags/v1.0.0"),
     },
   ]);
+});
+
+test("creates ref flight event from updated ref change", () => {
+  const change = {
+    type: "ref_updated",
+    previousHash: "1111111111111111111111111111111111111111",
+    ref: {
+      name: "refs/heads/main",
+      shortName: "main",
+      hash: "2222222222222222222222222222222222222222",
+      type: "branch",
+      updatedAt: null,
+    },
+  };
+
+  assert.deepEqual(
+    createRefFlightEvent({
+      repoId: "demo",
+      change,
+      observedAt: "2026-05-24T00:00:00.000Z",
+      eventType: "history_rewritten",
+      dangerous: true,
+      explanation: "not descendant",
+    }),
+    {
+      id: "demo:refs/heads/main:1111111111111111111111111111111111111111:2222222222222222222222222222222222222222:2026-05-24T00:00:00.000Z",
+      repoId: "demo",
+      type: "history_rewritten",
+      ref: change.ref,
+      previousHash: "1111111111111111111111111111111111111111",
+      currentHash: "2222222222222222222222222222222222222222",
+      observedAt: "2026-05-24T00:00:00.000Z",
+      detectionSource: "polling",
+      dangerous: true,
+      explanation: "not descendant",
+    },
+  );
+});
+
+test("appends ref flight events newest-first and de-duplicates same movement", () => {
+  const logs = new Map();
+  const base = {
+    repoId: "demo",
+    type: "ref_deleted",
+    ref: {
+      name: "refs/heads/old",
+      shortName: "old",
+      hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      type: "branch",
+      updatedAt: null,
+    },
+    previousHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    currentHash: null,
+    detectionSource: "polling",
+    dangerous: true,
+    explanation: "deleted",
+  };
+
+  appendRefFlightEvent(logs, "demo", { ...base, id: "1", observedAt: "t1" });
+  appendRefFlightEvent(logs, "demo", { ...base, id: "2", observedAt: "t2" });
+
+  assert.deepEqual(logs.get("demo").map((event) => event.id), ["2"]);
 });
 
 function git(cwd, ...args) {

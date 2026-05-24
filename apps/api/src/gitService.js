@@ -80,6 +80,13 @@ export const RANGE_HISTORY_MAX_LIMIT = 50;
 export const SYMBOL_HISTORY_DEFAULT_LIMIT = 20;
 export const SYMBOL_HISTORY_MAX_LIMIT = 50;
 
+// Git Ref Flight Recorder (feature-flagged UI surface).
+// In-memory, bounded event log per repo. It intentionally stores only ref
+// movement facts, never patch contents or private file data.
+export const REF_FLIGHT_DEFAULT_LIMIT = 100;
+export const REF_FLIGHT_MAX_LIMIT = 200;
+export const REF_FLIGHT_LOG_CAP = 200;
+
 // Graded cherry-pick equivalence caps (D-6).
 // Grade computation runs one `git diff` per equivalent entry — cap the number
 // of entries that receive a grade to bound the request cost. Entries beyond
@@ -150,6 +157,8 @@ export function createGitService(config) {
   // Hotspot cache: key = repoId, value = { files: Map<path, { churn }>, ts }
   /** @type {Map<string, { files: Map<string, { churn: number }>; ts: number }>} */
   const _hotspotCache = new Map();
+  /** @type {Map<string, Array<object>>} */
+  const _refFlightLogs = new Map();
 
   /**
    * Refresh the hotspot churn cache for a repo (fire-and-forget safe).
@@ -410,7 +419,16 @@ export function createGitService(config) {
       const events = [];
 
       for (const change of changes) {
+        const observedAt = new Date().toISOString();
         if (change.type === "ref_created") {
+          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+            repoId: repo.id,
+            change,
+            observedAt,
+            eventType: "ref_created",
+            dangerous: false,
+            explanation: "A ref appeared in the latest observed snapshot.",
+          }));
           events.push({
             type: "ref_created",
             repoId: repo.id,
@@ -420,6 +438,14 @@ export function createGitService(config) {
         }
 
         if (change.type === "ref_deleted") {
+          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+            repoId: repo.id,
+            change,
+            observedAt,
+            eventType: "ref_deleted",
+            dangerous: true,
+            explanation: "A previously observed ref is no longer present.",
+          }));
           events.push({
             type: "ref_deleted",
             repoId: repo.id,
@@ -429,6 +455,14 @@ export function createGitService(config) {
         }
 
         if (change.ref.type !== "branch" && change.ref.type !== "remote") {
+          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+            repoId: repo.id,
+            change,
+            observedAt,
+            eventType: "ref_updated",
+            dangerous: false,
+            explanation: "A non-branch ref moved between observed snapshots.",
+          }));
           events.push({
             type: "ref_updated",
             repoId: repo.id,
@@ -439,19 +473,37 @@ export function createGitService(config) {
         }
 
         if (!(await isAncestor(repo, change.previousHash, change.ref.hash))) {
+          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+            repoId: repo.id,
+            change,
+            observedAt,
+            eventType: "history_rewritten",
+            dangerous: true,
+            explanation:
+              "The current commit is not a descendant of the previously observed commit.",
+          }));
           events.push({
             type: "history_rewritten",
             repoId: repo.id,
             ref: change.ref,
             previousHash: change.previousHash,
             currentHash: change.ref.hash,
-            observedAt: new Date().toISOString(),
+            observedAt,
             detectionSource: "polling",
             explanation:
               "The current commit is not a descendant of the previously observed commit.",
           });
           continue;
         }
+
+        appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+          repoId: repo.id,
+          change,
+          observedAt,
+          eventType: "ref_fast_forward",
+          dangerous: false,
+          explanation: "The ref moved to a descendant commit.",
+        }));
 
         const commits = await listCommitRange(repo, change.previousHash, change.ref.hash);
 
@@ -482,6 +534,32 @@ export function createGitService(config) {
       }
 
       return { snapshot: currentSnapshot, events };
+    },
+
+    async listRefFlightEvents(repo, query) {
+      const limit = parseLimitQuery(
+        query.get("limit"),
+        REF_FLIGHT_DEFAULT_LIMIT,
+        REF_FLIGHT_MAX_LIMIT,
+      );
+      if (!limit.ok) {
+        return { status: 400, body: { error: limit.error } };
+      }
+      const events = (_refFlightLogs.get(repo.id) ?? []).slice(0, limit.value);
+      return {
+        status: 200,
+        body: {
+          repoId: repo.id,
+          events,
+          limit: limit.value,
+          truncated: (_refFlightLogs.get(repo.id) ?? []).length > limit.value,
+          notes: {
+            persistence: "memory",
+            readOnly: true,
+            observedOnly: true,
+          },
+        },
+      };
     },
 
     async listCommits(repo, query) {
@@ -2401,6 +2479,51 @@ export function compareRefSnapshots(previousSnapshot, currentSnapshot) {
   }
 
   return changes;
+}
+
+export function createRefFlightEvent({
+  repoId,
+  change,
+  observedAt,
+  eventType,
+  dangerous,
+  explanation,
+}) {
+  const currentHash = change.type === "ref_deleted" ? null : change.ref.hash;
+  const previousHash =
+    change.type === "ref_created"
+      ? null
+      : change.previousHash ?? change.ref.hash;
+  return {
+    id: `${repoId}:${change.ref.name}:${previousHash ?? "none"}:${currentHash ?? "none"}:${observedAt}`,
+    repoId,
+    type: eventType,
+    ref: change.ref,
+    previousHash,
+    currentHash,
+    observedAt,
+    detectionSource: "polling",
+    dangerous,
+    explanation,
+  };
+}
+
+export function appendRefFlightEvent(logs, repoId, event) {
+  const current = logs.get(repoId) ?? [];
+  const next = [
+    event,
+    ...current.filter(
+      (item) =>
+        !(
+          item.ref?.name === event.ref?.name &&
+          item.previousHash === event.previousHash &&
+          item.currentHash === event.currentHash &&
+          item.type === event.type
+        ),
+    ),
+  ].slice(0, REF_FLIGHT_LOG_CAP);
+  logs.set(repoId, next);
+  return next;
 }
 
 function parseCommitRecords(stdout) {
