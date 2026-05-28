@@ -666,7 +666,8 @@ function RankingPanel({
 }) {
   const [sortKey, setSortKey] = useState<SortKey>('lines');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
-  const [filter, setFilter] = useState('');
+  const [includeFilter, setIncludeFilter] = useState('');
+  const [excludeFilter, setExcludeFilter] = useState('');
 
   const handleSort = useCallback((key: SortKey) => {
     setSortKey((prevKey) => {
@@ -679,9 +680,17 @@ function RankingPanel({
     });
   }, []);
 
-  const trimmedFilter = filter.trim().toLowerCase();
-  const filtered = trimmedFilter
-    ? files.filter((f) => f.path.toLowerCase().includes(trimmedFilter))
+  const trimmedInclude = includeFilter.trim().toLowerCase();
+  const trimmedExclude = excludeFilter.trim().toLowerCase();
+  const hasAnyFilter = trimmedInclude !== '' || trimmedExclude !== '';
+
+  const filtered = hasAnyFilter
+    ? files.filter((f) => {
+        const p = f.path.toLowerCase();
+        if (trimmedInclude && !p.includes(trimmedInclude)) return false;
+        if (trimmedExclude && p.includes(trimmedExclude)) return false;
+        return true;
+      })
     : files;
 
   const sorted = [...filtered].sort((a, b) => {
@@ -707,12 +716,13 @@ function RankingPanel({
       >
         <input
           type="search"
-          placeholder="パスでフィルタ…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          aria-label="パスでフィルタ"
+          placeholder="含むパス…"
+          value={includeFilter}
+          onChange={(e) => setIncludeFilter(e.target.value)}
+          aria-label="含むパスでフィルタ"
           style={{
             flex: 1,
+            minWidth: 0,
             height: 26,
             padding: '0 8px',
             fontSize: 11,
@@ -724,10 +734,34 @@ function RankingPanel({
             outline: 'none',
           }}
         />
-        {filter && (
+        <input
+          type="search"
+          placeholder="除外パス…"
+          value={excludeFilter}
+          onChange={(e) => setExcludeFilter(e.target.value)}
+          aria-label="除外パスでフィルタ"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: 26,
+            padding: '0 8px',
+            fontSize: 11,
+            fontFamily: 'var(--rs-mono)',
+            border: '1px solid var(--rs-border)',
+            borderRadius: 'var(--rs-radius-sm)',
+            background: 'var(--rs-bg-elevated)',
+            color: 'var(--rs-text)',
+            outline: 'none',
+          }}
+        />
+        {hasAnyFilter && (
           <button
             type="button"
-            onClick={() => setFilter('')}
+            onClick={() => {
+              setIncludeFilter('');
+              setExcludeFilter('');
+            }}
+            aria-label="含む・除外フィルタを両方クリア"
             style={{
               fontSize: 11,
               padding: '2px 8px',
@@ -737,6 +771,7 @@ function RankingPanel({
               color: 'var(--rs-text-secondary)',
               cursor: 'pointer',
               fontFamily: 'var(--rs-sans)',
+              whiteSpace: 'nowrap',
             }}
           >
             クリア
@@ -764,8 +799,12 @@ function RankingPanel({
             fontFamily: 'var(--rs-sans)',
           }}
         >
-          {trimmedFilter
-            ? `"${filter}" にマッチするファイルがありません`
+          {hasAnyFilter
+            ? trimmedInclude && trimmedExclude
+              ? `"${includeFilter}" を含み "${excludeFilter}" を除外する条件にマッチするファイルがありません`
+              : trimmedInclude
+                ? `"${includeFilter}" にマッチするファイルがありません`
+                : `"${excludeFilter}" を除外した結果、表示するファイルがありません`
             : '表示するファイルがありません'}
         </div>
       )}
