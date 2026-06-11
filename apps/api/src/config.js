@@ -36,7 +36,9 @@ export function loadConfig(env = process.env) {
   }
 
   const config = {
-    host: rawHost,
+    // parseHost validates the trimmed value; store the same trimmed form so
+    // server.listen never sees stray whitespace.
+    host: rawHost.trim(),
     port: parsePort(env.PORT, DEFAULT_PORT),
     gitTimeoutMs: parsePositiveInteger(env.RTGV_GIT_TIMEOUT_MS, 5000, {
       max: MAX_TIMEOUT_MS,

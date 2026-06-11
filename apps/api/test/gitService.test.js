@@ -877,6 +877,46 @@ test("appends ref flight events newest-first and de-duplicates same movement", (
   assert.deepEqual(logs.get("demo").map((event) => event.id), ["2"]);
 });
 
+test("collectRefEvents classifies a missing old commit object as history_rewritten", async () => {
+  // `git merge-base --is-ancestor` exits 128 (not 1) when the old commit
+  // object no longer exists (e.g. pruned after a force-push). That must be
+  // treated as "not a fast-forward" → history_rewritten, not rethrown —
+  // otherwise the SSE poller throws on every poll and never advances.
+  const repoPath = createTempPath("rtgv-missing-ancestor-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "hello\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "feat: hello");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const currentSnapshot = await service.getRefSnapshot(repo);
+    const mainRef = currentSnapshot.get("refs/heads/main");
+    assert.ok(mainRef, "fixture repo must expose refs/heads/main");
+
+    const missingHash = "0123456789abcdef0123456789abcdef01234567";
+    const previousSnapshot = new Map(currentSnapshot);
+    previousSnapshot.set("refs/heads/main", { ...mainRef, hash: missingHash });
+
+    const result = await service.collectRefEvents(repo, previousSnapshot);
+
+    const rewritten = result.events.filter((event) => event.type === "history_rewritten");
+    assert.equal(rewritten.length, 1);
+    assert.equal(rewritten[0].previousHash, missingHash);
+    assert.equal(rewritten[0].currentHash, mainRef.hash);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 function git(cwd, ...args) {
   const result = spawnSync("git", args, {
     cwd,
