@@ -216,6 +216,7 @@ export function TopBar({
               value={selectedRepo}
               onChange={(event) => onSelectRepo(event.target.value)}
               disabled={!repositories.length}
+              title={repoName}
               className="bg-transparent outline-none"
               style={{
                 appearance: "none",
@@ -244,6 +245,7 @@ export function TopBar({
               value={selectedRef}
               onChange={(event) => onSelectRef(event.target.value)}
               disabled={!selectedRepo}
+              title={refName}
               className="bg-transparent outline-none"
               style={{
                 appearance: "none",
@@ -460,7 +462,7 @@ export function TopBar({
               type="button"
               className="rs-compact-button"
               onClick={onToggleLiveUpdates}
-              disabled={status === "error"}
+              disabled={status === "error" && !livePaused}
               aria-pressed={livePaused}
               aria-label={livePaused ? "Resume live updates" : "Pause live updates"}
               title={

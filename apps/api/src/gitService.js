@@ -269,6 +269,13 @@ export function createGitService(config) {
       if (error instanceof GitCommandError && error.exitCode === 1) {
         return false;
       }
+      // Exit 128 means the old commit object is missing (e.g. pruned after a
+      // force-push). The update cannot be a fast-forward in that case, so
+      // treating it as "not an ancestor" correctly classifies the change as
+      // history rewritten instead of failing every poll.
+      if (error instanceof GitCommandError && error.exitCode === 128) {
+        return false;
+      }
       throw error;
     }
   }

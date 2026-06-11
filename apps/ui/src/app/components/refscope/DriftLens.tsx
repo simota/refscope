@@ -395,6 +395,7 @@ export function DriftLens({
         setPoints(pts);
         setLoading(false);
       } catch (err) {
+        if (signal.aborted) return;
         if ((err as { name?: string }).name === 'AbortError') return;
         setError(err instanceof Error ? err.message : String(err));
         setLoading(false);
@@ -539,7 +540,7 @@ export function DriftLens({
                   cursor: 'pointer',
                 }}
               >
-                再試行
+                Retry
               </button>
               {onChangeLens && (
                 <>

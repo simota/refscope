@@ -71,8 +71,8 @@ function statusColor(status: string): string {
   switch (status) {
     case 'A': return 'var(--rs-git-added)';
     case 'D': return 'var(--rs-git-deleted)';
-    case 'R': return '#f59e0b';
-    default:  return '#64748b';
+    case 'R': return 'var(--rs-warning)';
+    default:  return 'var(--rs-text-muted)';
   }
 }
 
@@ -254,28 +254,43 @@ export function FileStreamLens({
     path: string;
   } | null>(null);
 
+  // detailCache mirror (read inside the fetch effect without re-triggering it)
+  const detailCacheRef = useRef(detailCache);
+  useEffect(() => {
+    detailCacheRef.current = detailCache;
+  }, [detailCache]);
+
+  // Hashes currently being fetched — prevents duplicate getCommit calls
+  const inFlightRef = useRef<Set<string>>(new Set());
+
   // Fetch commit details
+  // detailCache is intentionally NOT a dependency: it is read via
+  // detailCacheRef and an in-flight set so that arriving details don't
+  // re-trigger the effect and re-issue getCommit for every pending hash.
   useEffect(() => {
     if (!repoId) return;
     const sliced = commits.slice(0, MAX_COMMITS);
     for (const c of sliced) {
-      if (!detailCache.has(c.hash)) {
-        void (async () => {
-          try {
-            const detail = await getCommit(repoId, c.hash);
-            setDetailCache((prev) => {
-              if (prev.has(c.hash)) return prev;
-              const next = new Map(prev);
-              next.set(c.hash, detail);
-              return next;
-            });
-          } catch {
-            // Non-critical
-          }
-        })();
-      }
+      if (detailCacheRef.current.has(c.hash)) continue;
+      if (inFlightRef.current.has(c.hash)) continue;
+      inFlightRef.current.add(c.hash);
+      void (async () => {
+        try {
+          const detail = await getCommit(repoId, c.hash);
+          setDetailCache((prev) => {
+            if (prev.has(c.hash)) return prev;
+            const next = new Map(prev);
+            next.set(c.hash, detail);
+            return next;
+          });
+        } catch {
+          // Non-critical
+        } finally {
+          inFlightRef.current.delete(c.hash);
+        }
+      })();
     }
-  }, [commits, repoId, detailCache]);
+  }, [commits, repoId]);
 
   // Build flat per-file entries (1 entry = 1 file change in 1 commit)
   const entries: StreamEntry[] = useMemo(() => {

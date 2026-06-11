@@ -236,6 +236,20 @@ export function CoChangeLens({
     }
   }, [selectedFilePath]);
 
+  // repo 切替時は前 repo のファイルパスを引き継がない (新 repo に存在しない
+  // パスを fetch してしまうため)。null に戻すと Hotspot Top-1 フォールバックが走る。
+  const prevRepoIdRef = useRef(repoId);
+  useEffect(() => {
+    if (prevRepoIdRef.current === repoId) return;
+    prevRepoIdRef.current = repoId;
+    setCenterPath(null);
+    setNodes([]);
+    setLinks([]);
+    setLastRelated([]);
+    setError('');
+    setEmptyReason(null);
+  }, [repoId]);
+
   // ResizeObserver でコンテナサイズを追跡
   useEffect(() => {
     const el = containerRef.current;
@@ -679,7 +693,7 @@ export function CoChangeLens({
                   opacity: centerPath ? 1 : 0.5,
                 }}
               >
-                再試行
+                Retry
               </button>
               {onChangeLens && (
                 <>

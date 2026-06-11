@@ -3,13 +3,13 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  ExternalLink,
   FileSearch,
   FolderTree,
   History,
   List as ListIcon,
   Search,
   ShieldCheck,
+  Terminal,
 } from "lucide-react";
 import type { Commit, CommitDetail } from "./data";
 import type {
@@ -209,15 +209,19 @@ export function DetailPanel({
             </span>
           ) : null}
           <button
+            type="button"
             className="rs-icon-btn"
             title="Copy git show command"
+            aria-label="Copy git show command"
             onClick={() => void copyToClipboard("git show command", gitShowCommand)}
           >
-            <ExternalLink size={13} />
+            <Terminal size={13} />
           </button>
           <button
+            type="button"
             className="rs-icon-btn"
             title="Copy commit hash"
+            aria-label="Copy commit hash"
             onClick={() => void copyToClipboard("Commit hash", commit.hash)}
           >
             <Copy size={13} />
@@ -274,7 +278,7 @@ export function DetailPanel({
               <span style={{ color: "var(--rs-text-muted)" }}>· {formatDate(authorDate)}</span>
             </Meta>
             <Meta label="Parents">
-              <span style={{ fontFamily: "var(--rs-mono)" }}>
+              <span style={{ fontFamily: "var(--rs-mono)", wordBreak: "break-all" }}>
                 {parents.length ? parents.join(", ") : "—"}
               </span>
             </Meta>
@@ -585,6 +589,7 @@ function WorkTreePanel({
         className="overflow-y-auto"
         style={{ flex: 1 }}
         role="tabpanel"
+        id={`worktree-${effectiveTab}`}
         aria-label={`${effectiveTab} changes`}
       >
         {effectiveTab === "untracked" ? (
@@ -1090,7 +1095,6 @@ function WhyPanel({
               border: "1px solid var(--rs-border)",
               borderRadius: 4,
               padding: "3px 6px",
-              outline: "none",
               width: "100%",
             }}
           />
@@ -1128,7 +1132,6 @@ function WhyPanel({
                 border: "1px solid var(--rs-border)",
                 borderRadius: 4,
                 padding: "3px 6px",
-                outline: "none",
                 width: "100%",
               }}
             />
@@ -1156,7 +1159,6 @@ function WhyPanel({
                 border: "1px solid var(--rs-border)",
                 borderRadius: 4,
                 padding: "3px 6px",
-                outline: "none",
                 width: "100%",
               }}
             />
@@ -1164,13 +1166,8 @@ function WhyPanel({
           <button
             type="submit"
             disabled={fetching || !repoId}
+            className="rs-btn rs-btn--accent"
             style={{
-              fontSize: 11,
-              padding: "4px 10px",
-              borderRadius: 4,
-              background: "var(--rs-accent)",
-              color: "#fff",
-              border: "none",
               cursor: fetching ? "wait" : "pointer",
               opacity: fetching ? 0.6 : 1,
               whiteSpace: "nowrap",

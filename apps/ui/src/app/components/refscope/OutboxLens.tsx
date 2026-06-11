@@ -753,7 +753,7 @@ export function OutboxLens({
                   cursor: 'pointer',
                 }}
               >
-                再試行
+                Retry
               </button>
               {onChangeLens && (
                 <>

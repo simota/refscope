@@ -911,6 +911,13 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
       signal,
     });
   } catch (error) {
+    // Aborted requests are routine control flow (AbortController cancellation
+    // on repo switch / rapid navigation), not a connectivity problem. Re-throw
+    // the original error so callers checking `err.name === "AbortError"` keep
+    // working instead of seeing a fake "Cannot reach API" message.
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
     throw new Error(
       `Cannot reach API at ${API_BASE_URL}. Run ${API_RECOVERY_COMMAND} from the repository root, or start the API with RTGV_REPOS=viewer=/absolute/path pnpm dev:api if you want to inspect another repository.`,
       { cause: error },

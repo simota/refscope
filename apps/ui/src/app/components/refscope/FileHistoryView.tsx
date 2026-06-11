@@ -155,6 +155,13 @@ export function FileHistoryView({
     [parsedEntries],
   );
 
+  // Reset the active commit when the target file changes — the previous
+  // file's hash would otherwise stay highlighted (and may not even exist in
+  // the new file's history).
+  useEffect(() => {
+    setActiveHash(null);
+  }, [filePath]);
+
   // Default the active commit to the newest one as soon as data lands so the
   // sidebar shows a highlighted row before the user scrolls.
   useEffect(() => {

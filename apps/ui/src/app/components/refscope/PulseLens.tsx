@@ -240,9 +240,9 @@ function PulseHelpContent() {
         live indicator
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
-        ・<span style={{ color: '#22c55e' }}>緑パルス</span>: SSE 接続中 (リアルタイム取り込み)<br />
+        ・<span style={{ color: 'var(--rs-git-added)' }}>緑パルス</span>: SSE 接続中 (リアルタイム取り込み)<br />
         ・<span style={{ color: 'var(--rs-text-muted)' }}>グレー</span>: 接続中… または 一時停止<br />
-        ・<span style={{ color: '#ef4444' }}>赤</span>: 切断 (新しい変更は記録されません)
+        ・<span style={{ color: 'var(--rs-warning)' }}>赤</span>: 切断 (新しい変更は記録されません)
       </div>
 
       <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
@@ -304,6 +304,28 @@ export function PulseLens({
   // Map<untracked-path, first-observed-timestamp>
   const untrackedFirstSeenRef = useRef<Map<string, number>>(new Map());
 
+  // detailCache mirror (read inside the fetch effect without re-triggering it)
+  const detailCacheRef = useRef(detailCache);
+  useEffect(() => {
+    detailCacheRef.current = detailCache;
+  }, [detailCache]);
+
+  // Hashes currently being fetched — prevents duplicate getCommit calls
+  const inFlightRef = useRef<Set<string>>(new Set());
+
+  // ---- Reset per-repo state when switching repositories ------------------
+  // Without this, files/stats from the previous repo persist and mix into
+  // the new repo's aggregation.
+  const activeRepoIdRef = useRef(repoId);
+  useEffect(() => {
+    activeRepoIdRef.current = repoId;
+    setDetailCache(new Map());
+    setStatistics(new Map());
+    processedHashesRef.current.clear();
+    untrackedFirstSeenRef.current.clear();
+    inFlightRef.current.clear();
+  }, [repoId]);
+
   // ---- Right-click context menu ----------------------------------------
   const [menuState, setMenuState] = useState<{ x: number; y: number; path: string } | null>(null);
 
@@ -352,14 +374,21 @@ export function PulseLens({
   }, []);
 
   // ---- Fetch commit details on demand -----------------------------------
+  // detailCache is intentionally NOT a dependency: it is read via
+  // detailCacheRef and an in-flight set so that arriving details don't
+  // re-trigger the effect and re-issue getCommit for every pending hash.
   useEffect(() => {
     if (!repoId) return;
     const sliced = commits.slice(0, MAX_COMMITS);
     for (const c of sliced) {
-      if (detailCache.has(c.hash)) continue;
+      if (detailCacheRef.current.has(c.hash)) continue;
+      if (inFlightRef.current.has(c.hash)) continue;
+      inFlightRef.current.add(c.hash);
       void (async () => {
         try {
           const detail = await getCommit(repoId, c.hash);
+          // Drop responses that arrive after a repo switch
+          if (activeRepoIdRef.current !== repoId) return;
           setDetailCache((prev) => {
             if (prev.has(c.hash)) return prev;
             const next = new Map(prev);
@@ -368,10 +397,12 @@ export function PulseLens({
           });
         } catch {
           // Non-critical — card will appear once data lands
+        } finally {
+          inFlightRef.current.delete(c.hash);
         }
       })();
     }
-  }, [commits, repoId, detailCache]);
+  }, [commits, repoId]);
 
   // ---- Update statistics when commits/details flow in ------------------
   useEffect(() => {
@@ -759,18 +790,18 @@ export function PulseLens({
 
   const dotColor =
     dotState === 'connected'
-      ? '#22c55e'
+      ? 'var(--rs-git-added)'
       : dotState === 'error'
-        ? '#ef4444'
+        ? 'var(--rs-warning)'
         : 'var(--rs-text-muted)';
   const dotAriaLabel =
     dotState === 'connected'
-      ? '接続中: 新しい変更をリアルタイムで取り込んでいます'
+      ? 'Connected: ingesting new changes in real time'
       : dotState === 'connecting'
-        ? '接続中…'
+        ? 'Connecting…'
         : dotState === 'error'
-          ? '接続が途切れています'
-          : '一時停止中';
+          ? 'Connection lost'
+          : 'Paused';
 
   const showStatusBanner =
     dotState === 'error' || dotState === 'paused' || dotState === 'connecting';
@@ -795,7 +826,10 @@ export function PulseLens({
                 ? 'rs-pulse-header__dot'
                 : 'rs-pulse-header__dot rs-pulse-header__dot--static'
             }
-            style={{ background: dotColor }}
+            style={{
+              background: dotColor,
+              boxShadow: `0 0 8px color-mix(in oklab, ${dotColor}, transparent 30%)`,
+            }}
           />
         </span>
         <span
@@ -828,9 +862,9 @@ export function PulseLens({
           className="rs-pulse-header__diff"
           title="直近 30 commits + working tree の累計追加 / 削除行数"
         >
-          <span aria-hidden="true" style={{ color: '#22c55e' }}>+{summary.added.toLocaleString()}</span>
+          <span aria-hidden="true" style={{ color: 'var(--rs-git-added)' }}>+{summary.added.toLocaleString()}</span>
           <span className="sr-only">{summary.added.toLocaleString()} lines added</span>
-          <span aria-hidden="true" style={{ color: '#ef4444' }}>−{summary.deleted.toLocaleString()}</span>
+          <span aria-hidden="true" style={{ color: 'var(--rs-git-deleted)' }}>−{summary.deleted.toLocaleString()}</span>
           <span className="sr-only">{summary.deleted.toLocaleString()} lines deleted</span>
         </span>
         {summary.hotCount > 0 && (
@@ -913,13 +947,13 @@ export function PulseLens({
             fontFamily: 'var(--rs-sans)',
             color:
               dotState === 'error'
-                ? '#ef4444'
+                ? 'var(--rs-warning)'
                 : dotState === 'paused'
                   ? 'var(--rs-text-secondary)'
                   : 'var(--rs-text-muted)',
             background:
               dotState === 'error'
-                ? 'color-mix(in oklab, var(--rs-bg-elevated), #ef4444 12%)'
+                ? 'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-warning) 12%)'
                 : 'var(--rs-bg-elevated)',
             borderBottom: '1px solid var(--rs-border)',
           }}
@@ -1053,8 +1087,8 @@ export function PulseLens({
                           <span className="rs-pulse-recent__base">{entry.basename}</span>
                         </span>
                         <span className="rs-pulse-recent__diff">
-                          <span style={{ color: '#22c55e' }}>+{entry.added}</span>
-                          <span style={{ color: '#ef4444' }}>−{entry.deleted}</span>
+                          <span style={{ color: 'var(--rs-git-added)' }}>+{entry.added}</span>
+                          <span style={{ color: 'var(--rs-git-deleted)' }}>−{entry.deleted}</span>
                         </span>
                         <span className="rs-pulse-recent__time">
                           {entry.isWorkingTree ? entry.commitShortHash : relativeTime(entry.time)}
@@ -1459,8 +1493,8 @@ const PULSE_STYLES = `
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #22c55e;
-  box-shadow: 0 0 8px #22c55e;
+  background: var(--rs-git-added);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--rs-git-added), transparent 30%);
   animation: rs-pulse-dot 1.6s ease-out infinite;
 }
 @keyframes rs-pulse-dot {

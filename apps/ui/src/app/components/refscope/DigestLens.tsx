@@ -857,7 +857,7 @@ export function DigestLens({
                   cursor: 'pointer',
                 }}
               >
-                再試行
+                Retry
               </button>
               <button
                 type="button"

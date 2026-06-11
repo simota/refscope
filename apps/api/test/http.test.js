@@ -28,6 +28,59 @@ test("returns a public 400 error for malformed percent-encoded paths", async () 
   assert.deepEqual(JSON.parse(response.body), { error: "Invalid request path" });
 });
 
+test("returns a public 400 error for a malformed request-target on GET", async () => {
+  const handler = createRequestHandler(
+    { allowedOrigins: new Set() },
+    {
+      listRepositories() {
+        throw new Error("repository lookup should not run");
+      },
+    },
+  );
+  const response = createMockResponse();
+
+  // `//a:b` is a protocol-relative target with an invalid authority — the URL
+  // constructor throws a TypeError synchronously. Must answer 400, not crash.
+  await handler(
+    createMockRequest({
+      method: "GET",
+      url: "//a:b",
+    }),
+    response,
+  );
+
+  assert.equal(response.statusCode, 400);
+  assert.deepEqual(JSON.parse(response.body), { error: "Invalid request path" });
+});
+
+test("returns a public 400 error for a malformed request-target on POST and DELETE", async () => {
+  for (const method of ["POST", "DELETE"]) {
+    const handler = createRequestHandler(
+      { allowedOrigins: new Set() },
+      {
+        addRepository() {
+          throw new Error("addRepository should not run");
+        },
+        removeRepository() {
+          throw new Error("removeRepository should not run");
+        },
+      },
+    );
+    const response = createMockResponse();
+
+    await handler(
+      createMockRequest({
+        method,
+        url: "//a:b",
+      }),
+      response,
+    );
+
+    assert.equal(response.statusCode, 400, `${method} //a:b must return 400`);
+    assert.deepEqual(JSON.parse(response.body), { error: "Invalid request path" });
+  }
+});
+
 test("routes commits summary to the git service before generic /commits/:hash", async () => {
   let summarizeCalls = 0;
   let getCommitCalls = 0;

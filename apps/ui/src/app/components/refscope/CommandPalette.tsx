@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarRange,
   Eye,
@@ -127,6 +127,17 @@ export function CommandPalette({
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const [status, setStatus] = useState("");
+  // Delayed-close timer for copy-style commands: the status message must be
+  // visible before the palette unmounts (a closed palette renders null).
+  const closeTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    },
+    [],
+  );
   const commands = useMemo<PaletteCommand[]>(() => {
     const refCommands = refs.slice(0, 12).map((ref) => ({
       icon: ref.type === "tag" ? Tag : GitBranch,
@@ -195,8 +206,16 @@ export function CommandPalette({
             run: async () => {
               await navigator.clipboard.writeText(selectedCommit.hash);
               setStatus("Commit hash copied");
-              window.setTimeout(() => setStatus(""), 1600);
-              onClose();
+              // Keep the palette open briefly so the feedback is visible,
+              // then close. Navigation commands still close instantly.
+              if (closeTimerRef.current !== null) {
+                window.clearTimeout(closeTimerRef.current);
+              }
+              closeTimerRef.current = window.setTimeout(() => {
+                closeTimerRef.current = null;
+                setStatus("");
+                onClose();
+              }, 900);
             },
           },
         ]
@@ -335,7 +354,7 @@ export function CommandPalette({
     ];
     const repoJumpCommands: PaletteCommand[] = reposSorted.map((repoId) => ({
       icon: FolderOpen,
-      label: `Detail: ${repoId} を開く`,
+      label: `Open detail: ${repoId}`,
       hint: `Open ${repoId} in Detail mode`,
       run: () => {
         onSetMode("detail");
@@ -345,13 +364,13 @@ export function CommandPalette({
     }));
 
     // Mode-switch commands (Magi D1 採択前提条件 #3).
-    // "Fleet モードに切替" is always available; "Detail モードに切替" only appears in Fleet mode.
+    // "Switch to Fleet mode" is always available; "Switch to Detail mode" only appears in Fleet mode.
     const modeCommands: PaletteCommand[] = [
       {
         icon: Layers,
-        label: "Fleet モードに切替",
-        // Tooltip supplement per Magi D1 採択前提条件 #3: "(複数 repo 観測 mode)"
-        hint: "複数 repo 観測 mode",
+        label: "Switch to Fleet mode",
+        // Tooltip supplement per Magi D1 採択前提条件 #3: "(multi-repo observation mode)"
+        hint: "multi-repo overview",
         run: () => {
           onSetMode("fleet");
           onClose();
@@ -361,8 +380,8 @@ export function CommandPalette({
         ? [
             {
               icon: Layers,
-              label: "Detail モードに切替",
-              hint: "1 repo 詳細",
+              label: "Switch to Detail mode",
+              hint: "single repo",
               run: () => {
                 onSetMode("detail");
                 onClose();
@@ -508,6 +527,9 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
+      // Ignore keys fired while an IME composition is active (Enter would
+      // otherwise execute the highlighted command mid-composition).
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === "Escape") onClose();
       if (e.key === "ArrowDown") {
         e.preventDefault();

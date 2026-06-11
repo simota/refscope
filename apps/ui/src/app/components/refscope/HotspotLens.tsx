@@ -1111,9 +1111,9 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
       <span style={{ fontSize: 11, color: 'var(--rs-text-secondary)', fontFamily: 'var(--rs-sans)', flex: 1 }}>
         {data && (
           <>
-            <span>{data.files.length.toLocaleString()} ファイル</span>
+            <span>{data.files.length.toLocaleString()} files</span>
             {' · '}
-            <span>{data.scope.commitsAnalyzed} コミット分析済み</span>
+            <span>{data.scope.commitsAnalyzed} commits analyzed</span>
             {' · '}
             <span style={{ fontFamily: 'var(--rs-mono)', fontSize: 10 }}>{data.refLabel}</span>
           </>
@@ -1135,7 +1135,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
           fontFamily: 'var(--rs-sans)',
         }}
       >
-        {loading ? '読込中…' : '更新'}
+        {loading ? 'Loading…' : 'Refresh'}
       </button>
     </div>
   );
@@ -1181,7 +1181,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
               cursor: 'pointer',
             }}
           >
-            再試行
+            Retry
           </button>
         </div>
       </HotspotShell>

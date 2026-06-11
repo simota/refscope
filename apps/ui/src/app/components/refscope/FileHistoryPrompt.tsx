@@ -136,6 +136,12 @@ export function FileHistoryPrompt({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    // Ignore keys fired while an IME composition is active. Enter must be
+    // prevented explicitly or it would submit the form mid-composition.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) {
+      if (event.key === "Enter") event.preventDefault();
+      return;
+    }
     if (event.key === "Escape") {
       event.stopPropagation();
       onClose();
