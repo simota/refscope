@@ -186,6 +186,20 @@ function isFlightRecorderEnabled(): boolean {
   }
 }
 
+/**
+ * Returns `value` once it has been stable for `delayMs`. Used to debounce the
+ * typed filter inputs (search / author / path / pattern) so every keystroke
+ * doesn't trigger a full refs+commits refetch.
+ */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 export default function App() {
   const flightRecorderEnabled = useMemo(() => isFlightRecorderEnabled(), []);
   const availableLenses = useMemo<readonly LensId[]>(
@@ -243,20 +257,6 @@ export default function App() {
   // AddRepoDialog state — Step 7 will wire real API call.
   const [addRepoDialogOpen, setAddRepoDialogOpen] = useState(false);
 
-  // Read excluded repo ids from localStorage so the server-side include filter
-  // only requests repos the user has not excluded (repo ids only, never paths).
-  const readFleetExcluded = useCallback((): string[] => {
-    try {
-      const raw = window.localStorage.getItem("refscope.fleet.excluded.v1");
-      if (!raw) return [];
-      const parsed: unknown = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter((v): v is string => typeof v === "string" && v.length > 0);
-    } catch {
-      return [];
-    }
-  }, []);
-
   // Fleet polling: 30s setInterval, starts when mode='fleet', cleans up on mode switch/unmount.
   // Magi 争点 #4: Page Visibility 連動。document.hidden 時は poll skip し、
   // visible 復帰で即時 1 回 fetch (背景タブの不要な git 呼び出しを抑制)。
@@ -270,21 +270,17 @@ export default function App() {
       const controller = new AbortController();
       fleetAbortRef.current = controller;
 
-      const excluded = readFleetExcluded();
-      // We pass all repo ids except excluded ones to the include filter.
-      // If no repos are known yet, omit include= so the API returns all.
       try {
         const snapshot = await fetchFleetSnapshot({
           window: fleetWindow,
           signal: controller.signal,
         });
         if (!controller.signal.aborted) {
-          // Apply client-side exclude filter (server does not know about it).
-          const filtered: FleetSnapshot = {
-            ...snapshot,
-            repos: snapshot.repos.filter((r) => !excluded.includes(r.repoId)),
-          };
-          setFleetSnapshot(filtered);
+          // Pass the full snapshot through. FleetSurface owns the exclude
+          // filter (localStorage key refscope.fleet.excluded.v1) and needs
+          // the excluded repos present in the snapshot to render its
+          // "excluded this session" section with Restore buttons.
+          setFleetSnapshot(snapshot);
           setFleetError(null);
         }
       } catch (err) {
@@ -321,18 +317,45 @@ export default function App() {
       fleetAbortRef.current?.abort();
       fleetAbortRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, fleetWindow]);
 
   // Hoisted before `handleFleetSelectRepo` to avoid TDZ on `recordLastOpened`.
   const { lastOpenedRepos, recordLastOpened, evictRepo } = useLastOpenedRepos();
 
+  // Single repo-switch path shared by TopBar, CommandPalette, and Fleet.
+  // Every route must reset the same per-repo state (selection, compare
+  // refs, alerts, pending live events, …) — otherwise stale compare refs
+  // from repo A get fetched against repo B and error. Setters and refs are
+  // referenced via closure (declared further down; safe because the callback
+  // only runs after mount), so the dependency array stays empty.
+  const switchRepo = useCallback((repoId: string) => {
+    setSelectedRepo(repoId);
+    setSelectedRef("HEAD");
+    setSelected("");
+    setSelectedWorkTree(false);
+    // Clear the previous repo's commits so the timeline shows the loading
+    // placeholder instead of briefly rendering repo A's history as repo B's.
+    setCommits([]);
+    realtimeNewCommitHashesRef.current.clear();
+    setEventStatus("connecting");
+    setEventNotice("");
+    setLivePaused(false);
+    setPendingUpdates(0);
+    setLiveAnnouncement("");
+    pendingRealtimeEventsRef.current = [];
+    setRealtimeAlerts([]);
+    setRewriteRescueEntries([]);
+    setCompareBase("");
+    setCompareTarget("");
+    setCompareResult(null);
+  }, []);
+
   // Handle Fleet row click: switch to detail mode for the selected repo.
   const handleFleetSelectRepo = useCallback((id: string) => {
     recordLastOpened(id);
-    setSelectedRepo(id);
+    switchRepo(id);
     setMode("detail");
-  }, [setMode, recordLastOpened]);
+  }, [setMode, recordLastOpened, switchRepo]);
 
   // Lens switcher state — 'live' is the default; other lenses are placeholders.
   const [activeLens, setActiveLens] = useState<LensId>('live');
@@ -415,6 +438,14 @@ export default function App() {
   // (`search` param vs `mode`+`pattern` params).
   const [searchMode, setSearchMode] = useState<SearchMode>("subject");
   const [searchPattern, setSearchPattern] = useState("");
+  // Debounced copies of the typed filter inputs. The timeline load effect
+  // listens to these (not the raw values) so a refetch fires ~250ms after the
+  // user stops typing instead of on every keystroke. `searchMode` is a
+  // discrete toggle and stays undebounced.
+  const debouncedSearch = useDebouncedValue(search, 250);
+  const debouncedAuthor = useDebouncedValue(author, 250);
+  const debouncedPath = useDebouncedValue(path, 250);
+  const debouncedSearchPattern = useDebouncedValue(searchPattern, 250);
   const [selectionNotice, setSelectionNotice] = useState("");
   const [compareBase, setCompareBase] = useState("");
   const [compareTarget, setCompareTarget] = useState("");
@@ -486,6 +517,9 @@ export default function App() {
   // commit re-selections within the same session. Reset when the selected
   // commit changes (handled below) so stale results don't mislead.
   const [whyPanelQuery, setWhyPanelQuery] = useState<WhyPanelQuery | null>(null);
+  useEffect(() => {
+    setWhyPanelQuery(null);
+  }, [selected]);
   // D-1 Symbol History query. { path, funcname } when the Symbol lens is
   // active; null clears the view. Owned here so CommandPalette / LensSwitcher
   // can drive the same view without parallel state copies.
@@ -500,6 +534,10 @@ export default function App() {
   const searchModeRef = useRef(searchMode);
   const searchPatternRef = useRef(searchPattern);
   const livePausedRef = useRef(livePaused);
+  // Generation guard for refreshTimeline: bumped whenever the active repo
+  // changes so an SSE-triggered refresh that resolves after a repo switch is
+  // discarded instead of clobbering the new repo's refs/commits.
+  const timelineGenerationRef = useRef(0);
   const pendingRealtimeEventsRef = useRef<Array<() => void>>([]);
   const realtimeNewCommitHashesRef = useRef<Set<string>>(new Set());
   const { quietMode, prefersReducedMotion, isQuiet, toggleQuietMode } = useQuietMode();
@@ -537,6 +575,10 @@ export default function App() {
   useEffect(() => {
     livePausedRef.current = livePaused;
   }, [livePaused]);
+
+  useEffect(() => {
+    timelineGenerationRef.current += 1;
+  }, [selectedRepo]);
 
   useEffect(() => {
     selectedRefRef.current = selectedRef;
@@ -587,7 +629,15 @@ export default function App() {
     if (!selectedRepo) return;
     let cancelled = false;
     setLoading(true);
-    loadRepositoryState(selectedRepo, selectedRef, search, author, path, searchMode, searchPattern)
+    loadRepositoryState(
+      selectedRepo,
+      selectedRef,
+      debouncedSearch,
+      debouncedAuthor,
+      debouncedPath,
+      searchMode,
+      debouncedSearchPattern,
+    )
       .then(({ nextRefs, nextRef, nextCommits }) => {
         if (cancelled) return;
         const markedCommits = markRealtimeNewCommits(
@@ -620,7 +670,15 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedRepo, selectedRef, search, author, path, searchMode, searchPattern]);
+  }, [
+    selectedRepo,
+    selectedRef,
+    debouncedSearch,
+    debouncedAuthor,
+    debouncedPath,
+    searchMode,
+    debouncedSearchPattern,
+  ]);
 
   useEffect(() => {
     if (!selectedRepo || !compareBase || !compareTarget) {
@@ -704,6 +762,9 @@ export default function App() {
           if (controller.signal.aborted) return;
           setDetail(nextDetail);
           setDiff(nextDiff);
+          // A successful load clears any error left by a previous failed
+          // detail/diff fetch — otherwise the banner sticks forever.
+          setError("");
         })
         .catch((err) => {
           if (controller.signal.aborted) return;
@@ -1030,12 +1091,18 @@ export default function App() {
       seen.add(entry);
       merged.push(entry);
     }
-    if (current?.files) {
-      for (const file of current.files) {
-        if (!file?.path || seen.has(file.path)) continue;
-        seen.add(file.path);
-        merged.push(file.path);
-      }
+    // Timeline commits always carry `files: []` (the list endpoint omits
+    // per-file stats), so the changed-file suggestions come from the loaded
+    // commit detail when it matches the selected commit, falling back to
+    // `current.files` for callers that do populate it.
+    const selectedFiles =
+      detail && current && detail.hash === current.hash
+        ? detail.files
+        : current?.files ?? [];
+    for (const file of selectedFiles) {
+      if (!file?.path || seen.has(file.path)) continue;
+      seen.add(file.path);
+      merged.push(file.path);
     }
     return merged;
   })();
@@ -1139,6 +1206,10 @@ export default function App() {
     mode: SearchMode,
     pattern: string,
   ) {
+    // Capture the generation before awaiting; if the user switches repos
+    // while the request is in flight, the generation moves on and the stale
+    // result is discarded before any state write below.
+    const generation = timelineGenerationRef.current;
     const { nextRefs, nextRef, nextCommits } = await loadRepositoryState(
       repoId,
       ref,
@@ -1148,6 +1219,7 @@ export default function App() {
       mode,
       pattern,
     );
+    if (generation !== timelineGenerationRef.current) return;
     setRefs(nextRefs);
     setSelectedRef(nextRef);
     const markedCommits = markRealtimeNewCommits(nextCommits, realtimeNewCommitHashesRef.current);
@@ -1235,7 +1307,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepo]);
 
-  function toggleLiveUpdates() {
+  // useCallback (not a plain function) so the `shortcutBindings` memo below
+  // can list it as a dependency — otherwise the Mod+. shortcut captures a
+  // stale `livePaused` closure and can never resume after pausing.
+  const toggleLiveUpdates = useCallback(() => {
     if (!livePaused) {
       // pause 時は button の aria-pressed + label 変化が SR に伝わるので無音 (Calm)。
       setLivePaused(true);
@@ -1249,7 +1324,7 @@ export default function App() {
     } else {
       setLiveAnnouncement("Live updates resumed.");
     }
-  }
+  }, [livePaused, pendingUpdates, flushPendingRealtimeEvents]);
 
   // Diff fullscreen only makes sense when there's actually a diff rendered.
   // Mirrors the gating used in CommandPalette so the shortcut behaves identically
@@ -1259,20 +1334,24 @@ export default function App() {
 
   const goToAdjacentCommit = useCallback(
     (direction: 1 | -1) => {
-      if (!commits.length) return;
+      // Navigate the same list the timeline renders (`filteredCommits`), not
+      // the raw `commits` — otherwise an active commit-kind / date-range
+      // filter makes j/k/arrows select commits that are hidden from view.
+      if (!filteredCommits.length) return;
       const currentIndex = selected
-        ? commits.findIndex((commit) => commit.hash === selected)
+        ? filteredCommits.findIndex((commit) => commit.hash === selected)
         : 0;
-      // No selection yet: treat the next press as "land on the first commit"
-      // rather than jumping based on a -1 index.
+      // No selection yet (or the selection is filtered out): treat the next
+      // press as "land on the first visible commit" rather than jumping
+      // based on a -1 index.
       const nextIndex =
         currentIndex < 0
           ? 0
-          : Math.min(commits.length - 1, Math.max(0, currentIndex + direction));
+          : Math.min(filteredCommits.length - 1, Math.max(0, currentIndex + direction));
       if (nextIndex === currentIndex) return;
-      handleSelectCommit(commits[nextIndex].hash);
+      handleSelectCommit(filteredCommits[nextIndex].hash);
     },
-    [commits, selected, handleSelectCommit],
+    [filteredCommits, selected, handleSelectCommit],
   );
 
   const shortcutBindings = useMemo<ShortcutBinding[]>(() => {
@@ -1363,6 +1442,7 @@ export default function App() {
   }, [
     toggleSidebar,
     toggleSummaryView,
+    toggleLiveUpdates,
     goToAdjacentCommit,
     diffFullscreenAvailable,
     diffFullscreen,
@@ -1406,24 +1486,7 @@ export default function App() {
       <TopBar
         repositories={repositories}
         selectedRepo={selectedRepo}
-        onSelectRepo={(repoId) => {
-          setSelectedRepo(repoId);
-          setSelectedRef("HEAD");
-          setSelected("");
-          setSelectedWorkTree(false);
-          realtimeNewCommitHashesRef.current.clear();
-          setEventStatus("connecting");
-          setEventNotice("");
-          setLivePaused(false);
-          setPendingUpdates(0);
-          setLiveAnnouncement("");
-          pendingRealtimeEventsRef.current = [];
-          setRealtimeAlerts([]);
-          setRewriteRescueEntries([]);
-          setCompareBase("");
-          setCompareTarget("");
-          setCompareResult(null);
-        }}
+        onSelectRepo={switchRepo}
         refs={refs}
         selectedRef={selectedRef}
         onSelectRef={(ref) => {
@@ -1760,7 +1823,7 @@ export default function App() {
           >
             <span aria-hidden="true">⚠</span>
             <span>
-              Live feed が切断されました。自動的に再接続を試みています…
+              Live feed disconnected. Reconnecting automatically…
             </span>
           </div>
         )}
@@ -1837,7 +1900,10 @@ export default function App() {
               commits={filteredCommits}
               selected={selected}
               onSelect={handleSelectCommit}
-              loading={loading}
+              // Only blank the timeline when there is nothing to show yet
+              // (first load / repo switch). Filter-driven refetches keep the
+              // current list visible instead of flashing "Loading commits".
+              loading={loading && commits.length === 0}
               error={error}
               eventNotice={eventNotice}
               eventStatus={eventStatus}
@@ -1980,7 +2046,7 @@ export default function App() {
         repos={repositories.map((r) => r.id)}
         onSetSelectedRepo={(id) => {
           recordLastOpened(id);
-          setSelectedRepo(id);
+          switchRepo(id);
         }}
         lastOpenedRepos={lastOpenedRepos}
       />

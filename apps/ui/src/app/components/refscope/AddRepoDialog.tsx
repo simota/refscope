@@ -171,7 +171,6 @@ export function AddRepoDialog({ open, onOpenChange, onSubmit }: AddRepoDialogPro
                   border: `1px solid ${showIdError ? "var(--rs-warning)" : "var(--rs-border)"}`,
                   borderRadius: "var(--rs-radius-sm)",
                   color: "var(--rs-text-primary)",
-                  outline: "none",
                   width: "100%",
                   boxSizing: "border-box",
                 }}
@@ -222,7 +221,6 @@ export function AddRepoDialog({ open, onOpenChange, onSubmit }: AddRepoDialogPro
                   border: `1px solid ${showPathError ? "var(--rs-warning)" : "var(--rs-border)"}`,
                   borderRadius: "var(--rs-radius-sm)",
                   color: "var(--rs-text-primary)",
-                  outline: "none",
                   width: "100%",
                   boxSizing: "border-box",
                 }}

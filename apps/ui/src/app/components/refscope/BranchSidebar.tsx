@@ -448,7 +448,6 @@ export function BranchSidebar({
         }}
       >
         <span>HEAD {headHash ?? "unknown"}</span>
-        <span className="flex items-center gap-1">clean</span>
       </div>
     </aside>
   );
@@ -1908,13 +1907,18 @@ function GroupPrefixBar({
               borderRadius: "var(--rs-radius-sm)",
               color: "var(--rs-text-primary)",
               padding: "2px 6px",
-              outline: "none",
             }}
           />
           <button
             type="button"
             onClick={commit}
-            style={{ fontSize: 10, color: "var(--rs-accent)", cursor: "pointer" }}
+            style={{
+              fontSize: 10,
+              color: "var(--rs-accent)",
+              cursor: "pointer",
+              padding: "5px 8px",
+              minHeight: 24,
+            }}
           >
             OK
           </button>
@@ -1938,7 +1942,13 @@ function GroupPrefixBar({
           <button
             type="button"
             onClick={() => { setDraft(prefix ?? ""); setEditing(true); }}
-            style={{ fontSize: 10, color: "var(--rs-text-muted)", cursor: "pointer" }}
+            style={{
+              fontSize: 10,
+              color: "var(--rs-text-muted)",
+              cursor: "pointer",
+              padding: "5px 8px",
+              minHeight: 24,
+            }}
             aria-label="Edit branch group prefix"
           >
             edit
@@ -1947,7 +1957,14 @@ function GroupPrefixBar({
             <button
               type="button"
               onClick={() => onSetPrefix?.(null)}
-              style={{ fontSize: 10, color: "var(--rs-text-muted)", cursor: "pointer" }}
+              style={{
+                fontSize: 10,
+                color: "var(--rs-text-muted)",
+                cursor: "pointer",
+                padding: "5px 8px",
+                minHeight: 24,
+                minWidth: 24,
+              }}
               aria-label="Clear prefix filter"
             >
               ×

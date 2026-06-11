@@ -507,21 +507,30 @@ function CompareBar({
   // server default (10). Changing the threshold only takes effect on the
   // next "Cherry-pick status" fetch.
   const [threshold, setThreshold] = useState<number>(10);
+  // Generation counter guards against a stale cherry response overwriting
+  // the reset state after base/target changed mid-flight.
+  const cherryGenerationRef = useRef(0);
   useEffect(() => {
+    cherryGenerationRef.current += 1;
     setCherry(null);
     setCherryError("");
   }, [base, target]);
   async function loadCherry() {
     if (!repoId || !base || !target) return;
+    const generation = cherryGenerationRef.current;
     setCherryLoading(true);
     setCherryError("");
     try {
       const data = await fetchCompareCherry(repoId, base, target, threshold);
+      if (generation !== cherryGenerationRef.current) return;
       setCherry(data);
     } catch (err) {
+      if (generation !== cherryGenerationRef.current) return;
       setCherryError(err instanceof Error ? err.message : String(err));
     } finally {
-      setCherryLoading(false);
+      if (generation === cherryGenerationRef.current) {
+        setCherryLoading(false);
+      }
     }
   }
   return (
@@ -811,15 +820,9 @@ function GradedCherryRow({ entry }: { entry: CherryEntry }) {
   const gradeColor = entry.grade ? GRADE_COLORS[entry.grade] : "var(--rs-text-muted)";
   const gradeLabel = entry.grade ? GRADE_LABELS[entry.grade] : undefined;
 
-  return (
-    <li style={{ lineHeight: 1.6 }}>
-      <div
-        className="flex items-center gap-1"
-        style={{ cursor: hasDetail ? "pointer" : "default" }}
-        onClick={() => { if (hasDetail) setExpanded((v) => !v); }}
-        title={`${entry.hash} ${entry.subject}`}
-      >
-        {/* grade badge */}
+  const rowContent = (
+    <>
+      {/* grade badge */}
         {gradeLabel ? (
           <span
             style={{
@@ -867,7 +870,40 @@ function GradedCherryRow({ entry }: { entry: CherryEntry }) {
           <span style={{ color: "var(--rs-text-muted)" }}>{entry.shortHash}</span>{" "}
           {entry.subject}
         </span>
-      </div>
+    </>
+  );
+
+  return (
+    <li style={{ lineHeight: 1.6 }}>
+      {hasDetail ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          className="flex items-center gap-1"
+          style={{
+            cursor: "pointer",
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            margin: 0,
+            width: "100%",
+            textAlign: "left",
+            font: "inherit",
+            color: "inherit",
+          }}
+          onClick={() => setExpanded((v) => !v)}
+          title={`${entry.hash} ${entry.subject}`}
+        >
+          {rowContent}
+        </button>
+      ) : (
+        <div
+          className="flex items-center gap-1"
+          title={`${entry.hash} ${entry.subject}`}
+        >
+          {rowContent}
+        </div>
+      )}
       {expanded && entry.diffHunks ? (
         <CherryDiffHunks hunks={entry.diffHunks} truncated={entry.truncated} />
       ) : null}
@@ -1284,7 +1320,12 @@ function CommitRow({
       tabIndex={0}
       data-hash={commit.hash}
       onClick={onClick}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClick(); }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       className="grid cursor-pointer items-stretch group"
       style={{
         gridTemplateColumns: "56px 1fr auto",
@@ -1349,7 +1390,7 @@ function CommitRow({
           <Avatar name={commit.author} />
           <span>{commit.author}</span>
           <span>·</span>
-          <span>{commit.time}</span>
+          <span title={commit.authorDate ?? undefined}>{commit.time}</span>
           {hasStats ? (
             <>
               <span>·</span>
@@ -1845,7 +1886,8 @@ function Avatar({ name }: { name: string }) {
     "var(--rs-git-modified)",
     "var(--rs-git-added)",
   ];
-  const color = palette[name.charCodeAt(0) % palette.length];
+  // Empty author name would yield NaN from charCodeAt(0) — fall back to 0.
+  const color = palette[name.length > 0 ? name.charCodeAt(0) % palette.length : 0];
   return (
     <span
       className="grid place-items-center rounded-full"
@@ -1927,18 +1969,22 @@ function CommitKindFilterBar({
           </button>
         ))}
       </div>
-      <span
+      <button
+        type="button"
         title={TOOLTIP_TEXT}
         style={{
           cursor: "help",
           color: "var(--rs-text-muted)",
           fontSize: 11,
           userSelect: "none",
+          background: "transparent",
+          border: "none",
+          padding: 0,
         }}
         aria-label="Classification criteria"
       >
         ?
-      </span>
+      </button>
     </div>
   );
 }
@@ -1981,9 +2027,6 @@ function StatusBar({
       <span>HEAD {head ?? "unknown"}</span>
       <span>{count} commits</span>
       <div className="flex-1" />
-      <span>compact</span>
-      <span>·</span>
-      <span>real API</span>
     </div>
   );
 }
