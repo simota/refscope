@@ -18,6 +18,8 @@ import {
   HOTSPOT_MAX_LIMIT,
   RANGE_HISTORY_DEFAULT_LIMIT,
   RANGE_HISTORY_MAX_LIMIT,
+  REF_FLIGHT_DEFAULT_LIMIT,
+  REF_FLIGHT_MAX_LIMIT,
   SYMBOL_HISTORY_DEFAULT_LIMIT,
   SYMBOL_HISTORY_MAX_LIMIT,
 } from "./gitService.js";
@@ -33,16 +35,30 @@ export function createRequestHandler(config, gitService, fleetService) {
       return;
     }
 
+    // Parse the request target exactly once, before any routing. A malformed
+    // target (e.g. `//a:b`) makes the URL constructor throw synchronously —
+    // answer with 400 instead of letting the rejection crash the process.
+    let url;
+    try {
+      url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        sendJson(res, 400, { error: "Invalid request path" });
+        return;
+      }
+      handleError(res, error);
+      return;
+    }
+
     // POST /api/repos — add a repository to the allowlist at runtime
-    if (req.method === "POST" && (new URL(req.url ?? "/", "http://localhost")).pathname === "/api/repos") {
+    if (req.method === "POST" && url.pathname === "/api/repos") {
       await handlePostRepos(req, res, config, gitService);
       return;
     }
 
     // DELETE /api/repos/:id — remove a user-managed repository from the allowlist
     if (req.method === "DELETE") {
-      const parsedUrl = new URL(req.url ?? "/", "http://localhost");
-      const deleteParts = decodePathParts(parsedUrl.pathname);
+      const deleteParts = decodePathParts(url.pathname);
       if (deleteParts && deleteParts[0] === "api" && deleteParts[1] === "repos" && deleteParts.length === 3) {
         await handleDeleteRepo(req, res, config, gitService, deleteParts[2]);
         return;
@@ -50,7 +66,6 @@ export function createRequestHandler(config, gitService, fleetService) {
     }
 
     try {
-      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
       const route = matchRoute(req.method, url.pathname);
 
       if (route?.name === "badRequest") {
@@ -124,6 +139,20 @@ export function createRequestHandler(config, gitService, fleetService) {
       }
       if (route.name === "refsDrift") {
         const result = await gitService.getRefDrift(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "refFlightEvents") {
+        const limitResult = parseLimitQuery(
+          url.searchParams.get("limit"),
+          REF_FLIGHT_DEFAULT_LIMIT,
+          REF_FLIGHT_MAX_LIMIT,
+        );
+        if (!limitResult.ok) {
+          sendJson(res, 400, { error: limitResult.error });
+          return;
+        }
+        const result = await gitService.listRefFlightEvents(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
         return;
       }
@@ -323,6 +352,9 @@ function matchRoute(method, pathname) {
   if (parts.length === 5 && parts[3] === "refs" && parts[4] === "drift") {
     return { name: "refsDrift", params: { repoId } };
   }
+  if (parts.length === 5 && parts[3] === "ref-flight" && parts[4] === "events") {
+    return { name: "refFlightEvents", params: { repoId } };
+  }
   if (parts.length === 4 && parts[3] === "commits") return { name: "commits", params: { repoId } };
   if (parts.length === 4 && parts[3] === "compare") return { name: "compare", params: { repoId } };
   // Cherry-pick equivalence panel: GET /api/repos/:id/compare/cherry
@@ -445,7 +477,29 @@ function sendJson(res, status, body) {
 }
 
 async function sendEventStream(req, res, config, gitService, repo) {
+  let closed = false;
+  let poller;
+  let heartbeat;
+
+  // Attach the close listener BEFORE the first await: if the client
+  // disconnects while the initial snapshot is being computed, the close
+  // event would otherwise fire with no listener and the intervals created
+  // below would never be cleared. The intervals are guarded because they
+  // do not exist yet when close fires during the snapshot await.
+  req.on("close", () => {
+    closed = true;
+    if (poller) clearInterval(poller);
+    if (heartbeat) clearInterval(heartbeat);
+  });
+  // Swallow write errors after a disconnect so they don't surface as
+  // unhandled 'error' events on the response stream.
+  res.on("error", () => {});
+
   let snapshot = await gitService.getRefSnapshot(repo);
+
+  if (closed || req.destroyed || res.writableEnded) {
+    return;
+  }
 
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -454,7 +508,6 @@ async function sendEventStream(req, res, config, gitService, repo) {
   });
   writeEvent(res, "connected", { type: "connected", repoId: repo.id });
 
-  let closed = false;
   let polling = false;
 
   async function poll() {
@@ -463,27 +516,24 @@ async function sendEventStream(req, res, config, gitService, repo) {
     try {
       const result = await gitService.collectRefEvents(repo, snapshot);
       snapshot = result.snapshot;
+      if (closed) return;
       for (const event of result.events) {
         writeEvent(res, event.type, event);
       }
     } catch (error) {
+      if (closed) return;
       writeEvent(res, "error", publicStreamError(error));
     } finally {
       polling = false;
     }
   }
 
-  const poller = setInterval(() => {
+  poller = setInterval(() => {
     void poll();
   }, config.refPollMs);
-  const heartbeat = setInterval(() => {
+  heartbeat = setInterval(() => {
     res.write(": heartbeat\n\n");
   }, 25_000);
-  req.on("close", () => {
-    closed = true;
-    clearInterval(poller);
-    clearInterval(heartbeat);
-  });
 }
 
 function writeEvent(res, event, data) {
