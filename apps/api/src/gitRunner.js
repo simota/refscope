@@ -58,8 +58,10 @@ export function runGit(repo, args, options = {}) {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    // Buffer raw bytes and decode once on close: decoding each chunk on its
+    // own corrupts multi-byte UTF-8 characters split across pipe reads.
+    const stdoutChunks = [];
+    const stderrChunks = [];
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let timedOut = false;
@@ -77,7 +79,7 @@ export function runGit(repo, args, options = {}) {
         child.kill("SIGTERM");
         return;
       }
-      stdout += chunk.toString("utf8");
+      stdoutChunks.push(chunk);
     });
 
     child.stderr.on("data", (chunk) => {
@@ -87,7 +89,7 @@ export function runGit(repo, args, options = {}) {
         child.kill("SIGTERM");
         return;
       }
-      stderr += chunk.toString("utf8");
+      stderrChunks.push(chunk);
     });
 
     child.on("error", (error) => {
@@ -97,6 +99,8 @@ export function runGit(repo, args, options = {}) {
 
     child.on("close", (exitCode) => {
       clearTimeout(timer);
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const stderr = Buffer.concat(stderrChunks).toString("utf8");
       if (timedOut || truncated || exitCode !== 0) {
         reject(
           new GitCommandError("Git command failed", {

@@ -18,7 +18,8 @@ const STATIC_DIR = path.join(HERE, "static");
 export async function startServer() {
   const config = await loadApiConfig();
   const gitService = await createGitService(config);
-  const apiHandler = await createApiHandler(config, gitService);
+  const fleetService = await createFleetService(config, gitService);
+  const apiHandler = await createApiHandler(config, gitService, fleetService);
   const staticHandler = createStaticHandler(STATIC_DIR);
 
   const server = http.createServer((req, res) => {
@@ -65,9 +66,14 @@ async function createGitService(config) {
   return mod.createGitService(config);
 }
 
-async function createApiHandler(config, gitService) {
+async function createFleetService(config, gitService) {
+  const mod = await import(modulePath("fleetService.js"));
+  return mod.createFleetService(config, gitService);
+}
+
+async function createApiHandler(config, gitService, fleetService) {
   const mod = await import(modulePath("http.js"));
-  return mod.createRequestHandler(config, gitService);
+  return mod.createRequestHandler(config, gitService, fleetService);
 }
 
 function modulePath(file) {

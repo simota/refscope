@@ -54,6 +54,10 @@ export function loadConfig(env = process.env) {
     refPollMs: parsePositiveInteger(env.RTGV_REF_POLL_MS, 2000),
     repositories,
     allowedOrigins,
+    // DNS-rebinding guard: while bound to loopback, only loopback Host
+    // headers are served. A deliberate public bind (RTGV_BIND_PUBLIC=1 with a
+    // non-loopback HOST) is reachable under arbitrary hostnames by design.
+    enforceLoopbackHost: !hostResult.escapeHatchUsed,
   };
   _currentConfig = config;
   return config;

@@ -66,8 +66,7 @@ export async function run(argv) {
   }
 
   // Inject the API contract through env so loadConfig() stays the single
-  // owner of validation. Same-origin serving means CORS is moot, so the
-  // wildcard is safe; nothing outside this process can reach the API.
+  // owner of validation.
   process.env.RTGV_REPOS = `cli=${repoCheck.canonicalPath}`;
   process.env.HOST = parsed.host;
   process.env.PORT = String(parsed.port);
@@ -80,7 +79,11 @@ export async function run(argv) {
   if (parsed.diffMaxBytes != null) {
     process.env.RTGV_DIFF_MAX_BYTES = String(parsed.diffMaxBytes);
   }
-  process.env.RTGV_ALLOWED_ORIGINS = "*";
+  // The UI is served from the same origin as the API, so no cross-origin
+  // caller needs access. An empty allowlist keeps other sites the browser
+  // visits from reading repository data or registering repositories; the
+  // API accepts same-origin mutations on its own.
+  process.env.RTGV_ALLOWED_ORIGINS = "";
 
   let started;
   try {

@@ -621,11 +621,27 @@ export function createGitService(config) {
         : [];
       const pathArgs = path.value ? [formatLiteralPathspec(path.value)] : [];
 
-      const { stdout } = await runGit(
-        repo,
-        commitListLogArgs(limit.value, searchArgs, authorArgs, commitishRef.hash, pathArgs),
-        { timeoutMs: config.gitTimeoutMs },
-      );
+      let stdout;
+      try {
+        ({ stdout } = await runGit(
+          repo,
+          commitListLogArgs(limit.value, searchArgs, authorArgs, commitishRef.hash, pathArgs),
+          { timeoutMs: config.gitTimeoutMs },
+        ));
+      } catch (err) {
+        // `regex` (-G) and `message` (--grep) pass the user's pattern to Git
+        // as a regular expression; Git exits 128 when it does not compile.
+        // That is a client error, not an upstream failure.
+        if (
+          err instanceof GitCommandError &&
+          err.exitCode === 128 &&
+          pattern.value &&
+          (mode.value === "regex" || mode.value === "message")
+        ) {
+          return { status: 400, body: { error: "Invalid pattern parameter" } };
+        }
+        throw err;
+      }
 
       const commits = parseCommitRecords(stdout);
 
@@ -1249,10 +1265,17 @@ export function createGitService(config) {
           }),
           runGit(repo, workTreeUntrackedArgs(), {
             timeoutMs: config.gitTimeoutMs,
+            // The name listing has its own cap: diffMaxBytes bounds patch
+            // content only, and a small diff budget must not 504 the listing.
+            maxBytes: UNTRACKED_LIST_MAX_BYTES,
           }),
         ]);
 
-      const untracked = describeUntrackedFiles(repo.path, untrackedRaw.stdout);
+      const untracked = describeUntrackedFiles(
+        repo.path,
+        untrackedRaw.stdout,
+        config.diffMaxBytes,
+      );
       const untrackedAdded = untracked.files.reduce((sum, file) => sum + file.added, 0);
 
       return {
@@ -1288,6 +1311,9 @@ export function createGitService(config) {
               added: untrackedAdded,
               deleted: 0,
             },
+            // True when the synthesized diff hit `diffMaxBytes`: every path is
+            // still listed, but later files carry headers only (`added: 0`).
+            truncated: untracked.truncated,
           },
           snapshotAt: new Date().toISOString(),
           notes: {
@@ -1369,17 +1395,34 @@ export function createGitService(config) {
       // We use `--no-patch` to suppress the diff output entirely (metadata only),
       // keeping the response size bounded without depending on maxBytes truncation.
       // `--no-merges` reduces noise from merge commits that rarely touch line ranges.
-      const { stdout } = await runGit(
-        repo,
-        rangeHistoryLogArgs({
-          lineStart,
-          lineEnd,
-          path: trimmedPath,
-          revision: commitishRef.hash,
-          maxCount: readLimit,
-        }),
-        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
-      );
+      let stdout;
+      try {
+        ({ stdout } = await runGit(
+          repo,
+          rangeHistoryLogArgs({
+            lineStart,
+            lineEnd,
+            path: trimmedPath,
+            revision: commitishRef.hash,
+            maxCount: readLimit,
+          }),
+          { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+        ));
+      } catch (err) {
+        // `git log -L` exits 128 when the path does not exist at the ref or
+        // the range is past the end of the file — both are input problems.
+        if (err instanceof GitCommandError && err.exitCode === 128) {
+          return {
+            status: 404,
+            body: {
+              error: "Line range not found",
+              path: trimmedPath,
+              hint: "Check that the file exists at this ref and the range is within its length.",
+            },
+          };
+        }
+        throw err;
+      }
 
       const parsed = parseRangeHistoryRecords(stdout);
       const truncated = parsed.length > limitResult.value;
@@ -1785,6 +1828,7 @@ export function createGitService(config) {
               [
                 "diff",
                 "--name-only",
+                "-z",
                 "--no-ext-diff",
                 "--no-textconv",
                 "--end-of-options",
@@ -1793,10 +1837,13 @@ export function createGitService(config) {
               ],
               { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
             );
+            // -z keeps names verbatim (no C-quoting of non-ASCII or special
+            // characters) and literal pathspecs stop `*` / `:(` in a file name
+            // from being read as glob or pathspec magic.
             const touchedPaths = nameOnlyOut
-              .split("\n")
-              .map((l) => l.trim())
-              .filter(Boolean);
+              .split("\u0000")
+              .filter(Boolean)
+              .map(formatLiteralPathspec);
 
             // Step 2: diff B vs T scoped to those paths. An empty diff means
             // the cherry-pick was applied cleanly (identical file state on the
@@ -2381,6 +2428,11 @@ export function workTreeUntrackedArgs() {
 // to keep the worktree response bounded.
 const UNTRACKED_READ_BYTE_CAP = 1_048_576;
 
+// Cap for the NUL-separated `ls-files --others` name listing (tens of
+// thousands of paths). Independent of diffMaxBytes, which bounds only the
+// synthesized patch content built from those names.
+const UNTRACKED_LIST_MAX_BYTES = 4_000_000;
+
 /**
  * Resolve the untracked listing (NUL-separated stdout) into:
  *   - `files`: `[{ path, status: "A", added, deleted: 0 }]` records (line
@@ -2394,29 +2446,54 @@ const UNTRACKED_READ_BYTE_CAP = 1_048_576;
  * Files that fail to read, exceed `UNTRACKED_READ_BYTE_CAP`, or contain a
  * NUL byte (binary heuristic) report `added: 0` and emit a `Binary files …
  * differ` marker in place of a hunk — same shape Git would produce.
+ *
+ * `maxDiffBytes` bounds the whole synthesized diff the way `diffMaxBytes`
+ * bounds Git's own patch output: once a file's patch would exceed it, that
+ * file and every later one fall back to headers only (while those fit) with
+ * `added: 0`, and `truncated` is set. Every path is still listed in `files`.
  */
-function describeUntrackedFiles(repoPath, stdout) {
-  if (!stdout) return { files: [], diff: "" };
+function describeUntrackedFiles(repoPath, stdout, maxDiffBytes) {
+  if (!stdout) return { files: [], diff: "", truncated: false };
   const files = [];
   let diff = "";
+  let diffBytes = 0;
+  let truncated = false;
   for (const rel of stdout.split("\u0000")) {
     if (!rel) continue;
-    const { added, patch } = readUntrackedEntry(repoPath, rel);
-    files.push({ path: rel, status: "A", added, deleted: 0 });
-    diff += patch;
+    let entry = truncated ? null : readUntrackedEntry(repoPath, rel);
+    if (entry && diffBytes + Buffer.byteLength(entry.patch) > maxDiffBytes) {
+      truncated = true;
+      entry = null;
+    }
+    // Past the budget, fall back to headers only — and only while those
+    // still fit, so the payload never exceeds maxDiffBytes. The path stays
+    // in `files` either way.
+    entry ??= { added: 0, patch: untrackedHeadersOnlyPatch(rel) };
+    const patchBytes = Buffer.byteLength(entry.patch);
+    if (diffBytes + patchBytes <= maxDiffBytes) {
+      diff += entry.patch;
+      diffBytes += patchBytes;
+    }
+    files.push({ path: rel, status: "A", added: entry.added, deleted: 0 });
   }
-  return { files, diff };
+  return { files, diff, truncated };
+}
+
+function untrackedHeadersOnlyPatch(relPath) {
+  return `diff --git a/${relPath} b/${relPath}\nnew file mode 100644\n--- /dev/null\n+++ b/${relPath}\n`;
 }
 
 function readUntrackedEntry(repoPath, relPath) {
   const fullPath = path.join(repoPath, relPath);
   const headers = `diff --git a/${relPath} b/${relPath}\nnew file mode 100644\n`;
-  const headersOnly = `${headers}--- /dev/null\n+++ b/${relPath}\n`;
+  const headersOnly = untrackedHeadersOnlyPatch(relPath);
   const binaryPatch = `${headersOnly}Binary files /dev/null and b/${relPath} differ\n`;
 
   let stat;
   try {
-    stat = fs.statSync(fullPath);
+    // lstat, not stat: following an untracked symlink would read (and
+    // return) a file from outside the allowlisted repository.
+    stat = fs.lstatSync(fullPath);
   } catch {
     return { added: 0, patch: binaryPatch };
   }
@@ -2723,9 +2800,15 @@ function normalizeNumstatPath(filePath) {
     return afterArrow;
   }
 
-  return `${beforeArrow.slice(0, braceIndex)}${afterArrow.slice(0, closingBraceIndex)}${afterArrow.slice(
-    closingBraceIndex + 1,
-  )}`;
+  const prefix = beforeArrow.slice(0, braceIndex);
+  const newMiddle = afterArrow.slice(0, closingBraceIndex);
+  const suffix = afterArrow.slice(closingBraceIndex + 1);
+  // A rename into a parent directory renders as `a/{b => }/f`; with an empty
+  // new side the separators on both sides of the braces would double up.
+  if (newMiddle === "") {
+    return `${prefix}${suffix.replace(/^\//, "")}`;
+  }
+  return `${prefix}${newMiddle}${suffix}`;
 }
 
 export function parseNumstatSummary(lines) {
@@ -3399,14 +3482,12 @@ export function relatedFilesHashLogArgs({ revision, pathspec, maxCount }) {
  * Build the `git log --no-walk` arguments for the second pass. `--no-walk`
  * makes git print only the named commits (no parent traversal), which is
  * exactly the batched N-of-N read we want — one syscall regardless of how
- * many hashes we pass. `--name-only` emits one path per line for each
- * commit, joined to the metadata block by the RECORD_SEPARATOR convention
- * already used elsewhere in this module.
+ * many hashes we pass. `--name-only -z` emits each commit's paths
+ * NUL-terminated and unquoted after a NUL-framed metadata block.
  *
  * `--no-renames` keeps the name list straightforward — we don't need rename
  * detection for co-change aggregation, only the literal paths Git records
- * per commit. (`normalizeNumstatPath` further normalizes any `path/{old =>
- * new}` notation that surfaces from the parent diff.)
+ * per commit.
  *
  * @param {{ hashes: string[] }} args
  */
@@ -3415,19 +3496,22 @@ export function relatedFilesNameLogArgs({ hashes }) {
     "log",
     "--no-walk",
     "--name-only",
+    "-z",
     "--no-show-signature",
     "--no-ext-diff",
     "--no-textconv",
     "--no-color",
     "--no-renames",
-    `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%aI`,
+    // A leading NUL makes each record start with an empty token; file
+    // names can never be empty, so the framing cannot collide with a path.
+    "--format=%x00%H%x00%aI",
     "--end-of-options",
     ...hashes,
   ];
 }
 
 /**
- * Parse the RECORD_SEPARATOR-separated stream produced by
+ * Parse the NUL-framed stream produced by
  * `relatedFilesNameLogArgs` and aggregate co-change counts per sibling path.
  *
  * Observation contract:
@@ -3550,41 +3634,42 @@ export function extractUrlsFromBody(body) {
 }
 
 export function parseRelatedFilesRecords(stdout, targetPath) {
-  const records = stdout
-    .split(COMMIT_RECORD_SEPARATOR)
-    .map((record) => record.replace(/^\n+/, ""))
-    .filter((record) => record.length > 0);
+  // Stream: `\0<hash>\0<authorDate>\0[\n<path>\0<path>\0…]` per commit. Names
+  // are NUL-terminated and never C-quoted, so they are used verbatim.
+  const tokens = stdout.split("\u0000");
 
   /** @type {Map<string, { coChangeCount: number, lastCoChangeAt: string }>} */
   const aggregate = new Map();
   let scannedCommits = 0;
 
-  for (const record of records) {
-    const newlineIndex = record.indexOf("\n");
-    const metadata = newlineIndex === -1 ? record : record.slice(0, newlineIndex);
-    const rest = newlineIndex === -1 ? "" : record.slice(newlineIndex + 1);
-    const [hash, authorDate] = metadata.split(COMMIT_FIELD_SEPARATOR);
+  let index = 0;
+  while (index < tokens.length) {
+    if (tokens[index] !== "") {
+      index += 1;
+      continue;
+    }
+    const hash = tokens[index + 1];
+    const authorDate = tokens[index + 2];
+    index += 3;
     if (!/^[A-Fa-f0-9]{40}$/.test(hash ?? "")) continue;
     scannedCommits += 1;
 
     /** @type {Set<string>} */
     const seenInCommit = new Set();
-    for (const rawLine of rest.split("\n")) {
-      const line = rawLine.trim();
-      if (!line) continue;
-      // `--name-only` should never emit numstat tabs, but normalizeNumstatPath
-      // also handles the `path/{old => new}` notation that may appear when a
-      // rename surfaces — we run it for parity with the rest of the parser.
-      const normalized = normalizeNumstatPath(line);
-      if (!normalized) continue;
-      if (normalized === targetPath) continue;
-      if (seenInCommit.has(normalized)) continue;
-      seenInCommit.add(normalized);
+    let first = true;
+    for (; index < tokens.length && tokens[index] !== ""; index += 1) {
+      // Git separates the format line from the name list with one newline.
+      const filePath = first ? tokens[index].replace(/^\n/, "") : tokens[index];
+      first = false;
+      if (!filePath) continue;
+      if (filePath === targetPath) continue;
+      if (seenInCommit.has(filePath)) continue;
+      seenInCommit.add(filePath);
 
-      const previous = aggregate.get(normalized);
+      const previous = aggregate.get(filePath);
       const dateValue = typeof authorDate === "string" ? authorDate : "";
       if (!previous) {
-        aggregate.set(normalized, {
+        aggregate.set(filePath, {
           coChangeCount: 1,
           lastCoChangeAt: dateValue,
         });

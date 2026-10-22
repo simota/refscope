@@ -12,6 +12,7 @@ import {
   parseNearIdenticalThresholdQuery,
   parsePatternQuery,
   parseSearchModeQuery,
+  isLoopbackHostHeader,
 } from "../src/validation.js";
 
 test("parseDateQuery treats null and empty as unspecified", () => {
@@ -403,4 +404,44 @@ test("parseNearIdenticalThresholdQuery rejects non-integer strings", () => {
   assert.equal(parseNearIdenticalThresholdQuery("abc").ok, false);
   assert.equal(parseNearIdenticalThresholdQuery("1.5").ok, false);
   assert.equal(parseNearIdenticalThresholdQuery("-5").ok, false);
+});
+
+test("isLoopbackHostHeader accepts loopback Host header forms", () => {
+  for (const value of [
+    "localhost",
+    "localhost:4175",
+    "LOCALHOST:4175",
+    "127.0.0.1",
+    "127.0.0.1:4175",
+    "127.1.2.3:80",
+    "[::1]",
+    "[::1]:4175",
+  ]) {
+    assert.equal(isLoopbackHostHeader(value), true, value);
+  }
+});
+
+test("isLoopbackHostHeader rejects non-loopback and malformed Host headers", () => {
+  for (const value of [
+    undefined,
+    "",
+    "evil.example",
+    "evil.example:4175",
+    "localhost.evil.example",
+    "127.0.0.1.nip.io:4175",
+    "x@127.0.0.1",
+    "127.0.0.1:abc",
+    "127.0.0.1:",
+    "127.0.0.1:99999",
+    "127.0.0.256",
+    "0.0.0.0:4175",
+    "192.168.1.5:4175",
+    "::1",
+    "[::1",
+    "[::1]x",
+    "[::2]:4175",
+    "localhost:4175/path",
+  ]) {
+    assert.equal(isLoopbackHostHeader(value), false, String(value));
+  }
 });

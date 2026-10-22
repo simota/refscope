@@ -295,6 +295,32 @@ test("bounds git stderr output with the same maxBytes limit", async () => {
   }
 });
 
+test("decodes multi-byte UTF-8 output split across pipe chunks", async () => {
+  const repoPath = createTempPath("rtgv-runner-utf8-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    // 300 KB of 3-byte characters spans several pipe reads, so chunk
+    // boundaries are guaranteed to land inside a character.
+    const content = "あ".repeat(100_000);
+    fs.writeFileSync(path.join(repoPath, "wide.txt"), content);
+    git(repoPath, "add", "wide.txt");
+    git(repoPath, "commit", "-m", "wide");
+
+    const { stdout } = await runGit(
+      { id: "demo", name: "demo", path: repoPath },
+      ["show", "HEAD:wide.txt"],
+      { timeoutMs: 5000, maxBytes: 1_000_000 },
+    );
+
+    assert.equal(stdout.includes("�"), false);
+    assert.equal(stdout, content);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("ignores inherited git environment repository overrides", async () => {
   const repoPath = createTempPath("rtgv-runner-env-");
   const otherRepoPath = createTempPath("rtgv-runner-env-other-");
