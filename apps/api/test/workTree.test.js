@@ -437,9 +437,37 @@ test("getWorkTreeChanges bounds the synthesized untracked diff by diffMaxBytes",
       files.map((file) => [file.path, file.added]),
       [["a.txt", 20], ["b.txt", 0], ["c.txt", 0]],
     );
-    assert.ok(Buffer.byteLength(diff) <= 300 + 2 * 120, "only headers past the budget");
-    assert.ok(diff.includes("diff --git a/c.txt b/c.txt"));
+    // Fallback headers count against the same budget, so the payload never
+    // exceeds diffMaxBytes even though every path stays in `files`.
+    assert.ok(Buffer.byteLength(diff) <= 300, `diff is ${Buffer.byteLength(diff)} bytes`);
+    assert.equal(diff.includes("+b.txt"), false);
     assert.equal(diff.includes("+c.txt"), false);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getWorkTreeChanges keeps headers-only fallbacks within diffMaxBytes", async () => {
+  const repoPath = createTempPath("rtgv-worktree-untracked-headers-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
+    for (let i = 0; i < 200; i += 1) {
+      fs.writeFileSync(path.join(repoPath, `file-${String(i).padStart(3, "0")}.txt`), "x\n".repeat(50));
+    }
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 10_000,
+    });
+    const result = await service.getWorkTreeChanges({ id: "demo", name: "demo", path: repoPath });
+
+    assert.equal(result.status, 200);
+    const { files, diff, truncated } = result.body.untracked;
+    assert.equal(truncated, true);
+    assert.equal(files.length, 200);
+    assert.ok(Buffer.byteLength(diff) <= 10_000, `diff is ${Buffer.byteLength(diff)} bytes`);
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }

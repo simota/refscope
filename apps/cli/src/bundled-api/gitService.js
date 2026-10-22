@@ -2442,7 +2442,8 @@ const UNTRACKED_READ_BYTE_CAP = 1_048_576;
  *
  * `maxDiffBytes` bounds the whole synthesized diff the way `diffMaxBytes`
  * bounds Git's own patch output: once a file's patch would exceed it, that
- * file and every later one are listed with headers only and `truncated` is set.
+ * file and every later one fall back to headers only (while those fit) with
+ * `added: 0`, and `truncated` is set. Every path is still listed in `files`.
  */
 function describeUntrackedFiles(repoPath, stdout, maxDiffBytes) {
   if (!stdout) return { files: [], diff: "", truncated: false };
@@ -2453,20 +2454,20 @@ function describeUntrackedFiles(repoPath, stdout, maxDiffBytes) {
   for (const rel of stdout.split("\u0000")) {
     if (!rel) continue;
     let entry = truncated ? null : readUntrackedEntry(repoPath, rel);
-    if (entry) {
-      const patchBytes = Buffer.byteLength(entry.patch);
-      if (diffBytes + patchBytes > maxDiffBytes) {
-        truncated = true;
-        entry = null;
-      } else {
-        diffBytes += patchBytes;
-      }
+    if (entry && diffBytes + Buffer.byteLength(entry.patch) > maxDiffBytes) {
+      truncated = true;
+      entry = null;
     }
-    if (!entry) {
-      entry = { added: 0, patch: untrackedHeadersOnlyPatch(rel) };
+    // Past the budget, fall back to headers only — and only while those
+    // still fit, so the payload never exceeds maxDiffBytes. The path stays
+    // in `files` either way.
+    entry ??= { added: 0, patch: untrackedHeadersOnlyPatch(rel) };
+    const patchBytes = Buffer.byteLength(entry.patch);
+    if (diffBytes + patchBytes <= maxDiffBytes) {
+      diff += entry.patch;
+      diffBytes += patchBytes;
     }
     files.push({ path: rel, status: "A", added: entry.added, deleted: 0 });
-    diff += entry.patch;
   }
   return { files, diff, truncated };
 }
@@ -3474,14 +3475,12 @@ export function relatedFilesHashLogArgs({ revision, pathspec, maxCount }) {
  * Build the `git log --no-walk` arguments for the second pass. `--no-walk`
  * makes git print only the named commits (no parent traversal), which is
  * exactly the batched N-of-N read we want — one syscall regardless of how
- * many hashes we pass. `--name-only` emits one path per line for each
- * commit, joined to the metadata block by the RECORD_SEPARATOR convention
- * already used elsewhere in this module.
+ * many hashes we pass. `--name-only -z` emits each commit's paths
+ * NUL-terminated and unquoted after a NUL-framed metadata block.
  *
  * `--no-renames` keeps the name list straightforward — we don't need rename
  * detection for co-change aggregation, only the literal paths Git records
- * per commit. (`normalizeNumstatPath` further normalizes any `path/{old =>
- * new}` notation that surfaces from the parent diff.)
+ * per commit.
  *
  * @param {{ hashes: string[] }} args
  */
@@ -3496,14 +3495,16 @@ export function relatedFilesNameLogArgs({ hashes }) {
     "--no-textconv",
     "--no-color",
     "--no-renames",
-    `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%aI`,
+    // A leading NUL makes each record start with an empty token; file
+    // names can never be empty, so the framing cannot collide with a path.
+    "--format=%x00%H%x00%aI",
     "--end-of-options",
     ...hashes,
   ];
 }
 
 /**
- * Parse the RECORD_SEPARATOR-separated stream produced by
+ * Parse the NUL-framed stream produced by
  * `relatedFilesNameLogArgs` and aggregate co-change counts per sibling path.
  *
  * Observation contract:
@@ -3626,28 +3627,33 @@ export function extractUrlsFromBody(body) {
 }
 
 export function parseRelatedFilesRecords(stdout, targetPath) {
-  const records = stdout
-    .split(COMMIT_RECORD_SEPARATOR)
-    .map((record) => record.replace(/^\n+/, ""))
-    .filter((record) => record.length > 0);
+  // Stream: `\0<hash>\0<authorDate>\0[\n<path>\0<path>\0…]` per commit. Names
+  // are NUL-terminated and never C-quoted, so they are used verbatim.
+  const tokens = stdout.split("\u0000");
 
   /** @type {Map<string, { coChangeCount: number, lastCoChangeAt: string }>} */
   const aggregate = new Map();
   let scannedCommits = 0;
 
-  for (const record of records) {
-    // With -z each record is `<hash>\0<authorDate>\0\n<path>\0<path>\0…`:
-    // names are NUL-terminated and never C-quoted, so they are used verbatim.
-    const fields = record.split(COMMIT_FIELD_SEPARATOR);
-    const [hash, authorDate] = fields;
+  let index = 0;
+  while (index < tokens.length) {
+    if (tokens[index] !== "") {
+      index += 1;
+      continue;
+    }
+    const hash = tokens[index + 1];
+    const authorDate = tokens[index + 2];
+    index += 3;
     if (!/^[A-Fa-f0-9]{40}$/.test(hash ?? "")) continue;
     scannedCommits += 1;
 
     /** @type {Set<string>} */
     const seenInCommit = new Set();
-    for (const [index, field] of fields.slice(2).entries()) {
+    let first = true;
+    for (; index < tokens.length && tokens[index] !== ""; index += 1) {
       // Git separates the format line from the name list with one newline.
-      const filePath = index === 0 ? field.replace(/^\n/, "") : field;
+      const filePath = first ? tokens[index].replace(/^\n/, "") : tokens[index];
+      first = false;
       if (!filePath) continue;
       if (filePath === targetPath) continue;
       if (seenInCommit.has(filePath)) continue;

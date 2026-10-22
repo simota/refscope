@@ -58,8 +58,8 @@ test("relatedFilesNameLogArgs uses --no-walk and emits name-only with metadata",
   assert.ok(args.includes("--no-ext-diff"));
   assert.ok(args.includes("--no-textconv"));
   assert.ok(args.includes("--no-color"));
-  // The format must emit RECORD_SEPARATOR + hash + NUL + authorDate so the
-  // parser can split records and read the per-commit metadata.
+  // The format must emit NUL + hash + NUL + authorDate so the parser can
+  // frame records on the empty token and read the per-commit metadata.
   assert.ok(args.some((arg) => arg.startsWith("--format=") && arg.includes("%H") && arg.includes("%aI")));
   // Hashes follow `--end-of-options` so option parsing is fully terminated.
   const endIdx = args.indexOf("--end-of-options");
@@ -141,6 +141,23 @@ test("parseRelatedFilesRecords keeps unusual file names verbatim", () => {
   assert.deepEqual(
     result.related.map((entry) => entry.path).sort(),
     [" leading space.txt", "src/foo.js", "x => y.txt"],
+  );
+});
+
+test("parseRelatedFilesRecords does not split records on bytes that are valid in file names", () => {
+  // \x1e (the old record separator) and a commit with no names must not
+  // shift the framing: only the empty token between two NULs starts a record.
+  const stdout = [
+    nameLogRecord("a".repeat(40), "2024-03-01T00:00:00+00:00", ["src/foo.js", "sib\u001ename.txt"]),
+    nameLogRecord("b".repeat(40), "2024-02-01T00:00:00+00:00", []),
+    nameLogRecord("c".repeat(40), "2024-01-01T00:00:00+00:00", ["src/foo.js", "src/bar.js"]),
+  ].join("");
+
+  const result = parseRelatedFilesRecords(stdout, "src/foo.js");
+  assert.equal(result.scannedCommits, 3);
+  assert.deepEqual(
+    result.related.map((entry) => entry.path).sort(),
+    ["sib\u001ename.txt", "src/bar.js"],
   );
 });
 
@@ -559,7 +576,8 @@ function writeFiles(repoPath, files) {
   }
 }
 
-// Mirrors `git log --no-walk --name-only -z --format=<RS>%H%x00%aI`.
+// Mirrors `git log --no-walk --name-only -z --format=%x00%H%x00%aI`.
 function nameLogRecord(hash, authorDate, paths) {
-  return `\u001e${hash}\u0000${authorDate}\u0000\n${paths.map((p) => `${p}\u0000`).join("")}`;
+  const names = paths.length > 0 ? `\n${paths.map((p) => `${p}\u0000`).join("")}` : "";
+  return `\u0000${hash}\u0000${authorDate}\u0000${names}`;
 }
