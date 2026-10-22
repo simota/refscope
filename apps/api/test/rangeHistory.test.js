@@ -374,6 +374,33 @@ test("getRangeHistory urlsInBody contains literal URLs from commit body", async 
 // Helpers
 // ---------------------------------------------------------------------------
 
+test("getRangeHistory returns 404 for a missing path or an out-of-range line span", async () => {
+  const repoPath = createTempPath("rtgv-range-history-missing-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "src/foo.js", "line1\nline2\n", "feat: add foo");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 10000,
+      diffMaxBytes: 65_536,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    for (const query of [
+      { path: "src/nope.js", lineStart: "1", lineEnd: "2" },
+      { path: "src/foo.js", lineStart: "50", lineEnd: "60" },
+    ]) {
+      const result = await service.getRangeHistory(repo, new URLSearchParams(query));
+      assert.equal(result.status, 404, JSON.stringify(query));
+      assert.equal(result.body.error, "Line range not found");
+      assert.equal(result.body.path, query.path);
+    }
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 function git(cwd, ...args) {
   const result = spawnSync("git", args, {
     cwd,

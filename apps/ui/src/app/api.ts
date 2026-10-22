@@ -594,6 +594,11 @@ export type WorkTreeUntrackedSection = {
    */
   diff: string;
   summary: { fileCount: number; added: number; deleted: 0 };
+  /**
+   * True when the synthesized diff reached the API's diff byte budget: every
+   * path is still listed, but later files carry headers only (`added: 0`).
+   */
+  truncated?: boolean;
 };
 
 export type WorkTreeResponse = {

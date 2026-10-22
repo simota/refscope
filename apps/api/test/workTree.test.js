@@ -413,6 +413,101 @@ test("getWorkTreeChanges emits binary marker for binary untracked files in diff"
   }
 });
 
+test("getWorkTreeChanges bounds the synthesized untracked diff by diffMaxBytes", async () => {
+  const repoPath = createTempPath("rtgv-worktree-untracked-budget-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
+    for (const name of ["a.txt", "b.txt", "c.txt"]) {
+      fs.writeFileSync(path.join(repoPath, name), `${name}\n`.repeat(20));
+    }
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      // Fits a.txt's patch (~210 bytes) but not a second one.
+      diffMaxBytes: 300,
+    });
+    const result = await service.getWorkTreeChanges({ id: "demo", name: "demo", path: repoPath });
+
+    assert.equal(result.status, 200);
+    const { files, diff, truncated } = result.body.untracked;
+    assert.equal(truncated, true);
+    assert.deepEqual(
+      files.map((file) => [file.path, file.added]),
+      [["a.txt", 20], ["b.txt", 0], ["c.txt", 0]],
+    );
+    assert.ok(Buffer.byteLength(diff) <= 300 + 2 * 120, "only headers past the budget");
+    assert.ok(diff.includes("diff --git a/c.txt b/c.txt"));
+    assert.equal(diff.includes("+c.txt"), false);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getWorkTreeChanges lists untracked names beyond the runner's default output cap", async () => {
+  const repoPath = createTempPath("rtgv-worktree-untracked-many-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
+    // ~3 000 × 100-byte names ≈ 300 KB of ls-files output, above the
+    // runner's 256 KB default that previously turned this into a 504.
+    const dir = path.join(repoPath, "generated");
+    fs.mkdirSync(dir);
+    const stem = "x".repeat(90);
+    for (let i = 0; i < 3000; i += 1) {
+      fs.writeFileSync(path.join(dir, `${stem}${String(i).padStart(4, "0")}`), "");
+    }
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 20_000,
+      diffMaxBytes: 4_000_000,
+    });
+    const result = await service.getWorkTreeChanges({ id: "demo", name: "demo", path: repoPath });
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.untracked.files.length, 3000);
+    assert.equal(result.body.untracked.truncated, false);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getWorkTreeChanges does not read through untracked symlinks", async () => {
+  const repoPath = createTempPath("rtgv-worktree-untracked-symlink-");
+  const outsidePath = createTempPath("rtgv-worktree-outside-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
+    fs.writeFileSync(path.join(outsidePath, "secret.txt"), "SECRET-OUTSIDE\n");
+    fs.symlinkSync(path.join(outsidePath, "secret.txt"), path.join(repoPath, "link.txt"));
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+
+    const result = await service.getWorkTreeChanges({
+      id: "demo",
+      name: "demo",
+      path: repoPath,
+    });
+
+    const { files, diff } = result.body.untracked;
+    assert.deepEqual(
+      files.map((file) => [file.path, file.added]),
+      [["link.txt", 0]],
+    );
+    assert.ok(diff.includes("diff --git a/link.txt b/link.txt"));
+    assert.equal(diff.includes("SECRET-OUTSIDE"), false);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(outsidePath, { recursive: true, force: true });
+  }
+});
+
 function git(cwd, ...args) {
   const result = spawnSync("git", args, {
     cwd,

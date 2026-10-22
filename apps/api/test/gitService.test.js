@@ -1279,6 +1279,36 @@ test("listCommits message mode finds commits by commit message regex", async () 
   }
 });
 
+test("listCommits returns 400 when a regex or message pattern does not compile", async () => {
+  const repoPath = createTempPath("rtgv-bad-regex-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "a.txt"), "a\n");
+    git(repoPath, "add", "a.txt");
+    git(repoPath, "commit", "-m", "feat: add a");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 4096,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    for (const mode of ["regex", "message"]) {
+      const result = await service.listCommits(repo, new URLSearchParams({ mode, pattern: "(" }));
+      assert.equal(result.status, 400, mode);
+      assert.deepEqual(result.body, { error: "Invalid pattern parameter" });
+    }
+    // pickaxe (-S) treats the pattern as a literal string, so "(" is valid.
+    const pickaxe = await service.listCommits(repo, new URLSearchParams({ mode: "pickaxe", pattern: "(" }));
+    assert.equal(pickaxe.status, 200);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("listCommits rejects duplicate mode parameter before running git", async () => {
   const service = createGitService({
     repositories: new Map(),
@@ -1571,6 +1601,93 @@ test("getCompareCherry grades near-identical when only whitespace differs", asyn
     assert.ok(fixEntry.diffLines, "diffLines should be present for near-identical");
     assert.ok((fixEntry.diffLines.added + fixEntry.diffLines.deleted) > 0, "non-zero diff lines");
     assert.ok(fixEntry.diffHunks, "diffHunks should be present for near-identical");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getCommit keeps line counts for a rename into the parent directory", async () => {
+  // numstat abbreviates this rename as `a/{b => }/f`; expanding it naively
+  // produced `a//f`, which no longer matched the name-status path, so the
+  // file reported 0 added lines.
+  const repoPath = createTempPath("rtgv-rename-parent-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.mkdirSync(path.join(repoPath, "a", "b"), { recursive: true });
+    const body = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+    fs.writeFileSync(path.join(repoPath, "a", "b", "f"), body);
+    fs.mkdirSync(path.join(repoPath, "c"), { recursive: true });
+    fs.writeFileSync(path.join(repoPath, "c", "g"), body);
+    git(repoPath, "add", ".");
+    git(repoPath, "commit", "-m", "seed");
+    git(repoPath, "mv", "a/b/f", "a/f");
+    fs.appendFileSync(path.join(repoPath, "a", "f"), "line 21\n");
+    git(repoPath, "mv", "c/g", "g");
+    fs.appendFileSync(path.join(repoPath, "g"), "line 21\n");
+    git(repoPath, "add", ".");
+    git(repoPath, "commit", "-m", "flatten");
+    const hash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+    const result = await service.getCommit({ id: "demo", name: "demo", path: repoPath }, hash);
+
+    assert.equal(result.status, 200);
+    const files = Object.fromEntries(
+      result.body.files.map((file) => [file.path, [file.added, file.deleted]]),
+    );
+    assert.deepEqual(files, { "a/f": [1, 0], g: [1, 0] });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getCompareCherry grades commits touching non-ASCII paths instead of calling them identical", async () => {
+  // `diff --name-only` without -z C-quotes non-ASCII names; used as a
+  // pathspec, the quoted form matches nothing and the empty diff was graded
+  // "identical" even though the cherry-picked file differs.
+  const repoPath = createTempPath("rtgv-cherry-nonascii-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "README.md"), "base\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "base commit");
+    git(repoPath, "checkout", "-b", "release");
+    git(repoPath, "checkout", "main");
+
+    fs.writeFileSync(path.join(repoPath, "修正 file.txt"), "return 1\n");
+    git(repoPath, "add", "修正 file.txt");
+    git(repoPath, "commit", "-m", "fix: add function");
+    const fixHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    git(repoPath, "checkout", "release");
+    git(repoPath, "cherry-pick", fixHash);
+    fs.writeFileSync(path.join(repoPath, "修正 file.txt"), "  return 1\n");
+    git(repoPath, "add", "修正 file.txt");
+    git(repoPath, "commit", "--amend", "--no-edit");
+    git(repoPath, "checkout", "main");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024 * 1024,
+    });
+    const result = await service.getCompareCherry(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ base: "main", target: "release", nearIdenticalThreshold: "5" }),
+    );
+    assert.equal(result.status, 200);
+    const fixEntry = result.body.equivalent.find((c) => c.hash === fixHash);
+    assert.ok(fixEntry, "fix commit should be patch-id equivalent");
+    assert.equal(fixEntry.grade, "near-identical");
+    assert.deepEqual(fixEntry.diffLines, { added: 1, deleted: 1 });
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }
