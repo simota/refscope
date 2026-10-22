@@ -345,6 +345,27 @@ test("HOST=0.0.0.0 with RTGV_BIND_PUBLIC=1 is accepted and emits console.warn", 
   }
 });
 
+test("loopback HOST enforces loopback Host headers (DNS rebinding guard)", () => {
+  assert.equal(loadConfig({ RTGV_REPOS: "" }).enforceLoopbackHost, true);
+  assert.equal(loadConfig({ HOST: "localhost", RTGV_REPOS: "" }).enforceLoopbackHost, true);
+  // The escape hatch alone does not relax the guard while still bound to loopback.
+  assert.equal(
+    loadConfig({ HOST: "127.0.0.1", RTGV_BIND_PUBLIC: "1", RTGV_REPOS: "" }).enforceLoopbackHost,
+    true,
+  );
+});
+
+test("public bind via RTGV_BIND_PUBLIC=1 disables the loopback Host guard", () => {
+  const origWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const config = loadConfig({ HOST: "0.0.0.0", RTGV_BIND_PUBLIC: "1", RTGV_REPOS: "" });
+    assert.equal(config.enforceLoopbackHost, false);
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
 // ─── mergeRepositoryAllowlist ────────────────────────────────────────────────
 
 /**

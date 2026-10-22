@@ -242,11 +242,133 @@ test("routes compare requests to the git service", async () => {
   });
 });
 
-function createMockRequest({ method, url }) {
+test("rejects requests whose Host header is not loopback (DNS rebinding guard)", async () => {
+  let called = false;
+  const handler = createRequestHandler(
+    { allowedOrigins: new Set() },
+    {
+      listRepositories() {
+        called = true;
+        return [];
+      },
+    },
+  );
+
+  for (const method of ["GET", "OPTIONS", "POST", "DELETE"]) {
+    const response = createMockResponse();
+    await handler(
+      createMockRequest({
+        method,
+        url: method === "DELETE" ? "/api/repos/demo" : "/api/repos",
+        headers: { host: "attacker.example:4175", origin: "http://attacker.example:4175" },
+      }),
+      response,
+    );
+    assert.equal(response.statusCode, 403, method);
+    assert.deepEqual(JSON.parse(response.body), { error: "Host not allowed" });
+    assert.equal(response.headers["access-control-allow-origin"], undefined);
+  }
+  assert.equal(called, false);
+});
+
+test("accepts loopback Host headers", async () => {
+  const handler = createRequestHandler({ allowedOrigins: new Set() }, {});
+  for (const host of ["localhost", "127.0.0.1:4175", "localhost:4175", "[::1]:4175"]) {
+    const response = createMockResponse();
+    await handler(createMockRequest({ method: "GET", url: "/health", headers: { host } }), response);
+    assert.equal(response.statusCode, 200, host);
+  }
+});
+
+test("skips the Host guard when the server is deliberately bound publicly", async () => {
+  const handler = createRequestHandler(
+    { allowedOrigins: new Set(), enforceLoopbackHost: false },
+    {},
+  );
+  const response = createMockResponse();
+  await handler(
+    createMockRequest({ method: "GET", url: "/health", headers: { host: "192.168.1.5:4175" } }),
+    response,
+  );
+  assert.equal(response.statusCode, 200);
+});
+
+test("does not grant CORS to cross-origin readers outside the allowlist", async () => {
+  const handler = createRequestHandler(
+    { allowedOrigins: new Set() },
+    {
+      listRepositories() {
+        return [];
+      },
+    },
+  );
+  const response = createMockResponse();
+  await handler(
+    createMockRequest({
+      method: "GET",
+      url: "/api/repos",
+      headers: { host: "127.0.0.1:4175", origin: "https://evil.example" },
+    }),
+    response,
+  );
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers["access-control-allow-origin"], undefined);
+});
+
+test("accepts same-origin mutations without an explicit origin allowlist entry", async () => {
+  const handler = createRequestHandler({ allowedOrigins: new Set() }, {});
+
+  const sameOriginRequest = createMockRequest({
+    method: "POST",
+    url: "/api/repos",
+    headers: { host: "127.0.0.1:4175", origin: "http://127.0.0.1:4175" },
+  });
+  const sameOrigin = createMockResponse();
+  const pending = handler(sameOriginRequest, sameOrigin);
+  process.nextTick(() => sameOriginRequest.emit("end"));
+  await pending;
+  // Past the origin gate the handler parses the body; the empty body is
+  // rejected as invalid JSON (400), proving the 403 gate was passed.
+  assert.equal(sameOrigin.statusCode, 400);
+  assert.deepEqual(JSON.parse(sameOrigin.body), { error: "Invalid JSON body" });
+
+  // A different loopback origin (other port or hostname) is still cross-origin.
+  const crossOrigin = createMockResponse();
+  await handler(
+    createMockRequest({
+      method: "POST",
+      url: "/api/repos",
+      headers: { host: "127.0.0.1:4175", origin: "http://localhost:4175" },
+    }),
+    crossOrigin,
+  );
+  assert.equal(crossOrigin.statusCode, 403);
+  assert.deepEqual(JSON.parse(crossOrigin.body), { error: "Origin not allowed" });
+});
+
+test("does not trust Host-derived same-origin when the Host guard is off", async () => {
+  const handler = createRequestHandler(
+    { allowedOrigins: new Set(), enforceLoopbackHost: false },
+    {},
+  );
+  const response = createMockResponse();
+  await handler(
+    createMockRequest({
+      method: "POST",
+      url: "/api/repos",
+      headers: { host: "rebound.example:4175", origin: "http://rebound.example:4175" },
+    }),
+    response,
+  );
+  assert.equal(response.statusCode, 403);
+  assert.deepEqual(JSON.parse(response.body), { error: "Origin not allowed" });
+});
+
+function createMockRequest({ method, url, headers = { host: "localhost" } }) {
   const request = new EventEmitter();
   request.method = method;
   request.url = url;
-  request.headers = { host: "localhost" };
+  request.headers = headers;
   return request;
 }
 

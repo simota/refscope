@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "build": "node --check src/server.js && node --check src/config.js && node --check src/gitRunner.js && node --check src/gitService.js && node --check src/http.js && node --check src/validation.js",
+    "build": "node --check src/server.js && node --check src/config.js && node --check src/gitRunner.js && node --check src/gitService.js && node --check src/http.js && node --check src/validation.js && node --check src/fleetService.js && node --check src/reposStore.js && node --check src/structuralDiff.js",
     "dev": "node src/server.js",
     "test": "node --test"
   },

@@ -428,3 +428,12 @@ API error message in the timeline instead of silently dropping the event.
 - CORS defaults to `http://localhost:5173` and `http://127.0.0.1:5173`.
   Override with `RTGV_ALLOWED_ORIGINS` using comma-separated HTTP(S) origins or
   the exact wildcard value `*`.
+- While bound to a loopback `HOST`, the API answers only requests whose `Host`
+  header is `localhost`, `127.0.0.0/8`, or `[::1]` (403 otherwise). This blocks
+  DNS-rebinding pages from reading repository data through the browser. A
+  public bind (`RTGV_BIND_PUBLIC=1` with a non-loopback `HOST`) disables this
+  check.
+- `POST`/`DELETE /api/repos` require an `Origin` header that is either in the
+  allowlist or the API's own origin (same-origin UI, as served by the CLI).
+  The CLI uses an empty allowlist, so other sites cannot read data from or
+  register repositories in a running `refscope` instance.

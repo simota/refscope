@@ -1,5 +1,6 @@
 import { GitCommandError } from "./gitRunner.js";
 import {
+  isLoopbackHostHeader,
   isValidGitRef,
   isValidRepoId,
   parseDateQuery,
@@ -27,6 +28,15 @@ import {
 export function createRequestHandler(config, gitService, fleetService) {
   return async function handleRequest(req, res) {
     setSecurityHeaders(res);
+
+    // Checked before CORS and routing so a rebound hostname never receives
+    // CORS grants or reaches a handler. Browsers always send Host, so a
+    // missing header is rejected too.
+    if (config.enforceLoopbackHost !== false && !isLoopbackHostHeader(req.headers.host)) {
+      sendJson(res, 403, { error: "Host not allowed" });
+      return;
+    }
+
     setCorsHeaders(req, res, config.allowedOrigins);
 
     if (req.method === "OPTIONS") {
@@ -611,17 +621,26 @@ function readRequestBody(req, maxBytes) {
 }
 
 /**
- * Check that the request Origin header is present and matches the allowlist.
- * Used for POST/DELETE only (CSRF guard).
+ * Check that the request Origin header is present and is either the API's own
+ * origin (same-origin UI, e.g. the CLI that serves UI and API on one port) or
+ * matches the allowlist. Used for POST/DELETE only (CSRF guard).
+ *
+ * Same-origin is derived from the Host header, so it is only trusted while the
+ * loopback Host guard is active; on a deliberate public bind a rebound
+ * hostname would otherwise count as "same-origin".
  *
  * @param {import("node:http").IncomingMessage} req
- * @param {Set<string> | "*"} allowedOrigins
+ * @param {{ allowedOrigins: Set<string> | "*", enforceLoopbackHost?: boolean }} config
  * @returns {{ ok: true } | { ok: false, error: string }}
  */
-function requireSafeOrigin(req, allowedOrigins) {
+function requireSafeOrigin(req, config) {
+  const { allowedOrigins } = config;
   const origin = req.headers.origin;
   if (!origin) {
     return { ok: false, error: "Missing Origin header" };
+  }
+  if (config.enforceLoopbackHost !== false && origin === `http://${req.headers.host}`) {
+    return { ok: true };
   }
   if (allowedOrigins !== "*" && !allowedOrigins.has(origin)) {
     return { ok: false, error: "Origin not allowed" };
@@ -642,7 +661,7 @@ function requireSafeOrigin(req, allowedOrigins) {
  */
 async function handlePostRepos(req, res, config, gitService) {
   try {
-    const originCheck = requireSafeOrigin(req, config.allowedOrigins);
+    const originCheck = requireSafeOrigin(req, config);
     if (!originCheck.ok) {
       sendJson(res, 403, { error: originCheck.error });
       return;
@@ -710,7 +729,7 @@ async function handlePostRepos(req, res, config, gitService) {
  */
 async function handleDeleteRepo(req, res, config, gitService, id) {
   try {
-    const originCheck = requireSafeOrigin(req, config.allowedOrigins);
+    const originCheck = requireSafeOrigin(req, config);
     if (!originCheck.ok) {
       sendJson(res, 403, { error: originCheck.error });
       return;
