@@ -1265,7 +1265,9 @@ export function createGitService(config) {
           }),
           runGit(repo, workTreeUntrackedArgs(), {
             timeoutMs: config.gitTimeoutMs,
-            maxBytes: config.diffMaxBytes,
+            // The name listing has its own cap: diffMaxBytes bounds patch
+            // content only, and a small diff budget must not 504 the listing.
+            maxBytes: UNTRACKED_LIST_MAX_BYTES,
           }),
         ]);
 
@@ -2425,6 +2427,11 @@ export function workTreeUntrackedArgs() {
 // covers ordinary source files; anything larger is reported with `added: 0`
 // to keep the worktree response bounded.
 const UNTRACKED_READ_BYTE_CAP = 1_048_576;
+
+// Cap for the NUL-separated `ls-files --others` name listing (tens of
+// thousands of paths). Independent of diffMaxBytes, which bounds only the
+// synthesized patch content built from those names.
+const UNTRACKED_LIST_MAX_BYTES = 4_000_000;
 
 /**
  * Resolve the untracked listing (NUL-separated stdout) into:

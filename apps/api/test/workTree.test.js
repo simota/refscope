@@ -473,6 +473,33 @@ test("getWorkTreeChanges keeps headers-only fallbacks within diffMaxBytes", asyn
   }
 });
 
+test("getWorkTreeChanges lists untracked names even when they exceed a small diff budget", async () => {
+  // diffMaxBytes bounds synthesized patch content only; the name listing
+  // must not be killed by it (that turned the whole request into a 504).
+  const repoPath = createTempPath("rtgv-worktree-untracked-small-budget-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
+    for (let i = 0; i < 20; i += 1) {
+      fs.writeFileSync(path.join(repoPath, `untracked-${String(i).padStart(2, "0")}.txt`), "x\n");
+    }
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 100,
+    });
+    const result = await service.getWorkTreeChanges({ id: "demo", name: "demo", path: repoPath });
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.untracked.files.length, 20);
+    assert.equal(result.body.untracked.truncated, true);
+    assert.ok(Buffer.byteLength(result.body.untracked.diff) <= 100);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("getWorkTreeChanges lists untracked names beyond the runner's default output cap", async () => {
   const repoPath = createTempPath("rtgv-worktree-untracked-many-");
   try {
