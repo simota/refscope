@@ -35,7 +35,7 @@
     "dev:cli": "pnpm --filter refscope build && node apps/cli/bin/refscope.mjs --repo .",
     "dev": "pnpm dev:ui",
     "build": "pnpm build:api && pnpm build:ui && pnpm build:web",
-    "test": "pnpm --filter @realtime-git-viewer/api test",
+    "test": "pnpm --filter @realtime-git-viewer/api test && pnpm --filter refscope test",
     "prepare": "node apps/cli/scripts/build.mjs"
   },
   "pnpm": {
