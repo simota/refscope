@@ -23,7 +23,7 @@ Run from the repository root unless noted. The `Makefile` is the canonical entry
 - `make dev-app RTGV_REPOS=viewer=/absolute/path` — start both against another allowlisted repo. `RTGV_REPOS` must be a comma list of `id=/absolute/git/root` entries; the helper `scripts/dev/validate-repos.sh` rejects relative paths, missing paths, or non-Git roots before anything starts.
 - `make dev-api RTGV_REPOS=...` / `make dev-ui` — start one side only.
 - `make build` — `pnpm build:api && pnpm build:ui && pnpm build:web`. The API "build" is just `node --check` against each source file (there is no transpile step). `pnpm build:ui` runs `vite build`.
-- `make test` — runs `pnpm --filter @realtime-git-viewer/api test`, which is `node --test` against `apps/api/test/`. The UI has no test suite.
+- `make test` — runs `pnpm test`: `node --test` against `apps/api/test/`, then `apps/cli/test/` (CLI static server and launcher helpers). The UI has no test suite.
 - Single API test: `node --test apps/api/test/gitRunner.test.js` (or filter with `--test-name-pattern`).
 - `make verify` — full Orbit verification gate (`scripts/orbit/full-implementation/verify.sh`). Use this before claiming a non-trivial change is done.
 - `make audit` — `pnpm audit --audit-level high`.

@@ -75,6 +75,11 @@ function resolveSafePath(rootDir, pathname) {
   } catch {
     return null;
   }
+  // fs throws synchronously on a path with a NUL byte; uncaught, that takes
+  // down the whole process (API included) on a single `GET /%00`.
+  if (decoded.includes("\0")) {
+    return null;
+  }
 
   // Strip leading slashes so path.join treats the result as relative.
   const relative = decoded.replace(/^\/+/, "");
@@ -103,6 +108,10 @@ function serveFile(filePath, req, res, onMissing) {
       "content-type": contentType,
       "content-length": stats.size,
       "x-content-type-options": "nosniff",
+      // The UI can add and remove repositories, so another site must not be
+      // able to frame it and steer clicks onto those controls.
+      "x-frame-options": "DENY",
+      "content-security-policy": "frame-ancestors 'none'",
       "cache-control": cacheControlFor(filePath, ext),
     };
 

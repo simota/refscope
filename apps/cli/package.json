@@ -36,6 +36,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node bin/refscope.mjs --repo .",
+    "test": "node --test \"test/*.test.mjs\"",
     "prepublishOnly": "node scripts/build.mjs"
   }
 }
