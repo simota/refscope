@@ -51,7 +51,11 @@ export function loadConfig(env = process.env) {
       max: MAX_GIT_OUTPUT_BYTES,
       name: "RTGV_DIFF_MAX_BYTES",
     }),
-    refPollMs: parsePositiveInteger(env.RTGV_REF_POLL_MS, 2000),
+    // setInterval clamps delays above MAX_TIMEOUT_MS to 1 ms.
+    refPollMs: parsePositiveInteger(env.RTGV_REF_POLL_MS, 2000, {
+      max: MAX_TIMEOUT_MS,
+      name: "RTGV_REF_POLL_MS",
+    }),
     repositories,
     allowedOrigins,
     // DNS-rebinding guard: while bound to loopback, only loopback Host

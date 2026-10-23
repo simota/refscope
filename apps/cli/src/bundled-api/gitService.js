@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { GitCommandError, runGit } from "./gitRunner.js";
+import { GitCommandError, MAX_GIT_OUTPUT_BYTES, runGit } from "./gitRunner.js";
 import { addRepository as configAddRepository, removeRepository as configRemoveRepository } from "./config.js";
 import { classifyFileDiff } from "./structuralDiff.js";
 import {
+  isPublicFullRefName,
   isValidGitRef,
   isValidObjectId,
   parseAuthorQuery,
@@ -106,6 +107,18 @@ const CONVENTIONAL_COMMIT_PREFIX_PATTERN = /^([a-z][a-z0-9-]*)(?:\([^)]*\))?:\s/
 
 const COMMIT_FIELD_SEPARATOR = "\u0000";
 const COMMIT_RECORD_SEPARATOR = "\u001e";
+// Git allows \x1e in commit messages and text file contents, so a bare split
+// on it lets commit text forge records. A real header starts a line and is
+// followed by the full hash and a NUL, which neither can contain.
+const COMMIT_RECORD_HEADER_PATTERN = /(?:^|\n)\u001e(?=[0-9a-f]{40}\u0000)/;
+
+// Headers of the `-z --name-only --format=%H%x1f...` logs. Paths may contain
+// \x1f too, so a header is recognised by its leading full hash.
+const NAME_LOG_HEADER_PATTERN = /^[0-9a-f]{40}\u001f/;
+
+function splitCommitRecords(stdout) {
+  return stdout.split(COMMIT_RECORD_HEADER_PATTERN);
+}
 
 // ---------------------------------------------------------------------------
 // Risky Diff Detector — Hotspot cache (TTL 60 s) + scoring
@@ -185,6 +198,7 @@ export function createGitService(config) {
     ];
     const { stdout } = await runGit(repo, ["log", ...logArgs], {
       timeoutMs: config.gitTimeoutMs,
+      maxBytes: MAX_GIT_OUTPUT_BYTES,
     });
 
     /** @type {Map<string, { churn: number }>} */
@@ -195,7 +209,7 @@ export function createGitService(config) {
     for (let raw of stdout.split("\x00")) {
       const record = raw.startsWith("\n") ? raw.slice(1) : raw;
       if (!record) continue;
-      if (record.includes("\x1f")) {
+      if (NAME_LOG_HEADER_PATTERN.test(record)) {
         // Header record — start new commit
         currentCommitPaths = new Set();
       } else {
@@ -217,30 +231,13 @@ export function createGitService(config) {
   async function listRefs(repo) {
     const { stdout } = await runGit(
       repo,
-      [
-        "for-each-ref",
-        "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(committerdate:iso-strict)",
-        "refs/heads",
-        "refs/tags",
-        "refs/remotes",
-      ],
-      { timeoutMs: config.gitTimeoutMs },
+      ["for-each-ref", PUBLIC_REF_FORMAT, "refs/heads", "refs/tags", "refs/remotes"],
+      // Ref lists grow with the repository; the default cap stops live updates
+      // once a few thousand refs exist.
+      { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
     );
 
-    return stdout
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const [name, objectHash, peeledHash, updatedAt] = line.split(COMMIT_FIELD_SEPARATOR);
-        return {
-          name,
-          shortName: shortRefName(name),
-          hash: peeledHash || objectHash,
-          type: refType(name),
-          updatedAt: updatedAt || null,
-        };
-      });
+    return parsePublicRefLines(stdout);
   }
 
   async function listCommitRange(repo, fromHash, toHash) {
@@ -861,30 +858,20 @@ export function createGitService(config) {
         repo,
         [
           "for-each-ref",
-          "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(committerdate:iso-strict)",
-          "--sort=-committerdate",
+          PUBLIC_REF_FORMAT,
           `--contains=${hash}`,
           "refs/heads",
           "refs/tags",
           "refs/remotes",
         ],
-        { timeoutMs: config.gitTimeoutMs },
+        { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
       );
 
-      const refs = stdout
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => {
-          const [name, objectHash, peeledHash, updatedAt] = line.split(COMMIT_FIELD_SEPARATOR);
-          return {
-            name,
-            shortName: shortRefName(name),
-            hash: peeledHash || objectHash,
-            type: refType(name),
-            updatedAt: updatedAt || null,
-          };
-        });
+      // Sorted here rather than with --sort=-committerdate: annotated tags
+      // have no committer date of their own and would all sink to the end.
+      const refs = parsePublicRefLines(stdout).sort(
+        (a, b) => refDateMs(b.updatedAt) - refDateMs(a.updatedAt),
+      );
 
       return { status: 200, body: { refs } };
     },
@@ -1025,15 +1012,15 @@ export function createGitService(config) {
           pathspec: formatLiteralPathspec(pathValue),
           maxCount: readLimit,
         }),
-        { timeoutMs: config.gitTimeoutMs },
+        // Renames list both names per commit, and historical names are not
+        // bound by the path query limit.
+        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
       );
 
-      const allHashes = hashesStdout
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => /^[A-Fa-f0-9]{40}$/.test(line));
-      const truncated = allHashes.length > limit;
-      const hashes = truncated ? allHashes.slice(0, limit) : allHashes;
+      const followed = parseFollowedCommits(hashesStdout);
+      const truncated = followed.length > limit;
+      const commits = truncated ? followed.slice(0, limit) : followed;
+      const hashes = commits.map((commit) => commit.hash);
 
       // Step 2: pull the changed file list for the bounded set of commits in
       // a single `git log --no-walk` call. `--no-walk` makes git print only
@@ -1048,7 +1035,11 @@ export function createGitService(config) {
           relatedFilesNameLogArgs({ hashes }),
           { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
         );
-        const parsed = parseRelatedFilesRecords(nameStdout, pathValue);
+        const parsed = parseRelatedFilesRecords(
+          nameStdout,
+          pathValue,
+          new Map(commits.map((commit) => [commit.hash, commit.targetNames])),
+        );
         scannedCommits = parsed.scannedCommits;
         related = parsed.related;
       }
@@ -2010,7 +2001,7 @@ export function createGitService(config) {
         // actual file path.
         const record = raw.startsWith("\n") ? raw.slice(1) : raw;
         if (!record) continue; // empty record between NULs or trailing NUL
-        if (record.includes("\x1f")) {
+        if (NAME_LOG_HEADER_PATTERN.test(record)) {
           // Header record: %H\x1f%aI\x1f%aE
           // A new header starts a new commit; reset the per-commit path set so
           // the same path touched twice in one commit only counts once.
@@ -2171,13 +2162,39 @@ export function createGitService(config) {
 
 export async function resolveCommitishRevision(repo, revision, timeoutMs) {
   try {
+    // isValidGitRef only sees the name the client sent. Git resolves a short
+    // name as refs/<name> first, so `notes/commits` reaches refs/notes/commits,
+    // and a public symref can point anywhere. Check the ref Git picked; an
+    // empty result means the revision named an object, not a ref.
+    if (!isValidObjectId(revision)) {
+      const { stdout: fullName } = await runGit(repo, symbolicFullNameArgs(revision), {
+        timeoutMs,
+        maxBytes: 1024,
+      });
+      const resolvedName = fullName.trim();
+      // Empty output also covers an ambiguous short name, which Git resolves
+      // to refs/<name> first: the only candidate outside the public
+      // namespaces.
+      if (
+        resolvedName === ""
+          ? await isNonPublicRefsChild(repo, revision, timeoutMs)
+          : !isPublicFullRefName(resolvedName)
+      ) {
+        return {
+          ok: false,
+          result: { status: 404, body: { error: "Ref not found or not a commit" } },
+        };
+      }
+    }
     const { stdout } = await runGit(repo, commitishRevParseArgs(revision), {
       timeoutMs,
       maxBytes: 128,
     });
     return { ok: true, hash: stdout.trim() };
   } catch (error) {
-    if (error instanceof GitCommandError) {
+    // A timeout or overflow says nothing about the ref; let it reach the
+    // HTTP layer as a 504 instead of claiming the ref does not exist.
+    if (error instanceof GitCommandError && !error.timedOut && !error.truncated) {
       return {
         ok: false,
         result: { status: 404, body: { error: "Ref not found or not a commit" } },
@@ -2185,6 +2202,19 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
     }
     throw error;
   }
+}
+
+async function isNonPublicRefsChild(repo, revision, timeoutMs) {
+  const refName = `refs/${revision}`;
+  if (isPublicFullRefName(refName)) {
+    return false;
+  }
+  // for-each-ref also lists refs below the pattern; only an exact match is
+  // the ref Git would pick.
+  const { stdout } = await runGit(repo, ["for-each-ref", "--format=%(refname)", refName], {
+    timeoutMs,
+  });
+  return stdout.split("\n").includes(refName);
 }
 
 async function validateCommitObject(repo, hash, timeoutMs) {
@@ -2280,6 +2310,10 @@ export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathA
     "--",
     ...pathArgs,
   ];
+}
+
+export function symbolicFullNameArgs(revision) {
+  return ["rev-parse", "--verify", "--quiet", "--symbolic-full-name", "--end-of-options", revision];
 }
 
 export function commitishRevParseArgs(revision) {
@@ -2619,8 +2653,7 @@ export function appendRefFlightEvent(logs, repoId, event) {
 }
 
 function parseCommitRecords(stdout) {
-  return stdout
-    .split(COMMIT_RECORD_SEPARATOR)
+  return splitCommitRecords(stdout)
     .map((record) => record.trim())
     .filter(Boolean)
     .map((record) => {
@@ -2930,6 +2963,35 @@ function parseStatCount(value) {
 function parseCount(value) {
   const parsed = Number(value.trim());
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+// `*committerdate` is the date of the commit an annotated tag points to; the
+// tag object itself has no committer date.
+const PUBLIC_REF_FORMAT =
+  "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(committerdate:iso-strict)%00%(*committerdate:iso-strict)";
+
+function parsePublicRefLines(stdout) {
+  return stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [name, objectHash, peeledHash, updatedAt, peeledUpdatedAt] =
+        line.split(COMMIT_FIELD_SEPARATOR);
+      return {
+        name,
+        shortName: shortRefName(name),
+        hash: peeledHash || objectHash,
+        type: refType(name),
+        updatedAt: updatedAt || peeledUpdatedAt || null,
+      };
+    });
+}
+
+function refDateMs(value) {
+  const ms = value ? Date.parse(value) : Number.NaN;
+  // A finite floor keeps the comparator from returning NaN for two missing dates.
+  return Number.isNaN(ms) ? Number.MIN_SAFE_INTEGER : ms;
 }
 
 function shortRefName(refName) {
@@ -3426,8 +3488,7 @@ export function commitSummaryLogArgs({ since, until, revision, maxCount }) {
  * @returns {Array<{ hash: string, author: string, authorDate: string, subject: string, added: number, deleted: number, paths: string[] }>}
  */
 export function parseSummaryRecords(stdout) {
-  return stdout
-    .split(COMMIT_RECORD_SEPARATOR)
+  return splitCommitRecords(stdout)
     .map((record) => record.replace(/^\n+/, ""))
     .filter((record) => record.length > 0)
     .map((record) => {
@@ -3621,8 +3682,7 @@ export function fileHistoryLogArgs({ revision, pathspec, maxCount }) {
  * @returns {Array<{ hash: string, parents: string[], author: string, authorEmail: string, authorDate: string, subject: string, patch: string }>}
  */
 export function parseFileHistoryRecords(stdout) {
-  return stdout
-    .split(COMMIT_RECORD_SEPARATOR)
+  return splitCommitRecords(stdout)
     .map((record) => record.replace(/^\n+/, ""))
     .filter((record) => record.length > 0)
     .map((record) => {
@@ -3709,12 +3769,59 @@ export function relatedFilesHashLogArgs({ revision, pathspec, maxCount }) {
     "--no-ext-diff",
     "--no-textconv",
     "--no-color",
-    "--format=%H",
+    // The name-status list records the name the target had in each commit,
+    // including both sides of a rename, so pass 2 can tell the target's
+    // former names apart from co-changed files.
+    "--format=%x00%H",
+    "--name-status",
+    "-z",
     "--end-of-options",
     revision,
     "--",
     pathspec,
   ];
+}
+
+/**
+ * Parse `relatedFilesHashLogArgs` output into the followed commits, in log
+ * order, with the target's own path names in each commit.
+ *
+ * Stream: `\0<hash>\0\n<status>\0<path>[\0<path>]\0` per commit; renames and
+ * copies (`R…` / `C…`) carry two paths. Both sides of a rename are target
+ * names; for a copy only the destination is.
+ *
+ * @param {string} stdout
+ * @returns {Array<{ hash: string, targetNames: Set<string> }>}
+ */
+export function parseFollowedCommits(stdout) {
+  const tokens = stdout.split("\u0000");
+  const commits = [];
+  let current = null;
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index];
+    if (token === "" && /^[0-9a-f]{40}$/.test(tokens[index + 1] ?? "")) {
+      current = { hash: tokens[index + 1], targetNames: new Set() };
+      commits.push(current);
+      index += 2;
+      continue;
+    }
+    const status = token.replace(/^\n/, "");
+    if (current && /^[A-Z]/.test(status)) {
+      const pathCount = status.startsWith("R") || status.startsWith("C") ? 2 : 1;
+      // A rename source is the target's former name. A copy source is a
+      // separate file that still exists, so only the destination counts.
+      const firstTargetOffset = status.startsWith("C") ? 2 : 1;
+      for (let offset = firstTargetOffset; offset <= pathCount; offset += 1) {
+        const name = tokens[index + offset];
+        if (name) current.targetNames.add(name);
+      }
+      index += 1 + pathCount;
+      continue;
+    }
+    index += 1;
+  }
+  return commits;
 }
 
 /**
@@ -3814,8 +3921,7 @@ export function rangeHistoryLogArgs({ lineStart, lineEnd, path: filePath, revisi
  * @returns {Array<{ hash: string, author: string, authorDate: string, subject: string, body: string }>}
  */
 export function parseRangeHistoryRecords(stdout) {
-  return stdout
-    .split("\x1e")
+  return splitCommitRecords(stdout)
     .map((record) => record.replace(/^\n+/, ""))
     .filter((record) => record.length > 0)
     .map((record) => {
@@ -3872,7 +3978,7 @@ export function extractUrlsFromBody(body) {
   return results;
 }
 
-export function parseRelatedFilesRecords(stdout, targetPath) {
+export function parseRelatedFilesRecords(stdout, targetPath, targetNamesByHash = new Map()) {
   // Stream: `\0<hash>\0<authorDate>\0[\n<path>\0<path>\0…]` per commit. Names
   // are NUL-terminated and never C-quoted, so they are used verbatim.
   const tokens = stdout.split("\u0000");
@@ -3895,13 +4001,15 @@ export function parseRelatedFilesRecords(stdout, targetPath) {
 
     /** @type {Set<string>} */
     const seenInCommit = new Set();
+    // Names the target itself had in this commit (e.g. before a rename).
+    const targetNames = targetNamesByHash.get(hash);
     let first = true;
     for (; index < tokens.length && tokens[index] !== ""; index += 1) {
       // Git separates the format line from the name list with one newline.
       const filePath = first ? tokens[index].replace(/^\n/, "") : tokens[index];
       first = false;
       if (!filePath) continue;
-      if (filePath === targetPath) continue;
+      if (filePath === targetPath || targetNames?.has(filePath)) continue;
       if (seenInCommit.has(filePath)) continue;
       seenInCommit.add(filePath);
 
@@ -4267,7 +4375,8 @@ export function symbolHistoryLogArgs({ funcname, path: filePath, revision, maxCo
     "--no-patch",
     `--format=%x1e%H%x00%an%x00%aI%x00%s%x00%b%x00`,
     `--find-renames`,
-    `-L:${funcname}:${filePath}`,
+    // Git ends the funcname at the first unescaped `:`.
+    `-L:${funcname.replaceAll(":", "\\:")}:${filePath}`,
     `--end-of-options`,
     revision,
   ];
@@ -4300,8 +4409,7 @@ export function symbolHistoryLogArgs({ funcname, path: filePath, revision, maxCo
  * }>}
  */
 export function parseSymbolHistoryRecords(stdout) {
-  return stdout
-    .split("\x1e")
+  return splitCommitRecords(stdout)
     .map((record) => record.replace(/^\n+/, ""))
     .filter((record) => record.length > 0)
     .map((record) => {

@@ -30,8 +30,10 @@ test("relatedFilesHashLogArgs preserves hardening surface and option terminator"
   assert.ok(args.includes("--no-textconv"));
   assert.ok(args.includes("--no-color"));
   assert.ok(args.includes("--max-count=31"));
-  // Format must emit hash only — no metadata, no patch.
-  assert.ok(args.includes("--format=%H"));
+  // Format must emit the hash and the target's names only — no patch.
+  assert.ok(args.includes("--format=%x00%H"));
+  assert.ok(args.includes("--name-status"));
+  assert.ok(args.includes("-z"));
   assert.ok(!args.includes("--patch"));
   // Option parsing must terminate before the resolved revision; the pathspec
   // must come after `--`.
@@ -524,6 +526,135 @@ test("getRelatedFiles caps limit at RELATED_FILES_MAX_LIMIT", async () => {
     // honours the natural commit count of the repo.
     assert.equal(result.body.scannedCommits, 1);
     assert.equal(result.body.related.length, 0);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getRelatedFiles does not list the target's former names as related", async () => {
+  const repoPath = createTempPath("rtgv-related-files-rename-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeFiles(repoPath, { "d/old name.txt": "x\n", "s.txt": "y\n" });
+    git(repoPath, "add", ".");
+    git(repoPath, "commit", "-m", "feat: add");
+    writeFiles(repoPath, { "d/old name.txt": "x\nx2\n", "s.txt": "y\ny2\n" });
+    git(repoPath, "commit", "-am", "fix: both");
+    git(repoPath, "mv", "d/old name.txt", "d/new name.txt");
+    git(repoPath, "commit", "-m", "refactor: rename");
+    writeFiles(repoPath, { "d/new name.txt": "x\nx2\nx3\n", "s.txt": "y\ny2\ny3\n" });
+    git(repoPath, "commit", "-am", "fix: both again");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+    const result = await service.getRelatedFiles(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ path: "d/new name.txt" }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.scannedCommits, 4);
+    assert.equal(result.body.truncated, false);
+    assert.deepEqual(
+      result.body.related.map((entry) => [entry.path, entry.coChangeCount]),
+      [["s.txt", 3]],
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getRelatedFiles keeps the source of a copy as a co-changed file", async () => {
+  const repoPath = createTempPath("rtgv-related-files-copy-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    const body = Array.from({ length: 20 }, (_, index) => `line ${index}\n`).join("");
+    writeFiles(repoPath, { "Bar.txt": body });
+    git(repoPath, "add", ".");
+    git(repoPath, "commit", "-m", "feat: bar");
+    // One commit edits Bar.txt and copies it to Copy.txt (detected as C).
+    writeFiles(repoPath, { "Bar.txt": `${body}more\n`, "Copy.txt": body });
+    git(repoPath, "add", ".");
+    git(repoPath, "commit", "-m", "feat: copy");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+    const followed = git(
+      repoPath,
+      "log",
+      "--follow",
+      "--find-renames",
+      "--find-copies",
+      "--format=",
+      "--name-status",
+      "--",
+      "Copy.txt",
+    );
+    assert.match(followed, /^C\d+\tBar\.txt\tCopy\.txt$/m);
+
+    const result = await service.getRelatedFiles(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ path: "Copy.txt" }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.deepEqual(
+      result.body.related.map((entry) => [entry.path, entry.coChangeCount]),
+      [["Bar.txt", 1]],
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getRelatedFiles reads long rename chains beyond the default git output cap", async () => {
+  const repoPath = createTempPath("rtgv-related-files-long-renames-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    // Built with fast-import so the long historical paths never touch the
+    // filesystem (and its PATH_MAX). Each rename lists both names in the
+    // follow pass: 50 renames x 2 x ~3 KB is well past 256 KB.
+    const longDir = Array.from({ length: 15 }, (_, index) => `${"d".repeat(195)}${index}`).join("/");
+    const name = (index) => `${longDir}/file-${index}.txt`;
+    let stream = "";
+    let mark = 0;
+    const commit = (message, body) => {
+      mark += 1;
+      stream += `commit refs/heads/main\nmark :${mark}\n`;
+      stream += `committer Alice <alice@example.test> ${1_700_000_000 + mark} +0000\n`;
+      stream += `data ${Buffer.byteLength(message)}\n${message}\n`;
+      if (mark > 1) stream += `from :${mark - 1}\n`;
+      stream += body;
+    };
+    commit("add", `M 100644 inline ${name(0)}\ndata 2\nx\nM 100644 inline s.txt\ndata 2\ny\n`);
+    for (let index = 1; index < RELATED_FILES_MAX_LIMIT; index += 1) {
+      commit(`rename ${index}`, `R "${name(index - 1)}" "${name(index)}"\n`);
+    }
+    // The current name has to pass the 200-character path query limit.
+    const target = "target.txt";
+    commit("rename to target", `R "${name(RELATED_FILES_MAX_LIMIT - 1)}" "${target}"\n`);
+    const imported = spawnSync("git", ["fast-import", "--quiet"], { cwd: repoPath, input: stream });
+    assert.equal(imported.status, 0, String(imported.stderr));
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 10_000,
+      diffMaxBytes: 4_000_000,
+    });
+    const result = await service.getRelatedFiles(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ path: target, limit: String(RELATED_FILES_MAX_LIMIT) }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.truncated, true);
+    assert.deepEqual(result.body.related, []);
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }

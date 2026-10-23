@@ -404,3 +404,27 @@ test("exported hotspot constants are numeric and within expected ranges", () => 
   assert.equal(HOTSPOT_DEFAULT_COMMIT_CAP, 200);
   assert.equal(HOTSPOT_MAX_COMMIT_CAP, 500);
 });
+
+test("counts files whose names contain the header separator", async () => {
+  const repoPath = createTempPath("rtgv-hotspot-sep-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "a.txt", "a\n", "feat: a");
+    writeAndCommit(repoPath, "we\x1fird.txt", "w\n", "feat: weird");
+    writeAndCommit(repoPath, "b.txt", "b\n", "feat: b");
+
+    const result = await makeService().getFileHotspot(
+      { id: "demo", name: "demo", path: repoPath },
+      { ref: "HEAD", limit: 50, commitCap: 500, since: null },
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.scope.commitsAnalyzed, 3);
+    assert.deepEqual(
+      result.body.files.map((file) => file.path).sort(),
+      ["a.txt", "b.txt", "we\x1fird.txt"],
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});

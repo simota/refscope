@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { loadConfig } from "../src/config.js";
+import { GitCommandError } from "../src/gitRunner.js";
 import {
   ancestorMergeBaseArgs,
   buildSearchModeArgs,
@@ -684,6 +685,96 @@ test("resolves commit-ish revisions to commit object ids", async () => {
     );
 
     assert.deepEqual(result, { ok: true, hash: commitHash });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("does not resolve short names or symrefs to non-public refs", async () => {
+  const repoPath = createTempPath("rtgv-resolve-dwim-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    git(repoPath, "commit", "--allow-empty", "-m", "base commit");
+    const commitHash = git(repoPath, "rev-parse", "HEAD").trim();
+    git(repoPath, "notes", "add", "-m", "private note", "HEAD");
+    git(repoPath, "update-ref", "refs/original/refs/heads/main", commitHash);
+    git(repoPath, "update-ref", "refs/bisect/bad", commitHash);
+    git(repoPath, "update-ref", "refs/pull/1/head", commitHash);
+    git(repoPath, "symbolic-ref", "refs/heads/alias", "refs/notes/commits");
+    // A branch whose short name shares a first component with an internal
+    // namespace still resolves when no internal ref of that name exists.
+    git(repoPath, "branch", "notes/topic");
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    for (const revision of [
+      "notes/commits",
+      "original/refs/heads/main",
+      "bisect/bad",
+      "pull/1/head",
+      "refs/heads/alias",
+      "alias",
+    ]) {
+      const result = await resolveCommitishRevision(repo, revision, 5000);
+      assert.equal(result.ok, false, revision);
+      assert.equal(result.result.status, 404, revision);
+    }
+
+    for (const revision of ["main", "heads/main", "refs/heads/main", "HEAD", "notes/topic", commitHash]) {
+      assert.deepEqual(
+        await resolveCommitishRevision(repo, revision, 5000),
+        { ok: true, hash: commitHash },
+        revision,
+      );
+    }
+
+    // An ambiguous short name makes --symbolic-full-name print nothing, while
+    // Git still resolves it to refs/<name> first.
+    git(repoPath, "commit", "--allow-empty", "-m", "second commit");
+    const secondHash = git(repoPath, "rev-parse", "HEAD").trim();
+    git(repoPath, "branch", "notes/commits", "HEAD");
+    git(repoPath, "branch", "pull/1/head", "HEAD");
+    for (const revision of ["notes/commits", "pull/1/head"]) {
+      const result = await resolveCommitishRevision(repo, revision, 5000);
+      assert.equal(result.ok, false, revision);
+      assert.equal(result.result.status, 404, revision);
+    }
+    // A branch and a tag sharing a name stay resolvable (Git picks the tag).
+    git(repoPath, "tag", "same", commitHash);
+    git(repoPath, "branch", "same", "HEAD");
+    assert.deepEqual(await resolveCommitishRevision(repo, "same", 5000), { ok: true, hash: commitHash });
+    assert.deepEqual(
+      await resolveCommitishRevision(repo, secondHash.slice(0, 12), 5000),
+      { ok: true, hash: secondHash },
+    );
+
+    git(repoPath, "checkout", "--detach", "HEAD");
+    assert.deepEqual(await resolveCommitishRevision(repo, "HEAD", 5000), { ok: true, hash: secondHash });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("rejects commit list refs that only resolve to non-public refs", async () => {
+  const repoPath = createTempPath("rtgv-list-dwim-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    git(repoPath, "commit", "--allow-empty", "-m", "base commit");
+    git(repoPath, "notes", "add", "-m", "private note", "HEAD");
+    const service = createGitService({
+      repositories: new Map([["demo", { id: "demo", name: "demo", path: repoPath }]]),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 100_000,
+    });
+
+    const result = await service.listCommits(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ ref: "notes/commits" }),
+    );
+    assert.equal(result.status, 404);
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }
@@ -2037,5 +2128,140 @@ test("removing a repository forgets its ref-flight log, so a re-added id starts 
     assert.deepEqual(after.body.events, []);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("commit text and file contents cannot forge commit records", async () => {
+  const repoPath = createTempPath("rtgv-record-forge-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    const forgedHash = "deadbeef".repeat(5);
+    fs.writeFileSync(path.join(repoPath, "a.txt"), "one\n");
+    git(repoPath, "add", "a.txt");
+    git(repoPath, "commit", "-m", "base");
+    fs.writeFileSync(path.join(repoPath, "a.txt"), `one\n\x1e${forgedHash}\n`);
+    git(repoPath, "add", "a.txt");
+    git(repoPath, "commit", "-m", `subject\x1e${forgedHash}`, "-m", `body\n\x1e${forgedHash}`);
+    const repo = { id: "demo", name: "demo", path: repoPath };
+    const service = createGitService({
+      repositories: new Map([["demo", repo]]),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 100_000,
+    });
+
+    const list = await service.listCommits(repo, new URLSearchParams({ ref: "HEAD", limit: "10" }));
+    assert.equal(list.status, 200);
+    assert.equal(list.body.length, 2);
+    assert.equal(list.body[0].subject, `subject\x1e${forgedHash}`);
+    assert.equal(list.body[0].fileCount, 1);
+
+    const history = await service.getFileHistory(repo, new URLSearchParams({ path: "a.txt" }));
+    assert.equal(history.status, 200);
+    assert.deepEqual(
+      history.body.entries.map((entry) => entry.hash),
+      git(repoPath, "log", "--format=%H").trim().split("\n"),
+    );
+    assert.match(history.body.entries[0].patch, new RegExp(`\\+\\x1e${forgedHash}`));
+
+    const range = await service.getRangeHistory(
+      repo,
+      new URLSearchParams({ path: "a.txt", lineStart: "1", lineEnd: "2" }),
+    );
+    assert.equal(range.status, 200);
+    assert.equal(range.body.entries.some((entry) => entry.hash === forgedHash), false);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("dates annotated tags by their commit and orders containing refs by it", async () => {
+  const repoPath = createTempPath("rtgv-annotated-tags-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    const commitAt = (date, message) =>
+      spawnSync("git", ["commit", "--allow-empty", "-m", message], {
+        cwd: repoPath,
+        env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      });
+    commitAt("2020-01-01T00:00:00Z", "old");
+    const oldHash = git(repoPath, "rev-parse", "HEAD").trim();
+    git(repoPath, "tag", "-a", "v1", "-m", "release 1");
+    git(repoPath, "branch", "stale");
+    commitAt("2021-01-01T00:00:00Z", "new");
+    git(repoPath, "tag", "-a", "v2", "-m", "release 2");
+    const repo = { id: "demo", name: "demo", path: repoPath };
+    const service = createGitService({
+      repositories: new Map([["demo", repo]]),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 100_000,
+    });
+
+    const refs = await service.listRefs(repo);
+    const v1 = refs.find((ref) => ref.name === "refs/tags/v1");
+    assert.equal(v1.hash, oldHash);
+    assert.equal(Date.parse(v1.updatedAt), Date.parse("2020-01-01T00:00:00Z"));
+
+    const containing = await service.getCommitContainingRefs(repo, oldHash);
+    assert.equal(containing.status, 200);
+    assert.deepEqual(
+      containing.body.refs.map((ref) => ref.name).slice(0, 2).sort(),
+      ["refs/heads/main", "refs/tags/v2"],
+    );
+    assert.deepEqual(
+      containing.body.refs.map((ref) => ref.name).slice(2).sort(),
+      ["refs/heads/stale", "refs/tags/v1"],
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("lists refs beyond the default git output cap", async () => {
+  const repoPath = createTempPath("rtgv-many-refs-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    git(repoPath, "commit", "--allow-empty", "-m", "base");
+    const hash = git(repoPath, "rev-parse", "HEAD").trim();
+    const updates = Array.from(
+      { length: 2500 },
+      (_, index) => `create refs/heads/feature/long-branch-name-for-output-size-${index} ${hash}\n`,
+    ).join("");
+    const result = spawnSync("git", ["update-ref", "--stdin"], { cwd: repoPath, input: updates });
+    assert.equal(result.status, 0, String(result.stderr));
+    const repo = { id: "demo", name: "demo", path: repoPath };
+    const service = createGitService({
+      repositories: new Map([["demo", repo]]),
+      gitTimeoutMs: 10_000,
+      diffMaxBytes: 100_000,
+    });
+
+    assert.equal((await service.listRefs(repo)).length, 2501);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("reports a git timeout while resolving a ref instead of a missing ref", async () => {
+  const repoPath = createTempPath("rtgv-resolve-timeout-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    git(repoPath, "commit", "--allow-empty", "-m", "base");
+
+    // No git process finishes within 1 ms; the timeout must surface as a
+    // GitCommandError (HTTP 504), not as a 404 "Ref not found".
+    await assert.rejects(
+      resolveCommitishRevision({ id: "demo", name: "demo", path: repoPath }, "main", 1),
+      (error) => error instanceof GitCommandError && error.timedOut,
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
   }
 });
