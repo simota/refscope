@@ -388,17 +388,16 @@ export default function App() {
       setRepositories((prev) => prev.filter((r) => r.id !== repoId));
       evictRepo(repoId);
       if (selectedRepo === repoId) {
-        setSelectedRepo((prev) => {
-          // Pick the first remaining repo after eviction, or fall back to "".
-          const remaining = repositories.filter((r) => r.id !== repoId);
-          return remaining[0]?.id ?? (prev === repoId ? "" : prev);
-        });
+        // Go through switchRepo so the removed repo's compare refs, selection
+        // and pending live events are reset like on any other repo switch.
+        const remaining = repositories.filter((r) => r.id !== repoId);
+        switchRepo(remaining[0]?.id ?? "");
       }
       return { ok: true as const };
     }
     return { ok: false as const, error: result.error };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [evictRepo, selectedRepo, repositories]);
+  }, [evictRepo, selectedRepo, repositories, switchRepo]);
   const [selectedRef, setSelectedRef] = useState("HEAD");
   const [selected, setSelected] = useState("");
   const [detail, setDetail] = useState<CommitDetail | null>(null);
@@ -576,9 +575,20 @@ export default function App() {
     livePausedRef.current = livePaused;
   }, [livePaused]);
 
+  // Any change to what the timeline shows invalidates in-flight live
+  // refreshes, so a refresh started for ref A cannot overwrite (or snap the
+  // selection back from) ref B or a newer filter.
   useEffect(() => {
     timelineGenerationRef.current += 1;
-  }, [selectedRepo]);
+  }, [
+    selectedRepo,
+    selectedRef,
+    debouncedSearch,
+    debouncedAuthor,
+    debouncedPath,
+    searchMode,
+    debouncedSearchPattern,
+  ]);
 
   useEffect(() => {
     selectedRefRef.current = selectedRef;
@@ -920,7 +930,20 @@ export default function App() {
   useEffect(() => {
     if (!selectedRepo) return;
     const source = new EventSource(eventsUrl(selectedRepo));
-    source.addEventListener("connected", () => setEventStatus("connected"));
+    let hasConnected = false;
+    source.addEventListener("connected", () => {
+      setEventStatus("connected");
+      if (hasConnected) {
+        // Each connection diffs against a fresh server-side snapshot, so
+        // changes made while EventSource was reconnecting emit no events.
+        // Resync once instead of staying stale until the next change.
+        const notice = "Reconnected";
+        handleRealtimeEvent(notice, () => setEventNotice(notice));
+        scheduleDriftRefresh(selectedRepo);
+        setFlightRefreshKey((value) => value + 1);
+      }
+      hasConnected = true;
+    });
     source.addEventListener("commit_added", (event) => {
       const data = parseEvent(event);
       const notice = `New commit on ${eventRefName(data)}`;
@@ -990,11 +1013,16 @@ export default function App() {
       });
     }
     source.onerror = (event) => {
-      setEventStatus("error");
+      // The server reports a failed poll as an `error` event on a stream that
+      // stays open, and EventSource delivers it here too. Only a transport
+      // failure (no payload) means the stream itself is down; a later
+      // `connected` restores the status.
       const streamError = parseStreamErrorEvent(event);
       if (streamError) {
         setError(streamError);
+        return;
       }
+      setEventStatus("error");
     };
     return () => source.close();
     // `scheduleDriftRefresh` and other callbacks read from refs/state via
@@ -1210,16 +1238,24 @@ export default function App() {
     // while the request is in flight, the generation moves on and the stale
     // result is discarded before any state write below.
     const generation = timelineGenerationRef.current;
-    const { nextRefs, nextRef, nextCommits } = await loadRepositoryState(
-      repoId,
-      ref,
-      searchTerm,
-      authorTerm,
-      pathTerm,
-      mode,
-      pattern,
-    );
+    let state: Awaited<ReturnType<typeof loadRepositoryState>>;
+    try {
+      state = await loadRepositoryState(
+        repoId,
+        ref,
+        searchTerm,
+        authorTerm,
+        pathTerm,
+        mode,
+        pattern,
+      );
+    } catch (err) {
+      // A stale request's failure must not surface over the current view.
+      if (generation !== timelineGenerationRef.current) return;
+      throw err;
+    }
     if (generation !== timelineGenerationRef.current) return;
+    const { nextRefs, nextRef, nextCommits } = state;
     setRefs(nextRefs);
     setSelectedRef(nextRef);
     const markedCommits = markRealtimeNewCommits(nextCommits, realtimeNewCommitHashesRef.current);
@@ -1313,9 +1349,14 @@ export default function App() {
   const toggleLiveUpdates = useCallback(() => {
     if (!livePaused) {
       // pause 時は button の aria-pressed + label 変化が SR に伝わるので無音 (Calm)。
+      // Update the ref synchronously: the mirroring effect runs only after
+      // the next commit, and an SSE event arriving in between would otherwise
+      // be applied (on pause) or queued after the flush (on resume).
+      livePausedRef.current = true;
       setLivePaused(true);
       return;
     }
+    livePausedRef.current = false;
     setLivePaused(false);
     if (pendingUpdates > 0) {
       // resume + 適用件数を 1 件のメッセージとして polite に通知。

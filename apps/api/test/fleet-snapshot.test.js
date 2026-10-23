@@ -433,3 +433,83 @@ test("HTTP route: GET /api/fleet/snapshot returns 200 with correct structure", a
     fs.rmSync(repoPath, { recursive: true, force: true });
   }
 });
+
+test("unborn HEAD reports ok with zero commits instead of git_error", async () => {
+  const repoPath = createTempPath("rtgv-fleet-unborn-");
+  try {
+    initRepo(repoPath);
+
+    const svc = await realGitService(repoPath);
+    const config = {
+      repositories: new Map([["fresh", { id: "fresh", name: "fresh", path: repoPath }]]),
+    };
+    const snapshot = await createFleetService(config, svc).getFleetSnapshot({});
+
+    assert.equal(validate(snapshot, schema), null);
+    assert.deepEqual(
+      {
+        status: snapshot.repos[0].status,
+        headShortSha: snapshot.repos[0].headShortSha,
+        commits24h: snapshot.repos[0].commits24h,
+        worktreeDirty: snapshot.repos[0].worktreeDirty,
+      },
+      { status: "ok", headShortSha: null, commits24h: 0, worktreeDirty: null },
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("snapshot does not leave its per-repo timeout timer pending", async () => {
+  const countTimers = () =>
+    process.getActiveResourcesInfo().filter((type) => type === "Timeout").length;
+  const svc = {
+    getHeadShortSha: async () => "aabbccd",
+    getCommits24hCount: async () => 0,
+    getWorktreeDirtyBoolean: async () => false,
+  };
+  const config = {
+    repositories: new Map([["svc1", { id: "svc1", name: "svc1", path: os.tmpdir() }]]),
+  };
+  const before = countTimers();
+  const snapshot = await createFleetService(config, svc).getFleetSnapshot({});
+  assert.equal(snapshot.repos[0].status, "ok");
+  assert.equal(countTimers(), before);
+});
+
+test("fleet probes share one per-repo deadline instead of adding up", async () => {
+  // Each probe alone fits in the 5 s window; run one after another they
+  // would not (2.6 s + 2.6 s).
+  const slow = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 2600));
+  const svc = {
+    getHeadShortSha: () => slow("aabbccd"),
+    getCommits24hCount: () => slow(3),
+    getWorktreeDirtyBoolean: () => slow(false),
+  };
+  const config = {
+    repositories: new Map([["svc1", { id: "svc1", name: "svc1", path: os.tmpdir() }]]),
+  };
+  const snapshot = await createFleetService(config, svc).getFleetSnapshot({});
+  assert.equal(snapshot.repos[0].status, "ok");
+  assert.equal(snapshot.repos[0].commits24h, 3);
+});
+
+test("a corrupt branch ref reports git_error, not an unborn ok", async () => {
+  const repoPath = createTempPath("rtgv-fleet-corrupt-");
+  try {
+    initRepo(repoPath);
+    writeAndCommit(repoPath, "README.md", "hello\n", "chore: seed");
+    // HEAD -> refs/heads/<branch>, whose content is not an object name.
+    const branch = git(repoPath, "rev-parse", "--abbrev-ref", "HEAD").trim();
+    fs.writeFileSync(path.join(repoPath, ".git", "refs", "heads", branch), "deadbeef\n");
+
+    const svc = await realGitService(repoPath);
+    const config = {
+      repositories: new Map([["broken", { id: "broken", name: "broken", path: repoPath }]]),
+    };
+    const snapshot = await createFleetService(config, svc).getFleetSnapshot({});
+    assert.equal(snapshot.repos[0].status, "git_error");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});

@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { loadConfig, mergeRepositoryAllowlist, parseRepositoryAllowlist } from "../src/config.js";
+import { loadConfig, mergeRepositoryAllowlist, parseRepositoryAllowlist, removeRepository } from "../src/config.js";
+import { loadPersistedRepos } from "../src/reposStore.js";
 import {
   isValidGitRef,
   isValidObjectId,
@@ -449,25 +450,114 @@ test("mergeRepositoryAllowlist: env entry wins over persisted entry with same id
   }
 });
 
-test("mergeRepositoryAllowlist: realPath collision between env and persisted throws", () => {
+function mergeQuietly(envEntries, persistedEntries) {
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    return { merged: mergeRepositoryAllowlist(envEntries, persistedEntries), warnings };
+  } finally {
+    console.warn = origWarn;
+  }
+}
+
+test("mergeRepositoryAllowlist: persisted entry whose realPath is claimed by env is skipped, not fatal", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rtgv-merge-clash-"));
   try {
     const repoPath = path.join(tempDir, "repo");
     fs.mkdirSync(path.join(repoPath, ".git"), { recursive: true });
     const realPath = fs.realpathSync(repoPath);
 
+    // e.g. `refscope --repo X` (env id "cli") after X was added via the UI.
     const envEntries = new Map([
-      ["env-id", { id: "env-id", path: realPath, name: "repo", origin: "env" }],
+      ["cli", { id: "cli", path: realPath, name: "repo", origin: "env" }],
     ]);
-    // Persisted entry has a different id but resolves to the same realPath
     const persistedEntries = [
       { id: "ui-id", path: realPath, addedAt: "2026-01-01T00:00:00.000Z" },
     ];
 
-    assert.throws(
-      () => mergeRepositoryAllowlist(envEntries, persistedEntries),
-      /Duplicate repository path/,
+    const { merged, warnings } = mergeQuietly(envEntries, persistedEntries);
+    assert.deepEqual([...merged.keys()], ["cli"]);
+    assert.equal(merged.get("cli").origin, "env");
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /ui-id: path already registered as cli/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("mergeRepositoryAllowlist: later persisted entry with a duplicate id or realPath is skipped", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rtgv-merge-persisted-dup-"));
+  try {
+    const first = path.join(tempDir, "first");
+    const second = path.join(tempDir, "second");
+    fs.mkdirSync(path.join(first, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(second, ".git"), { recursive: true });
+    const firstReal = fs.realpathSync(first);
+    const secondReal = fs.realpathSync(second);
+
+    // Two instances writing the same store can produce both shapes.
+    const persistedEntries = [
+      { id: "x", path: firstReal, addedAt: "2026-01-01T00:00:00.000Z" },
+      { id: "y", path: firstReal, addedAt: "2026-01-02T00:00:00.000Z" },
+      { id: "x", path: secondReal, addedAt: "2026-01-03T00:00:00.000Z" },
+    ];
+
+    const { merged, warnings } = mergeQuietly(new Map(), persistedEntries);
+    assert.deepEqual([...merged.keys()], ["x"]);
+    assert.equal(merged.get("x").path, firstReal);
+    assert.equal(warnings.length, 2);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("mergeRepositoryAllowlist: persisted entry with an invalid repo id is skipped", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rtgv-merge-bad-id-"));
+  try {
+    const repoPath = path.join(tempDir, "repo");
+    fs.mkdirSync(path.join(repoPath, ".git"), { recursive: true });
+    const realPath = fs.realpathSync(repoPath);
+
+    // The HTTP layer rejects such ids, so the entry could never be
+    // selected or removed from the UI.
+    const persistedEntries = [
+      { id: "../bad id", path: realPath, addedAt: "2026-01-01T00:00:00.000Z" },
+    ];
+
+    const { merged, warnings } = mergeQuietly(new Map(), persistedEntries);
+    assert.equal(merged.size, 0);
+    assert.match(warnings[0], /invalid id/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig starts when the persisted store repeats an RTGV_REPOS path", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rtgv-load-clash-"));
+  try {
+    const repoPath = path.join(tempDir, "repo");
+    fs.mkdirSync(path.join(repoPath, ".git"), { recursive: true });
+    const realPath = fs.realpathSync(repoPath);
+    const configHome = path.join(tempDir, "config");
+    fs.mkdirSync(path.join(configHome, "refscope"), { recursive: true });
+    fs.writeFileSync(
+      path.join(configHome, "refscope", "repos.json"),
+      JSON.stringify({
+        version: 1,
+        repos: [{ id: "repo", path: realPath, addedAt: "2026-01-01T00:00:00.000Z" }],
+      }),
     );
+
+    const origWarn = console.warn;
+    console.warn = () => {};
+    let config;
+    try {
+      config = loadConfig({ RTGV_REPOS: `cli=${realPath}`, XDG_CONFIG_HOME: configHome });
+    } finally {
+      console.warn = origWarn;
+    }
+    assert.deepEqual([...config.repositories.keys()], ["cli"]);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -512,5 +602,46 @@ test("mergeRepositoryAllowlist: env 16 + persisted 17 (union 33) throws", () => 
     );
   } finally {
     cleanup();
+  }
+});
+
+test("removing a repository also drops same-path store entries skipped at startup", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rtgv-remove-dup-"));
+  try {
+    const repoPath = path.join(tempDir, "repo");
+    fs.mkdirSync(path.join(repoPath, ".git"), { recursive: true });
+    const realPath = fs.realpathSync(repoPath);
+    const configHome = path.join(tempDir, "config");
+    fs.mkdirSync(path.join(configHome, "refscope"), { recursive: true });
+    fs.writeFileSync(
+      path.join(configHome, "refscope", "repos.json"),
+      JSON.stringify({
+        version: 1,
+        repos: [
+          { id: "a", path: realPath, addedAt: "2026-01-01T00:00:00.000Z" },
+          { id: "b", path: realPath, addedAt: "2026-01-02T00:00:00.000Z" },
+        ],
+      }),
+    );
+    const env = { RTGV_REPOS: "", XDG_CONFIG_HOME: configHome };
+
+    const origWarn = console.warn;
+    console.warn = () => {};
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = configHome;
+    try {
+      const config = loadConfig(env);
+      assert.deepEqual([...config.repositories.keys()], ["a"]);
+      removeRepository("a");
+      // "b" must not resurrect the removed repository on the next start.
+      assert.deepEqual(loadPersistedRepos(env), []);
+      assert.equal(loadConfig(env).repositories.size, 0);
+    } finally {
+      console.warn = origWarn;
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

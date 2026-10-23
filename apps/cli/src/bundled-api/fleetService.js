@@ -130,24 +130,35 @@ async function getFleetRepoSnapshot(repoId, repoPath, window, gitService) {
 
   /** Wraps the git data collection so we can race it against a timeout. */
   async function collectGitFacts() {
-    const [headShortSha, commits24h, worktreeDirty] = await Promise.all([
+    // All three probes run in parallel so their latencies share one
+    // per-repo deadline instead of adding up.
+    const [head, commits, dirty] = await Promise.allSettled([
       gitService.getHeadShortSha(repoPath),
       gitService.getCommits24hCount(repoPath, sinceISO),
       gitService.getWorktreeDirtyBoolean(repoPath),
     ]);
-    return { headShortSha, commits24h, worktreeDirty };
+    if (head.status === "rejected") throw head.reason;
+    if (head.value === null) {
+      // Unborn HEAD (freshly initialised repo): the HEAD-relative probes
+      // fail by design; there are no commits and nothing to diff against.
+      return { headShortSha: null, commits24h: 0, worktreeDirty: null };
+    }
+    if (commits.status === "rejected") throw commits.reason;
+    if (dirty.status === "rejected") throw dirty.reason;
+    return { headShortSha: head.value, commits24h: commits.value, worktreeDirty: dirty.value };
   }
 
   /**
    * Per-repo 5s timeout (proposal §5.6).
    * Promise.race ensures a slow git call in one repo cannot block the others.
    */
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(
+  let timeoutTimer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutTimer = setTimeout(
       () => reject(Object.assign(new Error("Fleet repo timeout"), { isFleetTimeout: true })),
       REPO_TIMEOUT_MS,
-    ),
-  );
+    );
+  });
 
   try {
     const { headShortSha, commits24h, worktreeDirty } = await Promise.race([
@@ -189,6 +200,9 @@ async function getFleetRepoSnapshot(repoId, repoPath, window, gitService) {
       ...nullRepoFields(),
       status: "git_error",
     };
+  } finally {
+    // Without this, every snapshot leaves one 5 s timer pending per repo.
+    clearTimeout(timeoutTimer);
   }
 }
 

@@ -93,6 +93,9 @@ export function loadPersistedRepos(env = process.env) {
 
 /**
  * Append a new repository entry to the store file.
+ * A stored entry with the same id is replaced: the caller has already checked
+ * that the id is not active in memory, so any such entry is stale (e.g. one
+ * skipped at startup) and keeping it would shadow the new one on next load.
  * Creates the parent directory (mode 0o700) and the file (mode 0o600) if absent.
  * Uses an atomic tmp-file → rename write to avoid partial writes on crash.
  *
@@ -107,7 +110,8 @@ export function appendRepo(entry, env = process.env) {
   }
 
   const current = _readStore(storePath);
-  const updated = { version: STORE_VERSION, repos: [...current.repos, entry] };
+  const repos = current.repos.filter((r) => r.id !== entry.id);
+  const updated = { version: STORE_VERSION, repos: [...repos, entry] };
   _atomicWrite(storePath, updated);
 }
 
@@ -115,18 +119,25 @@ export function appendRepo(entry, env = process.env) {
  * Remove a repository entry from the store file by id.
  * If the id does not exist in the store the operation is a no-op.
  *
+ * When `repoPath` is given, entries for the same repository under other ids
+ * are dropped too. Those were skipped at startup as duplicates, and would
+ * otherwise bring the removed repository back on the next start.
+ *
  * @param {string} id
  * @param {{ XDG_CONFIG_HOME?: string, HOME?: string } & NodeJS.ProcessEnv} [env]
+ * @param {string} [repoPath] canonical path of the removed repository
  * @returns {void}
  */
-export function removeRepo(id, env = process.env) {
+export function removeRepo(id, env = process.env, repoPath) {
   const storePath = resolveStorePath(env);
   if (!storePath) {
     throw new Error("[reposStore] Cannot persist: HOME directory is not set");
   }
 
   const current = _readStore(storePath);
-  const filtered = current.repos.filter((r) => r.id !== id);
+  const filtered = current.repos.filter(
+    (r) => r.id !== id && (repoPath === undefined || canonicalPath(r.path) !== repoPath),
+  );
   if (filtered.length === current.repos.length) {
     // Entry not present — no-op (caller responsibility to check existence).
     return;
@@ -137,6 +148,14 @@ export function removeRepo(id, env = process.env) {
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
+
+function canonicalPath(repoPath) {
+  try {
+    return fs.realpathSync(repoPath);
+  } catch {
+    return repoPath;
+  }
+}
 
 /**
  * Read the store file and return a validated store object.
