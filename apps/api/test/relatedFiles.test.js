@@ -30,8 +30,10 @@ test("relatedFilesHashLogArgs preserves hardening surface and option terminator"
   assert.ok(args.includes("--no-textconv"));
   assert.ok(args.includes("--no-color"));
   assert.ok(args.includes("--max-count=31"));
-  // Format must emit hash only — no metadata, no patch.
-  assert.ok(args.includes("--format=%H"));
+  // Format must emit the hash and the target's names only — no patch.
+  assert.ok(args.includes("--format=%x00%H"));
+  assert.ok(args.includes("--name-status"));
+  assert.ok(args.includes("-z"));
   assert.ok(!args.includes("--patch"));
   // Option parsing must terminate before the resolved revision; the pathspec
   // must come after `--`.
@@ -524,6 +526,42 @@ test("getRelatedFiles caps limit at RELATED_FILES_MAX_LIMIT", async () => {
     // honours the natural commit count of the repo.
     assert.equal(result.body.scannedCommits, 1);
     assert.equal(result.body.related.length, 0);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getRelatedFiles does not list the target's former names as related", async () => {
+  const repoPath = createTempPath("rtgv-related-files-rename-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeFiles(repoPath, { "d/old name.txt": "x\n", "s.txt": "y\n" });
+    git(repoPath, "add", ".");
+    git(repoPath, "commit", "-m", "feat: add");
+    writeFiles(repoPath, { "d/old name.txt": "x\nx2\n", "s.txt": "y\ny2\n" });
+    git(repoPath, "commit", "-am", "fix: both");
+    git(repoPath, "mv", "d/old name.txt", "d/new name.txt");
+    git(repoPath, "commit", "-m", "refactor: rename");
+    writeFiles(repoPath, { "d/new name.txt": "x\nx2\nx3\n", "s.txt": "y\ny2\ny3\n" });
+    git(repoPath, "commit", "-am", "fix: both again");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+    const result = await service.getRelatedFiles(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ path: "d/new name.txt" }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.scannedCommits, 4);
+    assert.equal(result.body.truncated, false);
+    assert.deepEqual(
+      result.body.related.map((entry) => [entry.path, entry.coChangeCount]),
+      [["s.txt", 3]],
+    );
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }

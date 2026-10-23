@@ -588,3 +588,36 @@ function writeAndCommit(repoPath, relPath, content, message) {
   git(repoPath, "add", relPath);
   git(repoPath, "commit", "-m", message);
 }
+
+test("getSymbolHistory traces qualified names containing ':'", async () => {
+  const repoPath = createTempPath("rtgv-symbol-history-qualified-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "a.cpp", "int Foo::bar() {\n  return 1;\n}\n", "feat: add Foo::bar");
+    writeAndCommit(repoPath, "a.cpp", "int Foo::bar() {\n  return 2;\n}\n", "fix: change Foo::bar");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 10000,
+      diffMaxBytes: 65_536,
+    });
+    const result = await service.getSymbolHistory(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ funcname: "Foo::bar", path: "a.cpp" }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.funcname, "Foo::bar");
+    assert.deepEqual(
+      result.body.entries.map((entry) => entry.subject),
+      ["fix: change Foo::bar", "feat: add Foo::bar"],
+    );
+    assert.equal(
+      symbolHistoryLogArgs({ funcname: "Foo::bar", path: "a.cpp", revision: "HEAD", maxCount: 1 })
+        .find((arg) => arg.startsWith("-L:")),
+      "-L:Foo\\:\\:bar:a.cpp",
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
