@@ -269,6 +269,24 @@ test("appendRepo accumulates multiple entries in order", () => {
   }
 });
 
+test("appendRepo replaces a stale stored entry with the same id", () => {
+  const { env, cleanup } = makeIsolatedEnv("append-replace");
+  try {
+    // A stale "a" can remain in the store when it was skipped at startup.
+    appendRepo({ id: "a", path: "/tmp/old", addedAt: "2026-01-01T00:00:00.000Z" }, env);
+    appendRepo({ id: "b", path: "/tmp/b", addedAt: "2026-01-02T00:00:00.000Z" }, env);
+    appendRepo({ id: "a", path: "/tmp/new", addedAt: "2026-01-03T00:00:00.000Z" }, env);
+
+    const result = loadPersistedRepos(env);
+    assert.deepEqual(
+      result.map((r) => [r.id, r.path]),
+      [["b", "/tmp/b"], ["a", "/tmp/new"]],
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 // ─── removeRepo ───────────────────────────────────────────────────────────────
 
 test("removeRepo removes the entry with the given id", () => {

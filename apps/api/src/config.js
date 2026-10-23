@@ -134,8 +134,12 @@ export function parseRepositoryAllowlist(value, _env = {}) {
  * Rules:
  * - env entries take precedence: if a persisted entry shares an id with an env
  *   entry, the persisted entry is silently skipped (env is authoritative).
- * - id collision between two persisted entries: throws (data integrity error).
- * - realPath collision across env+persisted or within persisted: throws.
+ * - The persisted store is UI-managed state, so a bad persisted entry never
+ *   blocks startup: an invalid id, an id already claimed by an earlier
+ *   persisted entry, or a realPath already claimed by any earlier entry is
+ *   skipped with a warning. Such conflicts arise without hand-editing, e.g.
+ *   `refscope --repo X` after X was added via the UI, or two instances
+ *   persisting the same repository. The store file itself is left untouched.
  * - Total entry count must not exceed REPO_ALLOWLIST_MAX_SIZE (32).
  *
  * @param {Map<string, { id: string, name: string, path: string, origin: "env" | "ui" }>} envEntries
@@ -159,11 +163,13 @@ export function mergeRepositoryAllowlist(envEntries, persistedEntries) {
       continue;
     }
 
+    if (!isValidRepoId(id)) {
+      console.warn(`[reposStore] Skipping persisted repo with invalid id: ${JSON.stringify(id)}`);
+      continue;
+    }
     if (merged.has(id)) {
-      throw new Error(
-        `Duplicate repository id in persisted store: ${id}. ` +
-        `Edit ~/.config/refscope/repos.json to resolve the conflict.`,
-      );
+      console.warn(`[reposStore] Skipping persisted repo ${id}: duplicate id in persisted store`);
+      continue;
     }
 
     if (!path.isAbsolute(repoPath)) {
@@ -190,9 +196,10 @@ export function mergeRepositoryAllowlist(envEntries, persistedEntries) {
 
     if (realPathIndex.has(realPath)) {
       const firstId = realPathIndex.get(realPath);
-      throw new Error(
-        `Duplicate repository path: persisted repo ${id} and ${firstId} resolve to ${realPath}`,
+      console.warn(
+        `[reposStore] Skipping persisted repo ${id}: path already registered as ${firstId} (${realPath})`,
       );
+      continue;
     }
 
     realPathIndex.set(realPath, id);
