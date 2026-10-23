@@ -198,18 +198,38 @@ The captured media in `apps/web/public/media/` is committed; the capture script 
 
 ## API
 
-Available read-only endpoints:
+Read-only endpoints (none of them write to a repository):
 
 - `GET /health`
 - `GET /api/repos`
 - `GET /api/repos/:repoId/refs`
+- `GET /api/repos/:repoId/refs/drift`
+- `GET /api/repos/:repoId/branches/grouped?prefix=feat/`
+- `GET /api/repos/:repoId/stashes`, `/worktrees`, `/submodules`, `/state`, `/worktree`
 - `GET /api/repos/:repoId/commits?ref=HEAD&limit=50&search=message&author=name&path=src/app.ts`
+  (`mode=pickaxe|regex|message&pattern=...` selects the other search modes)
+- `GET /api/repos/:repoId/commits/summary?since=...&until=...&groupBy=prefix`
 - `GET /api/repos/:repoId/commits/:hash`
 - `GET /api/repos/:repoId/commits/:hash/diff`
+- `GET /api/repos/:repoId/commits/:hash/risk`
+- `GET /api/repos/:repoId/commits/:hash/refs`
 - `GET /api/repos/:repoId/compare?base=main&target=feature/refscope`
+- `GET /api/repos/:repoId/compare/cherry?base=main&target=feature/refscope`
+- `GET /api/repos/:repoId/files/history?path=...`
+- `GET /api/repos/:repoId/files/range-history?path=...&lineStart=1&lineEnd=20`
+- `GET /api/repos/:repoId/files/related?path=...`
+- `GET /api/repos/:repoId/files/hotspot?ref=HEAD&limit=500&commitCap=200`
+- `GET /api/repos/:repoId/symbols/history?path=...&funcname=...`
 - `GET /api/repos/:repoId/events`
 - `GET /api/repos/:repoId/ref-flight/events?limit=100`
 - `GET /api/fleet/snapshot?window=24h&include=repoA,repoB`
+
+Allowlist management (see the Origin rules under "Security constraints"):
+
+- `POST /api/repos` with `{ "id": "...", "path": "/absolute/path" }`
+- `DELETE /api/repos/:repoId` (UI-added repositories only)
+
+Merge commits are summarized and diffed against their first parent.
 
 Commit detail responses include metadata, refs, and a bounded changed-file summary
 derived from read-only `git show --numstat` and `git show --name-status`

@@ -112,9 +112,57 @@ const COMMIT_RECORD_SEPARATOR = "\u001e";
 // followed by the full hash and a NUL, which neither can contain.
 const COMMIT_RECORD_HEADER_PATTERN = /(?:^|\n)\u001e(?=[0-9a-f]{40}\u0000)/;
 
-// Headers of the `-z --name-only --format=%H%x1f...` logs. Paths may contain
-// \x1f too, so a header is recognised by its leading full hash.
-const NAME_LOG_HEADER_PATTERN = /^[0-9a-f]{40}\u001f/;
+/**
+ * Options of a `git log -z --name-only` read whose records
+ * `parseNameOnlyLogRecords` can split. The caller appends the revision and
+ * `--`. A leading NUL makes each record start with an empty token; file names
+ * are never empty, so no file name can pass for a record header.
+ *
+ * @param {number} maxCount
+ * @param {string[]} [extraArgs]
+ */
+export function nameOnlyLogArgs(maxCount, extraArgs = []) {
+  return [
+    "-z",
+    "--no-show-signature",
+    "--name-only",
+    "--format=%x00%H%x00%aI",
+    `--max-count=${maxCount}`,
+    ...extraArgs,
+    "--end-of-options",
+  ];
+}
+
+/**
+ * Split `nameOnlyLogArgs` output (`\0<hash>\0<date>\0[\n<path>\0…]` per
+ * commit) into records. Paths are verbatim (never C-quoted with -z) and
+ * deduplicated per commit.
+ *
+ * @param {string} stdout
+ * @returns {Array<{ hash: string, authorDate: string, paths: Set<string> }>}
+ */
+export function parseNameOnlyLogRecords(stdout) {
+  const tokens = stdout.split("\u0000");
+  const records = [];
+  let index = 0;
+  while (index < tokens.length) {
+    if (tokens[index] !== "" || !isValidObjectId(tokens[index + 1] ?? "")) {
+      index += 1;
+      continue;
+    }
+    const record = { hash: tokens[index + 1], authorDate: tokens[index + 2] ?? "", paths: new Set() };
+    index += 3;
+    let first = true;
+    for (; index < tokens.length && tokens[index] !== ""; index += 1) {
+      // Git separates the format line from the name list with one newline.
+      const filePath = first ? tokens[index].replace(/^\n/, "") : tokens[index];
+      first = false;
+      if (filePath) record.paths.add(filePath);
+    }
+    records.push(record);
+  }
+  return records;
+}
 
 function splitCommitRecords(stdout) {
   return stdout.split(COMMIT_RECORD_HEADER_PATTERN);
@@ -173,59 +221,64 @@ export function createGitService(config) {
   /** @type {Map<string, Array<object>>} */
   const _refFlightLogs = new Map();
 
+  // Bumped when a repository id is removed or re-registered, so a hotspot
+  // refresh that started before that cannot store churn for the old path.
+  /** @type {Map<string, number>} */
+  const _cacheGenerations = new Map();
+  /** @type {Map<string, Promise<void>>} */
+  const _hotspotRefreshes = new Map();
+
   function forgetRepositoryCaches(id) {
     _hotspotCache.delete(id);
     _refFlightLogs.delete(id);
+    _hotspotRefreshes.delete(id);
+    _cacheGenerations.set(id, (_cacheGenerations.get(id) ?? 0) + 1);
   }
 
   /**
    * Refresh the hotspot churn cache for a repo (fire-and-forget safe).
-   * Uses the last 200 commits, no LOC fetching needed.
+   * Uses the last 200 commits, no LOC fetching needed. Concurrent callers
+   * share one in-flight refresh instead of each starting a 200-commit log.
    *
    * @param {{ id: string; name: string; path: string }} repo
    * @returns {Promise<void>}
    */
-  async function refreshHotspotCache(repo) {
-    const logArgs = [
-      "-z",
-      "--no-show-signature",
-      "--name-only",
-      "--format=%H%x1f%aI",
-      "--max-count=200",
-      "--end-of-options",
-      "HEAD",
-      "--",
-    ];
-    const { stdout } = await runGit(repo, ["log", ...logArgs], {
+  function refreshHotspotCache(repo) {
+    const inFlight = _hotspotRefreshes.get(repo.id);
+    if (inFlight) return inFlight;
+    const generation = _cacheGenerations.get(repo.id) ?? 0;
+    const refresh = readHotspotChurn(repo)
+      .then((files) => {
+        if ((_cacheGenerations.get(repo.id) ?? 0) === generation) {
+          _hotspotCache.set(repo.id, { files, ts: Date.now() });
+        }
+      })
+      .finally(() => {
+        if (_hotspotRefreshes.get(repo.id) === refresh) _hotspotRefreshes.delete(repo.id);
+      });
+    _hotspotRefreshes.set(repo.id, refresh);
+    return refresh;
+  }
+
+  async function readHotspotChurn(repo) {
+    const { stdout } = await runGit(repo, ["log", ...nameOnlyLogArgs(200), "HEAD", "--"], {
       timeoutMs: config.gitTimeoutMs,
       maxBytes: MAX_GIT_OUTPUT_BYTES,
     });
 
     /** @type {Map<string, { churn: number }>} */
     const files = new Map();
-    /** @type {Set<string> | null} */
-    let currentCommitPaths = null;
-
-    for (let raw of stdout.split("\x00")) {
-      const record = raw.startsWith("\n") ? raw.slice(1) : raw;
-      if (!record) continue;
-      if (NAME_LOG_HEADER_PATTERN.test(record)) {
-        // Header record — start new commit
-        currentCommitPaths = new Set();
-      } else {
-        if (currentCommitPaths !== null && !currentCommitPaths.has(record)) {
-          currentCommitPaths.add(record);
-          const existing = files.get(record);
-          if (existing) {
-            existing.churn += 1;
-          } else {
-            files.set(record, { churn: 1 });
-          }
+    for (const record of parseNameOnlyLogRecords(stdout)) {
+      for (const filePath of record.paths) {
+        const existing = files.get(filePath);
+        if (existing) {
+          existing.churn += 1;
+        } else {
+          files.set(filePath, { churn: 1 });
         }
       }
     }
-
-    _hotspotCache.set(repo.id, { files, ts: Date.now() });
+    return files;
   }
 
   async function listRefs(repo) {
@@ -237,7 +290,7 @@ export function createGitService(config) {
       { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
     );
 
-    return parsePublicRefLines(stdout);
+    return peelNestedTags(repo, parsePublicRefLines(stdout), config.gitTimeoutMs);
   }
 
   async function listCommitRange(repo, fromHash, toHash) {
@@ -255,7 +308,9 @@ export function createGitService(config) {
         ...commitRangeLogArgs(fromHash, toHash),
         "--",
       ],
-      { timeoutMs: config.gitTimeoutMs },
+      // --numstat lists every changed file; one large commit (a vendored
+      // tree, an initial import) overflows the runner's default cap.
+      { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
     );
 
     return parseCommitRecords(stdout).reverse();
@@ -485,7 +540,37 @@ export function createGitService(config) {
           continue;
         }
 
-        if (!(await isAncestor(repo, change.previousHash, change.ref.hash))) {
+        // Classifying a branch move needs extra Git reads. If one of them
+        // fails, still report the move: throwing here would keep the stream's
+        // snapshot from advancing, so every later poll would fail the same way
+        // and re-record the flight events already appended for this poll.
+        let ancestor;
+        let commits;
+        try {
+          ancestor = await isAncestor(repo, change.previousHash, change.ref.hash);
+          if (ancestor) {
+            commits = await listCommitRange(repo, change.previousHash, change.ref.hash);
+          }
+        } catch (error) {
+          if (!(error instanceof GitCommandError)) throw error;
+          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+            repoId: repo.id,
+            change,
+            observedAt,
+            eventType: "ref_updated",
+            dangerous: false,
+            explanation: "The ref moved, but the move could not be classified.",
+          }));
+          events.push({
+            type: "ref_updated",
+            repoId: repo.id,
+            ref: change.ref,
+            previousHash: change.previousHash,
+          });
+          continue;
+        }
+
+        if (!ancestor) {
           appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
             repoId: repo.id,
             change,
@@ -517,8 +602,6 @@ export function createGitService(config) {
           dangerous: false,
           explanation: "The ref moved to a descendant commit.",
         }));
-
-        const commits = await listCommitRange(repo, change.previousHash, change.ref.hash);
 
         // Refresh hotspot cache if stale (fire-and-forget — never blocks the poller)
         const cached = _hotspotCache.get(repo.id);
@@ -622,9 +705,7 @@ export function createGitService(config) {
       }
 
       const searchArgs = buildSearchModeArgs(mode.value, pattern.value, search.value);
-      const authorArgs = author.value
-        ? ["--regexp-ignore-case", "--extended-regexp", `--author=${escapeGitRegexLiteral(author.value)}`]
-        : [];
+      const authorArgs = buildAuthorFilterArgs(author.value, mode.value);
       const pathArgs = path.value ? [formatLiteralPathspec(path.value)] : [];
 
       let stdout;
@@ -632,7 +713,8 @@ export function createGitService(config) {
         ({ stdout } = await runGit(
           repo,
           commitListLogArgs(limit.value, searchArgs, authorArgs, commitishRef.hash, pathArgs),
-          { timeoutMs: config.gitTimeoutMs },
+          // See listCommitRange: --numstat output grows with commit size.
+          { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
         ));
       } catch (err) {
         // `regex` (-G) and `message` (--grep) pass the user's pattern to Git
@@ -869,7 +951,9 @@ export function createGitService(config) {
 
       // Sorted here rather than with --sort=-committerdate: annotated tags
       // have no committer date of their own and would all sink to the end.
-      const refs = parsePublicRefLines(stdout).sort(
+      const refs = (
+        await peelNestedTags(repo, parsePublicRefLines(stdout), config.gitTimeoutMs)
+      ).sort(
         (a, b) => refDateMs(b.updatedAt) - refDateMs(a.updatedAt),
       );
 
@@ -1202,18 +1286,21 @@ export function createGitService(config) {
       );
 
       // Resolve HEAD so the UI can identify which entry in `branches` is the
-      // currently checked-out branch. `git rev-parse --abbrev-ref HEAD`
-      // returns the branch short name when HEAD points to a branch and the
-      // literal "HEAD" string when HEAD is detached. We pair it with
+      // currently checked-out branch. `git rev-parse --symbolic-full-name HEAD`
+      // returns refs/heads/<branch> when HEAD points to a branch and the
+      // literal "HEAD" when detached. (`--abbrev-ref` would print
+      // `heads/<branch>` when a tag shares the name, matching no shortName.)
+      // We pair it with
       // `rev-parse --verify HEAD` to obtain the resolved hash, and surface
       // `head: null` on detached HEAD or on any runner failure.
       let head = null;
       try {
-        const abbrev = await runGit(repo, ["rev-parse", "--abbrev-ref", "HEAD"], {
+        const fullName = await runGit(repo, ["rev-parse", "--symbolic-full-name", "HEAD"], {
           timeoutMs: config.gitTimeoutMs,
         });
-        const headName = abbrev.stdout.trim();
-        if (headName && headName !== "HEAD") {
+        const headRef = fullName.stdout.trim();
+        const headName = headRef.startsWith("refs/heads/") ? headRef.slice("refs/heads/".length) : "";
+        if (headName) {
           const headHashResult = await runGit(repo, ["rev-parse", "--verify", "HEAD"], {
             timeoutMs: config.gitTimeoutMs,
           });
@@ -1922,6 +2009,9 @@ export function createGitService(config) {
       // maxBytes cap: use config override when supplied (tests inject small values
       // to trigger the truncated path), otherwise use the module constant.
       const hotspotMaxBytes = config.hotspotMaxBytes ?? HOTSPOT_MAX_BYTES;
+      // The per-call timeout above bounds each Git read, but Step 4 runs one
+      // read per path. Bound the request as a whole by the spec's 20 s too.
+      const deadline = Date.now() + (config.hotspotTimeoutMs ?? HOTSPOT_GIT_TIMEOUT_MS);
 
       // ── Step 1: resolve ref to commit OID ──────────────────────────────────
       const commitishRef = await resolveCommitishRevision(repo, refLabel, hotspotTimeoutMs);
@@ -1935,16 +2025,10 @@ export function createGitService(config) {
       // the name-only log output (spec Q-1 resolution: no allowlist change).
       // -z uses NUL as the record separator so non-ASCII paths are preserved
       // verbatim (without -z, git may mangle or drop paths containing non-ASCII
-      // characters on some platforms).  \x1f (ASCII unit separator) delimits the
-      // header fields within each record; \x00 (NUL) is reserved for -z.
+      // characters on some platforms). Header fields are NUL-framed too; see
+      // `nameOnlyLogArgs`.
       const logArgs = [
-        "-z",
-        "--no-show-signature",
-        "--name-only",
-        "--format=%H%x1f%aI%x1f%aE",
-        `--max-count=${commitCap}`,
-        ...(sinceISO ? [`--since=${sinceISO}`] : []),
-        "--end-of-options",
+        ...nameOnlyLogArgs(commitCap, sinceISO ? [`--since=${sinceISO}`] : []),
         resolvedOid,
         "--",
       ];
@@ -1975,53 +2059,20 @@ export function createGitService(config) {
       }
 
       // ── Step 3: parse log output ────────────────────────────────────────────
-      // With -z, git log uses NUL (\x00) as the record separator between
-      // fields within each entry.  The format is:
-      //
-      //   <header>\x00<path1>\x00<path2>\x00...<pathN>\x00<header>\x00...
-      //
-      // where <header> = %H\x1f%aI\x1f%aE  (fields within the header are
-      // separated by \x1f, ASCII unit separator, to avoid collision with \x00).
-      //
-      // Records containing \x1f are commit headers; all others are file paths.
-      // Path values must NOT be trimmed — non-ASCII filenames may contain
-      // leading/trailing whitespace-like bytes on unusual filesystems.
+      // Records are framed by `nameOnlyLogArgs`; see `parseNameOnlyLogRecords`.
+      // Log order is newest-first, so the first date seen per path is its most
+      // recent change.
       /** @type {Map<string, { churn: number; lastChangedAt: string }>} */
       const fileStats = new Map();
-      let commitsAnalyzed = 0;
-      let currentAuthorDate = "";
-      /** @type {Set<string> | null} */
-      let currentCommitPaths = null;
-
-      for (let raw of logStdout.split("\x00")) {
-        // git log -z emits a newline immediately after the NUL that follows
-        // each header record (before the first path of that commit).  Strip
-        // a single leading \n so paths are matched correctly.  This leading \n
-        // is part of git's record-separator protocol — it is not part of the
-        // actual file path.
-        const record = raw.startsWith("\n") ? raw.slice(1) : raw;
-        if (!record) continue; // empty record between NULs or trailing NUL
-        if (NAME_LOG_HEADER_PATTERN.test(record)) {
-          // Header record: %H\x1f%aI\x1f%aE
-          // A new header starts a new commit; reset the per-commit path set so
-          // the same path touched twice in one commit only counts once.
-          const parts = record.split("\x1f");
-          currentAuthorDate = parts[1] ?? "";
-          currentCommitPaths = new Set();
-          commitsAnalyzed += 1;
-        } else {
-          // Path record — do not trim beyond the leading \n already removed,
-          // so non-ASCII filenames with significant whitespace are preserved.
-          if (currentCommitPaths !== null && !currentCommitPaths.has(record)) {
-            currentCommitPaths.add(record);
-            const existing = fileStats.get(record);
-            if (existing) {
-              existing.churn += 1;
-              // keep the most-recent date (log is newest-first)
-              if (!existing.lastChangedAt) existing.lastChangedAt = currentAuthorDate;
-            } else {
-              fileStats.set(record, { churn: 1, lastChangedAt: currentAuthorDate });
-            }
+      const logRecords = parseNameOnlyLogRecords(logStdout);
+      const commitsAnalyzed = logRecords.length;
+      for (const record of logRecords) {
+        for (const filePath of record.paths) {
+          const existing = fileStats.get(filePath);
+          if (existing) {
+            existing.churn += 1;
+          } else {
+            fileStats.set(filePath, { churn: 1, lastChangedAt: record.authorDate });
           }
         }
       }
@@ -2071,6 +2122,12 @@ export function createGitService(config) {
       const sizeMap = new Map();
 
       for (let i = 0; i < allPaths.length; i += concurrency) {
+        if (Date.now() > deadline) {
+          return {
+            status: 504,
+            body: { error: "timeout", truncated: true, truncationReason: "timeout" },
+          };
+        }
         const chunk = allPaths.slice(i, i + concurrency);
         const results = await Promise.all(chunk.map(fetchFileStat));
         for (let j = 0; j < chunk.length; j++) {
@@ -2172,12 +2229,14 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
         maxBytes: 1024,
       });
       const resolvedName = fullName.trim();
-      // Empty output also covers an ambiguous short name, which Git resolves
-      // to refs/<name> first: the only candidate outside the public
-      // namespaces.
+      // Empty output also covers an ambiguous short name. Git tries
+      // $GIT_DIR/<name> first (only for pseudo-ref syntax, e.g. a stray
+      // NOTES_MERGE_PARTIAL), then refs/<name>: the only candidates outside
+      // the public namespaces.
       if (
         resolvedName === ""
-          ? await isNonPublicRefsChild(repo, revision, timeoutMs)
+          ? (revision !== "HEAD" && PSEUDOREF_SYNTAX_PATTERN.test(revision)) ||
+            (await isNonPublicRefsChild(repo, revision, timeoutMs))
           : !isPublicFullRefName(resolvedName)
       ) {
         return {
@@ -2203,6 +2262,9 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
     throw error;
   }
 }
+
+// Names Git looks up directly under $GIT_DIR when resolving a short name.
+const PSEUDOREF_SYNTAX_PATTERN = /^[A-Z_-]+$/;
 
 async function isNonPublicRefsChild(repo, revision, timeoutMs) {
   const refName = `refs/${revision}`;
@@ -2358,11 +2420,16 @@ export function commitMetadataShowArgs(hash) {
   ];
 }
 
+// `-m --first-parent` diffs a merge against its first parent. Without it the
+// numstat lane shows that diff while name-status and the patch show the
+// combined diff, so a merge's file list, counts and patch disagree.
 export function commitNumstatShowArgs(hash) {
   return [
     "show",
     "--format=",
     "--no-show-signature",
+    "-m",
+    "--first-parent",
     "--numstat",
     "--find-renames",
     "--no-ext-diff",
@@ -2379,6 +2446,8 @@ export function commitNameStatusShowArgs(hash) {
     "show",
     "--format=",
     "--no-show-signature",
+    "-m",
+    "--first-parent",
     "--name-status",
     "--find-renames",
     "--no-ext-diff",
@@ -2395,6 +2464,8 @@ export function commitDiffShowArgs(hash) {
     "show",
     "--format=",
     "--no-show-signature",
+    "-m",
+    "--first-parent",
     "--no-ext-diff",
     "--no-textconv",
     "--patch",
@@ -2521,15 +2592,38 @@ function describeUntrackedFiles(repoPath, stdout, maxDiffBytes) {
   return { files, diff, truncated };
 }
 
+/**
+ * Quote a diff side path the way Git does when it contains control
+ * characters, `"` or `\\`. The untracked patch is assembled here rather than
+ * by Git, and a raw newline in a file name would otherwise start a forged
+ * hunk line.
+ *
+ * @param {"a/" | "b/"} prefix
+ * @param {string} relPath
+ */
+export function quoteDiffSidePath(prefix, relPath) {
+  const value = `${prefix}${relPath}`;
+  if (!/[\u0000-\u001f"\\\u007f]/.test(value)) return value;
+  const escapes = { "\u0007": "\\a", "\b": "\\b", "\t": "\\t", "\n": "\\n", "\v": "\\v", "\f": "\\f", "\r": "\\r", '"': '\\"', "\\": "\\\\" };
+  const quoted = value.replace(
+    /[\u0000-\u001f"\\\u007f]/g,
+    (c) => escapes[c] ?? `\\${c.charCodeAt(0).toString(8).padStart(3, "0")}`,
+  );
+  return `"${quoted}"`;
+}
+
 function untrackedHeadersOnlyPatch(relPath) {
-  return `diff --git a/${relPath} b/${relPath}\nnew file mode 100644\n--- /dev/null\n+++ b/${relPath}\n`;
+  const a = quoteDiffSidePath("a/", relPath);
+  const b = quoteDiffSidePath("b/", relPath);
+  return `diff --git ${a} ${b}\nnew file mode 100644\n--- /dev/null\n+++ ${b}\n`;
 }
 
 function readUntrackedEntry(repoPath, relPath) {
   const fullPath = path.join(repoPath, relPath);
-  const headers = `diff --git a/${relPath} b/${relPath}\nnew file mode 100644\n`;
+  const b = quoteDiffSidePath("b/", relPath);
+  const headers = `diff --git ${quoteDiffSidePath("a/", relPath)} ${b}\nnew file mode 100644\n`;
   const headersOnly = untrackedHeadersOnlyPatch(relPath);
-  const binaryPatch = `${headersOnly}Binary files /dev/null and b/${relPath} differ\n`;
+  const binaryPatch = `${headersOnly}Binary files /dev/null and ${b} differ\n`;
 
   let stat;
   try {
@@ -2570,7 +2664,7 @@ function readUntrackedEntry(repoPath, relPath) {
   if (added === 0) {
     return { added: 0, patch: headersOnly };
   }
-  let hunk = `--- /dev/null\n+++ b/${relPath}\n@@ -0,0 +1,${added} @@\n`;
+  let hunk = `--- /dev/null\n+++ ${b}\n@@ -0,0 +1,${added} @@\n`;
   for (const line of lines) {
     hunk += `+${line}\n`;
   }
@@ -2966,26 +3060,68 @@ function parseCount(value) {
 }
 
 // `*committerdate` is the date of the commit an annotated tag points to; the
-// tag object itself has no committer date.
+// tag object itself has no committer date. `*` peels one level only, so
+// `*objecttype` flags a tag of a tag for `peelNestedTags`.
 const PUBLIC_REF_FORMAT =
-  "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(committerdate:iso-strict)%00%(*committerdate:iso-strict)";
+  "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(committerdate:iso-strict)%00%(*committerdate:iso-strict)%00%(symref)%00%(*objecttype)";
 
-function parsePublicRefLines(stdout) {
+export function parsePublicRefLines(stdout) {
   return stdout
     .trim()
     .split("\n")
     .filter(Boolean)
-    .map((line) => {
-      const [name, objectHash, peeledHash, updatedAt, peeledUpdatedAt] =
+    .flatMap((line) => {
+      const [name, objectHash, peeledHash, updatedAt, peeledUpdatedAt, symref, peeledType] =
         line.split(COMMIT_FIELD_SEPARATOR);
-      return {
+      // A ref under a public namespace can be a symref to a hidden one
+      // (refs/heads/x -> refs/notes/commits). Listing it would hand out the
+      // hidden ref's hash, which every by-hash endpoint then accepts.
+      if (symref && !isPublicFullRefName(symref)) {
+        return [];
+      }
+      const ref = {
         name,
         shortName: shortRefName(name),
         hash: peeledHash || objectHash,
         type: refType(name),
         updatedAt: updatedAt || peeledUpdatedAt || null,
       };
+      if (peeledType === "tag") {
+        Object.defineProperty(ref, "nestedTag", { value: true, enumerable: false });
+      }
+      return [ref];
     });
+}
+
+/**
+ * Replace the hash of each tag-of-a-tag (flagged by `parsePublicRefLines`)
+ * with the object the tag chain finally names, so a ref's hash is never a
+ * tag object. Nested tags are rare, so one `rev-parse` each is acceptable.
+ *
+ * @param {{ path: string }} repo
+ * @param {Array<{ name: string, hash: string, updatedAt: string | null, nestedTag?: boolean }>} refs
+ * @param {number} timeoutMs
+ */
+async function peelNestedTags(repo, refs, timeoutMs) {
+  await Promise.all(
+    refs
+      .filter((ref) => ref.nestedTag)
+      .map(async (ref) => {
+        try {
+          const { stdout } = await runGit(
+            repo,
+            ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref.hash}^{}`],
+            { timeoutMs, maxBytes: 128 },
+          );
+          const peeled = stdout.trim();
+          if (isValidObjectId(peeled)) ref.hash = peeled;
+        } catch (error) {
+          if (error instanceof GitCommandError && (error.timedOut || error.truncated)) throw error;
+          // A broken chain keeps the one-level peel.
+        }
+      }),
+  );
+  return refs;
 }
 
 function refDateMs(value) {
@@ -3217,6 +3353,27 @@ function refType(refName) {
 
 export function escapeGitRegexLiteral(value) {
   return value.replace(/[.[\](){}?*+^$|\\]/g, "\\$&");
+}
+
+/**
+ * `git log` arguments for the case-insensitive author filter. Git's
+ * --regexp-ignore-case and --extended-regexp are global: they also change how
+ * -S/-G match, so the pickaxe and regex modes use a basic-regex literal with
+ * the case folding spelled out instead.
+ *
+ * @param {string} author  Validated author value (may be empty).
+ * @param {"subject"|"pickaxe"|"regex"|"message"} mode
+ * @returns {string[]}
+ */
+export function buildAuthorFilterArgs(author, mode) {
+  if (!author) return [];
+  if (mode === "pickaxe" || mode === "regex") {
+    const folded = author
+      .replace(/[.[*^$\\]/g, "\\$&")
+      .replace(/[A-Za-z]/g, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`);
+    return [`--author=${folded}`];
+  }
+  return ["--regexp-ignore-case", "--extended-regexp", `--author=${escapeGitRegexLiteral(author)}`];
 }
 
 /**
