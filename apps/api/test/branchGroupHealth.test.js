@@ -48,7 +48,7 @@ test("getBranchGroupHealth returns all local branches when no prefix is given", 
       assert.ok(typeof branch.rotScore === "number" && branch.rotScore >= 0 && branch.rotScore <= 25, "rotScore");
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -85,7 +85,7 @@ test("getBranchGroupHealth filters by prefix", async () => {
       assert.ok(branch.shortName.startsWith("refactor/"), `expected refactor/ prefix, got ${branch.shortName}`);
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -128,7 +128,7 @@ test("getBranchGroupHealth computes correct ahead/behind and rotScore", async ()
     assert.ok(branch.rotScore >= 1, `rotScore should be >= 1, got ${branch.rotScore}`);
     assert.ok(branch.rotScore <= 25, "rotScore must be <= 25");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -184,7 +184,7 @@ test("getBranchGroupHealth returns 404 for unknown base ref", async () => {
     );
     assert.equal(result.status, 404);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -210,7 +210,7 @@ test("getBranchGroupHealth returns empty branches array when prefix matches noth
     assert.equal(result.status, 200);
     assert.equal(result.body.branches.length, 0);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -288,7 +288,7 @@ test("getBranchGroupHealth returns head matching the checked-out branch", async 
     assert.ok(matching, "feat/widget must appear in branches");
     assert.equal(matching.hash, result.body.head.hash);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -316,7 +316,7 @@ test("getBranchGroupHealth returns head=null on detached HEAD", async () => {
     assert.equal(result.status, 200);
     assert.equal(result.body.head, null, "head should be null on detached HEAD");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 

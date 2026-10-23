@@ -26,7 +26,7 @@ before(async () => {
 
 after(async () => {
   await new Promise((resolve) => server.close(resolve));
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 10 });
 });
 
 test("serves files under the root and falls back to index.html", async () => {

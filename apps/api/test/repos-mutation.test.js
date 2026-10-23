@@ -88,7 +88,7 @@ function makeTempGitRepo(name) {
   return {
     repoPath: fs.realpathSync(dir),
     cleanup() {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10 });
     },
   };
 }
@@ -101,7 +101,7 @@ function makeTempPlainDir(name) {
   return {
     dirPath: dir,
     cleanup() {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10 });
     },
   };
 }

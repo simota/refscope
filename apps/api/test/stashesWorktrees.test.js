@@ -20,7 +20,7 @@ test("listStashes returns an empty list when no stash entries exist", async () =
     assert.equal(result.status, 200);
     assert.deepEqual(result.body.stashes, []);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -44,7 +44,7 @@ test("listStashes surfaces stash@{0} with hash, subject, and ISO timestamp", asy
     assert.match(entry.committedAt, /^\d{4}-\d{2}-\d{2}T/);
     assert.match(entry.subject, /wip readme tweak/);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -53,7 +53,7 @@ test("listWorktrees marks the primary worktree and includes linked worktrees", a
   const linkedPath = createTempPath("rtgv-worktrees-linked-");
   // We immediately remove the empty linked dir because `git worktree add`
   // requires the target not to exist.
-  fs.rmSync(linkedPath, { recursive: true, force: true });
+  fs.rmSync(linkedPath, { recursive: true, force: true, maxRetries: 10 });
   try {
     initRepo(repoPath);
     writeAndCommit(repoPath, "README.md", "v1\n", "chore: seed");
@@ -78,8 +78,8 @@ test("listWorktrees marks the primary worktree and includes linked worktrees", a
     assert.equal(linked.branchShortName, "feature");
     assert.match(linked.head, /^[0-9a-f]{40}$/);
   } finally {
-    fs.rmSync(linkedPath, { recursive: true, force: true });
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(linkedPath, { recursive: true, force: true, maxRetries: 10 });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -100,7 +100,7 @@ test("runGit rejects mutating stash subcommands even when stash is allowlisted",
       /Git subcommand is not allowed/,
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -118,7 +118,7 @@ test("runGit rejects mutating worktree subcommands", async () => {
       /Git subcommand is not allowed/,
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 

@@ -178,7 +178,7 @@ test("rejects commit list refs that do not resolve to commits", async () => {
       body: { error: "Ref not found or not a commit" },
     });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -230,7 +230,7 @@ test("applies commit search and author filters as independent literals", async (
     assert.equal(result.body[0].subject, "Fix a.b");
     assert.equal(result.body[0].author, "Alice.Example+Bot");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -297,7 +297,7 @@ test("rejects non-commit object ids for commit detail and diff endpoints", async
       body: { error: "Hash does not identify a commit" },
     });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -335,7 +335,7 @@ test("does not execute repository textconv filters for API diff reads", async ()
     assert.equal(diff.status, 200);
     assert.equal(compare.status, 200);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -384,7 +384,7 @@ test("does not execute repository gpg program while reading signature metadata",
     assert.equal(detail.body.signed, false);
     assert.equal(detail.body.signatureStatus, "unknown");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -496,7 +496,7 @@ test("rejects compare revisions that do not resolve to commits", async () => {
       body: { error: "Ref not found or not a commit" },
     });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -630,6 +630,8 @@ test("builds commit show arguments with option parsing ended before hashes", () 
     "show",
     "--format=",
     "--no-show-signature",
+    "-m",
+    "--first-parent",
     "--numstat",
     "--find-renames",
     "--no-ext-diff",
@@ -643,6 +645,8 @@ test("builds commit show arguments with option parsing ended before hashes", () 
     "show",
     "--format=",
     "--no-show-signature",
+    "-m",
+    "--first-parent",
     "--name-status",
     "--find-renames",
     "--no-ext-diff",
@@ -656,6 +660,8 @@ test("builds commit show arguments with option parsing ended before hashes", () 
     "show",
     "--format=",
     "--no-show-signature",
+    "-m",
+    "--first-parent",
     "--no-ext-diff",
     "--no-textconv",
     "--patch",
@@ -686,7 +692,7 @@ test("resolves commit-ish revisions to commit object ids", async () => {
 
     assert.deepEqual(result, { ok: true, hash: commitHash });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -752,7 +758,7 @@ test("does not resolve short names or symrefs to non-public refs", async () => {
     git(repoPath, "checkout", "--detach", "HEAD");
     assert.deepEqual(await resolveCommitishRevision(repo, "HEAD", 5000), { ok: true, hash: secondHash });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -776,7 +782,7 @@ test("rejects commit list refs that only resolve to non-public refs", async () =
     );
     assert.equal(result.status, 404);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -815,7 +821,7 @@ test("reports compare ahead and behind counts from target relative to base", asy
       diff: "git diff main feature",
     });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -845,7 +851,7 @@ test("lists annotated tag refs with their peeled commit hash", async () => {
     assert.notEqual(tag.hash, tagObjectHash);
     assert.equal(tag.type, "tag");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1010,7 +1016,7 @@ test("collectRefEvents classifies a missing old commit object as history_rewritt
     assert.equal(rewritten[0].previousHash, missingHash);
     assert.equal(rewritten[0].currentHash, mainRef.hash);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1247,7 +1253,7 @@ test("listCommits allows combining search with mode=subject (backward compatible
     assert.equal(result.status, 200);
     assert.notEqual(result.body?.error, "Cannot combine search and mode parameters");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1290,7 +1296,7 @@ test("listCommits pickaxe mode finds commits where a literal token appears or di
     const subjects = result.body.map((c) => c.subject).sort();
     assert.deepEqual(subjects, ["add secret token", "remove secret token"]);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1333,7 +1339,7 @@ test("listCommits regex mode finds commits whose diff matches a regex", async ()
     const subjects = result.body.map((c) => c.subject);
     assert.ok(subjects.some((s) => s.includes("fetchData") || s.includes("rename")));
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1372,7 +1378,7 @@ test("listCommits message mode finds commits by commit message regex", async () 
     const subjects = result.body.map((c) => c.subject).sort();
     assert.deepEqual(subjects, ["feat: add feature A", "feat: add feature C"]);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1402,7 +1408,7 @@ test("listCommits returns 400 when a regex or message pattern does not compile",
     const pickaxe = await service.listCommits(repo, new URLSearchParams({ mode: "pickaxe", pattern: "(" }));
     assert.equal(pickaxe.status, 200);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1488,7 +1494,7 @@ test("getCommitContainingRefs returns refs whose history reaches the commit", as
     assert.equal(types.get("main"), "branch");
     assert.equal(types.get("v0.1.0"), "tag");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1555,7 +1561,7 @@ test("getCompareCherry separates patch-id equivalent commits from missing ones",
     const fixEntry = result.body.equivalent.find((c) => c.hash === fixHash);
     assert.equal(fixEntry?.subject, "fix: critical bug");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1634,7 +1640,7 @@ test("getCompareCherry grades equivalent commits as identical on clean cherry-pi
     assert.deepEqual(fixEntry.diffLines, { added: 0, deleted: 0 });
     assert.equal(fixEntry.diffHunks, undefined, "identical entries carry no diffHunks");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1720,7 +1726,7 @@ test("getCompareCherry grades a clean cherry-pick identical when the branches al
     assert.equal(fixEntry.grade, "identical");
     assert.deepEqual(fixEntry.diffLines, { added: 0, deleted: 0 });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1762,7 +1768,7 @@ test("getCompareCherry grades a cherry-picked rename of a large file as identica
     assert.ok(entry, "rename commit should be patch-id equivalent");
     assert.equal(entry.grade, "identical");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1827,7 +1833,7 @@ test("getCompareCherry grades near-identical when only whitespace differs", asyn
     assert.ok((fixEntry.diffLines.added + fixEntry.diffLines.deleted) > 0, "non-zero diff lines");
     assert.ok(fixEntry.diffHunks, "diffHunks should be present for near-identical");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1868,7 +1874,7 @@ test("getCommit keeps line counts for a rename into the parent directory", async
     );
     assert.deepEqual(files, { "a/f": [1, 0], g: [1, 0] });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1914,7 +1920,7 @@ test("getCompareCherry grades commits touching non-ASCII paths instead of callin
     assert.equal(fixEntry.grade, "near-identical");
     assert.deepEqual(fixEntry.diffLines, { added: 1, deleted: 1 });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -1976,7 +1982,7 @@ test("getCompareCherry grades divergent when whitespace diff exceeds threshold",
     assert.ok((fixEntry.diffLines.added + fixEntry.diffLines.deleted) > 5, "diff lines exceed threshold");
     assert.ok(fixEntry.diffHunks, "diffHunks should be present for divergent");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -2015,7 +2021,7 @@ test("getCommitContainingRefs returns empty list for unreachable commit", async 
     const result = await service.getCommitContainingRefs(repo, danglingHash);
     assert.deepEqual(result, { status: 200, body: { refs: [] } });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -2052,7 +2058,7 @@ test("getCommit reports non-ASCII paths verbatim, including renames", async () =
       "新規.txt": ["A", 2, 0],
     });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -2073,7 +2079,7 @@ test("getCommit does not classify a binary change as whitespace_only", async () 
     assert.equal(file.deleted, 0);
     assert.notEqual(file.structuralKind, "whitespace_only");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -2097,7 +2103,7 @@ test("listCommits keeps whole-commit stats when filtered by path", async () => {
     assert.deepEqual(pick(filtered.body[0]), pick(all.body[0]));
     assert.equal(filtered.body[0].fileCount, 3);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -2127,7 +2133,7 @@ test("removing a repository forgets its ref-flight log, so a re-added id starts 
     const after = await service.listRefFlightEvents(readded, new URLSearchParams());
     assert.deepEqual(after.body.events, []);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -2172,7 +2178,7 @@ test("commit text and file contents cannot forge commit records", async () => {
     assert.equal(range.status, 200);
     assert.equal(range.body.entries.some((entry) => entry.hash === forgedHash), false);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -2216,7 +2222,7 @@ test("dates annotated tags by their commit and orders containing refs by it", as
       ["refs/heads/stale", "refs/tags/v1"],
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -2243,7 +2249,7 @@ test("lists refs beyond the default git output cap", async () => {
 
     assert.equal((await service.listRefs(repo)).length, 2501);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -2255,13 +2261,23 @@ test("reports a git timeout while resolving a ref instead of a missing ref", asy
     git(repoPath, "config", "user.email", "realtime@example.test");
     git(repoPath, "commit", "--allow-empty", "-m", "base");
 
-    // No git process finishes within 1 ms; the timeout must surface as a
-    // GitCommandError (HTTP 504), not as a 404 "Ref not found".
-    await assert.rejects(
-      resolveCommitishRevision({ id: "demo", name: "demo", path: repoPath }, "main", 1),
-      (error) => error instanceof GitCommandError && error.timedOut,
-    );
+    // A real `git rev-parse` can finish inside any short timeout on a fast
+    // machine, so put a `git` that never answers first on PATH. The timeout
+    // must surface as a GitCommandError (HTTP 504), not as a 404.
+    const binDir = createTempPath("rtgv-slow-git-");
+    fs.writeFileSync(path.join(binDir, "git"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
+    try {
+      await assert.rejects(
+        resolveCommitishRevision({ id: "demo", name: "demo", path: repoPath }, "main", 200),
+        (error) => error instanceof GitCommandError && error.timedOut,
+      );
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(binDir, { recursive: true, force: true, maxRetries: 10 });
+    }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });

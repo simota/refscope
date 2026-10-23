@@ -85,7 +85,7 @@ test("marks truncated when files exceed limit", async () => {
       );
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -111,7 +111,7 @@ test("returns empty array when repo has no tracked files", async () => {
     assert.equal(result.body.truncated, false);
     assert.strictEqual(result.body.truncationReason, undefined);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -138,7 +138,7 @@ test("rejects invalid ref before invoking git", async () => {
     assert.equal(result.status, 404);
     assert.equal(result.body.error, "Ref not found or not a commit");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -218,7 +218,7 @@ test("returns 504 with truncated payload when git times out", async () => {
     // hotspotMaxBytes: 1 triggers err.truncated (not err.timedOut) → maxBytes reason.
     assert.equal(result.body.truncationReason, "maxBytes");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -285,7 +285,7 @@ test("returns files sorted by lines desc, then churn desc, then path asc", async
       );
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -308,7 +308,7 @@ test("resolves ref alias to commit oid in response.ref", async () => {
     assert.equal(result.body.refLabel, "refs/heads/main", "refLabel must be the original alias");
     assert.notEqual(result.body.ref, "refs/heads/main");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -332,7 +332,7 @@ test("applies since filter to log scope", async () => {
     assert.equal(result.body.files.length, 0, "since=2099 should yield empty files");
     assert.equal(result.body.scope.sinceISO, "2099-01-01");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -358,7 +358,7 @@ test("respects commitCap and reports it as truncationReason on overflow", async 
     assert.equal(result.body.scope.commitCap, 3);
     assert.ok(result.body.scope.commitsAnalyzed <= 3, "commitsAnalyzed must not exceed commitCap");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -385,7 +385,7 @@ test("returns truncationReason: 'maxBytes' when stdout exceeds hotspotMaxBytes",
     assert.equal(result.body.truncated, true);
     assert.equal(result.body.truncationReason, "maxBytes", "truncated stdout must report maxBytes reason");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -425,6 +425,6 @@ test("counts files whose names contain the header separator", async () => {
       ["a.txt", "b.txt", "we\x1fird.txt"],
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });

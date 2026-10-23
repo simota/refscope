@@ -203,7 +203,7 @@ test("happy path: 1 repo snapshot passes fleet-response schema", async () => {
     // lastEventAt is null in Option A subset (no in-memory SSE state)
     assert.equal(snapshot.repos[0].lastEventAt, null);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -282,7 +282,7 @@ test("partial response: 2 repos, 1 success 1 failure, both in response", async (
     assert.equal(badEntry.commits24h, null);
     assert.equal(badEntry.worktreeDirty, null);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -315,7 +315,7 @@ test("include filter: ?include= restricts the repos observed", async () => {
     assert.equal(snapshot.estimatedCost.subscribedRepoCount, 2);
   } finally {
     for (const rp of [repo1, repo2, repo3]) {
-      fs.rmSync(rp, { recursive: true, force: true });
+      fs.rmSync(rp, { recursive: true, force: true, maxRetries: 10 });
     }
   }
 });
@@ -371,7 +371,7 @@ test("estimatedCost: gitCallsPerMin equals 6 * subscribedRepoCount (Option A for
     assert.equal(snapshot.estimatedCost.snapshotIntervalMs, 30000);
   } finally {
     for (const rp of [repo1, repo2, repo3]) {
-      fs.rmSync(rp, { recursive: true, force: true });
+      fs.rmSync(rp, { recursive: true, force: true, maxRetries: 10 });
     }
   }
 });
@@ -395,7 +395,7 @@ test("notes: untrackedExcluded=true and sseAvailable=false in Option A subset", 
     assert.equal(snapshot.notes.sseAvailable, false,
       "Option A subset must report sseAvailable: false (SSE wired in v1)");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -430,7 +430,7 @@ test("HTTP route: GET /api/fleet/snapshot returns 200 with correct structure", a
     assert.equal(body.repos[0].repoId, "demo");
     assert.equal(body.repos[0].status, "ok");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -456,7 +456,7 @@ test("unborn HEAD reports ok with zero commits instead of git_error", async () =
       { status: "ok", headShortSha: null, commits24h: 0, worktreeDirty: null },
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -510,6 +510,6 @@ test("a corrupt branch ref reports git_error, not an unborn ok", async () => {
     const snapshot = await createFleetService(config, svc).getFleetSnapshot({});
     assert.equal(snapshot.repos[0].status, "git_error");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });

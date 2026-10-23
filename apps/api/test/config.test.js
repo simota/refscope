@@ -277,7 +277,7 @@ function buildFakeRepos(n) {
   }
   return {
     rtgvRepos: entries.join(","),
-    cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
+    cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 }),
   };
 }
 
@@ -316,7 +316,7 @@ test("two different ids pointing to the same realPath are rejected", () => {
       /Duplicate repository path in RTGV_REPOS/,
     );
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -415,7 +415,7 @@ function buildMergeFixtures(envCount, persistedCount) {
   return {
     envEntries,
     persistedEntries,
-    cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
+    cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 }),
   };
 }
 
@@ -453,7 +453,7 @@ test("mergeRepositoryAllowlist: env entry wins over persisted entry with same id
     assert.equal(merged.get("svc1").origin, "env");
     assert.equal(merged.get("svc1").path, realPath);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -489,7 +489,7 @@ test("mergeRepositoryAllowlist: persisted entry whose realPath is claimed by env
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /ui-id: path already registered as cli/);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -515,7 +515,7 @@ test("mergeRepositoryAllowlist: later persisted entry with a duplicate id or rea
     assert.equal(merged.get("x").path, firstReal);
     assert.equal(warnings.length, 2);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -536,7 +536,7 @@ test("mergeRepositoryAllowlist: persisted entry with an invalid repo id is skipp
     assert.equal(merged.size, 0);
     assert.match(warnings[0], /invalid id/);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -566,7 +566,7 @@ test("loadConfig starts when the persisted store repeats an RTGV_REPOS path", ()
     }
     assert.deepEqual([...config.repositories.keys()], ["cli"]);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -649,6 +649,6 @@ test("removing a repository also drops same-path store entries skipped at startu
       else process.env.XDG_CONFIG_HOME = origXdg;
     }
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 });
   }
 });

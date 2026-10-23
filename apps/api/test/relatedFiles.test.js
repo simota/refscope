@@ -187,7 +187,7 @@ test("getRelatedFiles excludes a non-ASCII target and returns sibling names unqu
       ["相棒.txt"],
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -253,7 +253,7 @@ test("getRelatedFiles aggregates co-changes from a real repo", async () => {
       assert.match(entry.lastCoChangeAt, /^\d{4}-\d{2}-\d{2}T/);
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -298,7 +298,7 @@ test("getRelatedFiles excludes target even after a rename (--follow)", async () 
     assert.ok(paths.includes("src/sibling-a.js"));
     assert.ok(paths.includes("src/sibling-b.js"));
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -327,7 +327,7 @@ test("getRelatedFiles returns empty list when only the target is touched", async
     assert.equal(result.body.truncated, false);
     assert.equal(result.body.scannedCommits, 2);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -364,7 +364,7 @@ test("getRelatedFiles flags truncated:true when commits exceed the requested lim
     const paths = result.body.related.map((entry) => entry.path).sort();
     assert.deepEqual(paths, ["src/sib-2.js", "src/sib-3.js"]);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -402,7 +402,7 @@ test("getRelatedFiles honours an explicit branch ref", async () => {
     const mainPaths = mainResult.body.related.map((entry) => entry.path);
     assert.deepEqual(mainPaths, ["src/main-only.js"]);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -495,7 +495,7 @@ test("getRelatedFiles returns 404 for unknown ref", async () => {
     assert.equal(result.status, 404);
     assert.deepEqual(result.body, { error: "Ref not found or not a commit" });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -527,7 +527,7 @@ test("getRelatedFiles caps limit at RELATED_FILES_MAX_LIMIT", async () => {
     assert.equal(result.body.scannedCommits, 1);
     assert.equal(result.body.related.length, 0);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -563,7 +563,7 @@ test("getRelatedFiles does not list the target's former names as related", async
       [["s.txt", 3]],
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -609,7 +609,7 @@ test("getRelatedFiles keeps the source of a copy as a co-changed file", async ()
       [["Bar.txt", 1]],
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -656,7 +656,7 @@ test("getRelatedFiles reads long rename chains beyond the default git output cap
     assert.equal(result.body.truncated, true);
     assert.deepEqual(result.body.related, []);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
