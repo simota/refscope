@@ -493,3 +493,23 @@ test("fleet probes share one per-repo deadline instead of adding up", async () =
   assert.equal(snapshot.repos[0].status, "ok");
   assert.equal(snapshot.repos[0].commits24h, 3);
 });
+
+test("a corrupt branch ref reports git_error, not an unborn ok", async () => {
+  const repoPath = createTempPath("rtgv-fleet-corrupt-");
+  try {
+    initRepo(repoPath);
+    writeAndCommit(repoPath, "README.md", "hello\n", "chore: seed");
+    // HEAD -> refs/heads/<branch>, whose content is not an object name.
+    const branch = git(repoPath, "rev-parse", "--abbrev-ref", "HEAD").trim();
+    fs.writeFileSync(path.join(repoPath, ".git", "refs", "heads", branch), "deadbeef\n");
+
+    const svc = await realGitService(repoPath);
+    const config = {
+      repositories: new Map([["broken", { id: "broken", name: "broken", path: repoPath }]]),
+    };
+    const snapshot = await createFleetService(config, svc).getFleetSnapshot({});
+    assert.equal(snapshot.repos[0].status, "git_error");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});

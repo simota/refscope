@@ -4096,12 +4096,49 @@ export async function getHeadShortSha(repoPath) {
     );
     return stdout.trim() || null;
   } catch (err) {
-    // `--verify --quiet` exits 1 without output when HEAD is unborn.
-    if (err instanceof GitCommandError && err.exitCode === 1 && !err.timedOut) {
+    // `--verify --quiet` exits 1 when HEAD does not resolve. That covers an
+    // unborn branch, but also a corrupt ref, which must not read as "ok".
+    if (
+      err instanceof GitCommandError &&
+      err.exitCode === 1 &&
+      !err.timedOut &&
+      (await isHeadUnborn(repoPath))
+    ) {
       return null;
     }
     throw err;
   }
+}
+
+const HEAD_SYMREF_PATTERN = /^ref: (refs\/heads\/[^\s]+)\n?$/;
+
+/**
+ * True only when HEAD is a symbolic ref to a branch that does not exist yet.
+ * A broken ref makes `for-each-ref` print "ignoring broken ref" on stderr,
+ * and a ref pointing at a missing object is still listed, so both are
+ * reported as not unborn.
+ *
+ * @param {string} repoPath
+ * @returns {Promise<boolean>}
+ */
+async function isHeadUnborn(repoPath) {
+  const repo = { path: repoPath };
+  const options = { timeoutMs: FLEET_GIT_TIMEOUT_MS, maxBytes: 4096 };
+  const { stdout: gitDir } = await runGit(repo, ["rev-parse", "--absolute-git-dir"], options);
+  let head;
+  try {
+    head = fs.readFileSync(path.join(gitDir.trim(), "HEAD"), "utf8");
+  } catch {
+    return false;
+  }
+  const match = HEAD_SYMREF_PATTERN.exec(head);
+  if (!match) return false;
+  const { stdout, stderr } = await runGit(
+    repo,
+    ["for-each-ref", "--format=%(refname)", match[1]],
+    options,
+  );
+  return stdout.trim() === "" && stderr.trim() === "";
 }
 
 /**
