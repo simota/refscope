@@ -144,8 +144,8 @@ RTGV_REF_POLL_MS=1000 RTGV_REPOS=viewer=/absolute/path/to/git/repo pnpm dev:api
 Numeric runtime settings such as `PORT`, `RTGV_GIT_TIMEOUT_MS`,
 `RTGV_DIFF_MAX_BYTES`, and `RTGV_REF_POLL_MS` must be decimal positive integer
 strings. Values using numeric coercion syntax such as `1e3` or `10.5` are
-rejected at startup. `RTGV_GIT_TIMEOUT_MS` must also fit Node.js timer bounds
-(`1` through `2147483647`). `RTGV_DIFF_MAX_BYTES` defaults to `4000000`
+rejected at startup. `RTGV_GIT_TIMEOUT_MS` and `RTGV_REF_POLL_MS` must also fit
+Node.js timer bounds (`1` through `2147483647`). `RTGV_DIFF_MAX_BYTES` defaults to `4000000`
 (4&nbsp;MB) and is capped at `16777216` bytes so Git output remains bounded.
 
 When overriding browser origins for CORS, provide comma-separated HTTP(S)
@@ -376,6 +376,10 @@ API error message in the timeline instead of silently dropping the event.
   `refs/replace/`, `refs/rewritten/`, and `refs/worktree/` are rejected before
   Git execution. Same-named branches remain addressable through their full names
   such as `refs/heads/FETCH_HEAD`, `refs/heads/stash`, or `refs/heads/original`.
+  Because Git resolves a short name as `refs/<name>` first, the ref Git actually
+  resolved is checked as well: short names such as `notes/commits` or
+  `pull/1/head`, and symbolic refs pointing outside the public namespaces,
+  return "Ref not found or not a commit".
 - Commit-list refs are resolved as commit-ish revisions with Git option parsing
   ended before the log query runs, so blob IDs and missing refs return a public
   error instead of falling through to a generic Git failure. The log query uses

@@ -205,6 +205,13 @@ test("requires decimal positive integer runtime configuration", () => {
     () => loadConfig({ RTGV_REF_POLL_MS: "-1", RTGV_REPOS: "" }),
     /positive decimal integer/,
   );
+  // Node clamps setInterval delays above 2^31-1 to 1 ms, which would poll Git
+  // continuously instead of rarely.
+  assert.equal(loadConfig({ RTGV_REF_POLL_MS: "2147483647", RTGV_REPOS: "" }).refPollMs, 2147483647);
+  assert.throws(
+    () => loadConfig({ RTGV_REF_POLL_MS: "2147483648", RTGV_REPOS: "" }),
+    /RTGV_REF_POLL_MS must be between 1 and 2147483647/,
+  );
 });
 
 test("validates CORS allowed origins as HTTP origins", () => {

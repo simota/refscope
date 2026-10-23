@@ -689,6 +689,76 @@ test("resolves commit-ish revisions to commit object ids", async () => {
   }
 });
 
+test("does not resolve short names or symrefs to non-public refs", async () => {
+  const repoPath = createTempPath("rtgv-resolve-dwim-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    git(repoPath, "commit", "--allow-empty", "-m", "base commit");
+    const commitHash = git(repoPath, "rev-parse", "HEAD").trim();
+    git(repoPath, "notes", "add", "-m", "private note", "HEAD");
+    git(repoPath, "update-ref", "refs/original/refs/heads/main", commitHash);
+    git(repoPath, "update-ref", "refs/bisect/bad", commitHash);
+    git(repoPath, "update-ref", "refs/pull/1/head", commitHash);
+    git(repoPath, "symbolic-ref", "refs/heads/alias", "refs/notes/commits");
+    // A branch whose short name shares a first component with an internal
+    // namespace still resolves when no internal ref of that name exists.
+    git(repoPath, "branch", "notes/topic");
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    for (const revision of [
+      "notes/commits",
+      "original/refs/heads/main",
+      "bisect/bad",
+      "pull/1/head",
+      "refs/heads/alias",
+      "alias",
+    ]) {
+      const result = await resolveCommitishRevision(repo, revision, 5000);
+      assert.equal(result.ok, false, revision);
+      assert.equal(result.result.status, 404, revision);
+    }
+
+    for (const revision of ["main", "heads/main", "refs/heads/main", "HEAD", "notes/topic", commitHash]) {
+      assert.deepEqual(
+        await resolveCommitishRevision(repo, revision, 5000),
+        { ok: true, hash: commitHash },
+        revision,
+      );
+    }
+
+    git(repoPath, "checkout", "--detach", "HEAD");
+    assert.deepEqual(await resolveCommitishRevision(repo, "HEAD", 5000), { ok: true, hash: commitHash });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("rejects commit list refs that only resolve to non-public refs", async () => {
+  const repoPath = createTempPath("rtgv-list-dwim-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    git(repoPath, "commit", "--allow-empty", "-m", "base commit");
+    git(repoPath, "notes", "add", "-m", "private note", "HEAD");
+    const service = createGitService({
+      repositories: new Map([["demo", { id: "demo", name: "demo", path: repoPath }]]),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 100_000,
+    });
+
+    const result = await service.listCommits(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ ref: "notes/commits" }),
+    );
+    assert.equal(result.status, 404);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("reports compare ahead and behind counts from target relative to base", async () => {
   const repoPath = createTempPath("rtgv-compare-");
   try {

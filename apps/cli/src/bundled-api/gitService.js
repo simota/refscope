@@ -5,6 +5,7 @@ import { GitCommandError, runGit } from "./gitRunner.js";
 import { addRepository as configAddRepository, removeRepository as configRemoveRepository } from "./config.js";
 import { classifyFileDiff } from "./structuralDiff.js";
 import {
+  isPublicFullRefName,
   isValidGitRef,
   isValidObjectId,
   parseAuthorQuery,
@@ -2171,6 +2172,23 @@ export function createGitService(config) {
 
 export async function resolveCommitishRevision(repo, revision, timeoutMs) {
   try {
+    // isValidGitRef only sees the name the client sent. Git resolves a short
+    // name as refs/<name> first, so `notes/commits` reaches refs/notes/commits,
+    // and a public symref can point anywhere. Check the ref Git picked; an
+    // empty result means the revision named an object, not a ref.
+    if (!isValidObjectId(revision)) {
+      const { stdout: fullName } = await runGit(repo, symbolicFullNameArgs(revision), {
+        timeoutMs,
+        maxBytes: 1024,
+      });
+      const resolvedName = fullName.trim();
+      if (resolvedName !== "" && !isPublicFullRefName(resolvedName)) {
+        return {
+          ok: false,
+          result: { status: 404, body: { error: "Ref not found or not a commit" } },
+        };
+      }
+    }
     const { stdout } = await runGit(repo, commitishRevParseArgs(revision), {
       timeoutMs,
       maxBytes: 128,
@@ -2280,6 +2298,10 @@ export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathA
     "--",
     ...pathArgs,
   ];
+}
+
+export function symbolicFullNameArgs(revision) {
+  return ["rev-parse", "--verify", "--quiet", "--symbolic-full-name", "--end-of-options", revision];
 }
 
 export function commitishRevParseArgs(revision) {
