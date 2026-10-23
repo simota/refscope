@@ -2235,7 +2235,7 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
       // the public namespaces.
       if (
         resolvedName === ""
-          ? (revision !== "HEAD" && PSEUDOREF_SYNTAX_PATTERN.test(revision)) ||
+          ? (await isRootRefCandidate(repo, revision, timeoutMs)) ||
             (await isNonPublicRefsChild(repo, revision, timeoutMs))
           : !isPublicFullRefName(resolvedName)
       ) {
@@ -2265,6 +2265,19 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
 
 // Names Git looks up directly under $GIT_DIR when resolving a short name.
 const PSEUDOREF_SYNTAX_PATTERN = /^[A-Z_-]+$/;
+
+// Whether Git would resolve the ambiguous short name to $GIT_DIR/<name>.
+// A branch and tag that merely share an all-caps name (WIP) stay resolvable.
+async function isRootRefCandidate(repo, revision, timeoutMs) {
+  if (revision === "HEAD" || !PSEUDOREF_SYNTAX_PATTERN.test(revision)) {
+    return false;
+  }
+  const { stdout } = await runGit(repo, ["rev-parse", "--git-path", revision], {
+    timeoutMs,
+    maxBytes: 4096,
+  });
+  return fs.existsSync(path.resolve(repo.path, stdout.trim()));
+}
 
 async function isNonPublicRefsChild(repo, revision, timeoutMs) {
   const refName = `refs/${revision}`;
@@ -2593,17 +2606,18 @@ function describeUntrackedFiles(repoPath, stdout, maxDiffBytes) {
 }
 
 /**
- * Quote a diff side path the way Git does when it contains control
- * characters, `"` or `\\`. The untracked patch is assembled here rather than
- * by Git, and a raw newline in a file name would otherwise start a forged
- * hunk line.
+ * Quote a diff side path in Git's C style when it contains a control
+ * character. The untracked patch is assembled here rather than by Git, and a
+ * raw newline in a file name would otherwise start a forged hunk line. Names
+ * with only `"` or `\\` stay raw (Git would quote them too): the UI shows
+ * side paths verbatim, and those characters cannot break the line framing.
  *
  * @param {"a/" | "b/"} prefix
  * @param {string} relPath
  */
 export function quoteDiffSidePath(prefix, relPath) {
   const value = `${prefix}${relPath}`;
-  if (!/[\u0000-\u001f"\\\u007f]/.test(value)) return value;
+  if (!/[\u0000-\u001f\u007f]/.test(value)) return value;
   const escapes = { "\u0007": "\\a", "\b": "\\b", "\t": "\\t", "\n": "\\n", "\v": "\\v", "\f": "\\f", "\r": "\\r", '"': '\\"', "\\": "\\\\" };
   const quoted = value.replace(
     /[\u0000-\u001f"\\\u007f]/g,

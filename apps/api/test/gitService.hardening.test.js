@@ -124,6 +124,20 @@ test(
 );
 
 test(
+  "an all-caps name shared by a branch and a tag still resolves",
+  withRepo("rtgv-caps-ambiguous-", async (repoPath, repo) => {
+    commitFile(repoPath, "a.txt", "a\n", "base");
+    git(repoPath, "branch", "WIP");
+    git(repoPath, "tag", "WIP");
+
+    const service = createService();
+    const result = await service.listCommits(repo, new URLSearchParams({ ref: "WIP" }));
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.map((commit) => commit.subject), ["base"]);
+  }),
+);
+
+test(
   "a commit with thousands of files neither fails the list nor stalls live updates",
   withRepo("rtgv-large-commit-", async (repoPath, repo) => {
     const base = commitFile(repoPath, "README.md", "hello\n", "base");
@@ -302,7 +316,10 @@ test(
   }),
 );
 
-test("quoteDiffSidePath matches Git's C-style quoting", () => {
+test("quoteDiffSidePath quotes control characters in Git's C style", () => {
   assert.equal(quoteDiffSidePath("b/", "plain name.txt"), "b/plain name.txt");
+  // The UI shows side paths verbatim; only names that would break the line
+  // framing are quoted.
+  assert.equal(quoteDiffSidePath("b/", 'say "hi"\\x.txt'), 'b/say "hi"\\x.txt');
   assert.equal(quoteDiffSidePath("a/", 'x\n"\\\u0001\t'), '"a/x\\n\\"\\\\\\001\\t"');
 });
