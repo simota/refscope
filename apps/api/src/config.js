@@ -134,13 +134,14 @@ export function parseRepositoryAllowlist(value, _env = {}) {
  * Rules:
  * - env entries take precedence: if a persisted entry shares an id with an env
  *   entry, the persisted entry is silently skipped (env is authoritative).
- * - The persisted store is UI-managed state, so a bad persisted entry never
- *   blocks startup: an invalid id, an id already claimed by an earlier
+ * - The persisted store is UI-managed state, so a conflicting persisted entry
+ *   does not block startup: an invalid id, an id already claimed by an earlier
  *   persisted entry, or a realPath already claimed by any earlier entry is
  *   skipped with a warning. Such conflicts arise without hand-editing, e.g.
  *   `refscope --repo X` after X was added via the UI, or two instances
  *   persisting the same repository. The store file itself is left untouched.
- * - Total entry count must not exceed REPO_ALLOWLIST_MAX_SIZE (32).
+ * - Total entry count must not exceed REPO_ALLOWLIST_MAX_SIZE (32); this still
+ *   throws, including when persisted entries push the total over the cap.
  *
  * @param {Map<string, { id: string, name: string, path: string, origin: "env" | "ui" }>} envEntries
  * @param {{ id: string, path: string, addedAt: string }[]} persistedEntries
@@ -302,7 +303,7 @@ export function removeRepository(id) {
     throw new Error(`Cannot remove env-origin repository: ${id}`);
   }
 
-  removeRepo(id);
+  removeRepo(id, process.env, entry.path);
   repositories.delete(id);
   return entry;
 }

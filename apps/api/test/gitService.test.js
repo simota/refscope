@@ -1555,6 +1555,7 @@ test("cherryPatchArgs reads one commit's own patch with options terminated", () 
     "--no-ext-diff",
     "--no-textconv",
     "-U0",
+    "--find-renames",
     "--end-of-options",
     `${hash}^`,
     hash,
@@ -1620,6 +1621,48 @@ test("getCompareCherry grades a clean cherry-pick identical when the branches al
     assert.ok(fixEntry, "fix commit should be patch-id equivalent");
     assert.equal(fixEntry.grade, "identical");
     assert.deepEqual(fixEntry.diffLines, { added: 0, deleted: 0 });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getCompareCherry grades a cherry-picked rename of a large file as identical", async () => {
+  // With only the new path in the pathspec, each side's patch was an add of
+  // the whole file, overflowed the per-entry byte cap and became "ungraded".
+  const repoPath = createTempPath("rtgv-cherry-rename-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    const body = Array.from({ length: 4000 }, (_, i) => `line ${i} of a large file`).join("\n");
+    fs.writeFileSync(path.join(repoPath, "old.txt"), `${body}\n`);
+    git(repoPath, "add", "old.txt");
+    git(repoPath, "commit", "-m", "base commit");
+    git(repoPath, "checkout", "-b", "release");
+    fs.writeFileSync(path.join(repoPath, "release-only.txt"), "release\n");
+    git(repoPath, "add", "release-only.txt");
+    git(repoPath, "commit", "-m", "chore(release): branch off");
+    git(repoPath, "checkout", "main");
+
+    git(repoPath, "mv", "old.txt", "new.txt");
+    git(repoPath, "commit", "-m", "refactor: rename");
+    const renameHash = git(repoPath, "rev-parse", "HEAD").trim();
+    git(repoPath, "checkout", "release");
+    git(repoPath, "cherry-pick", renameHash);
+    git(repoPath, "checkout", "main");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024 * 1024,
+    });
+    const result = await service.getCompareCherry(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ base: "main", target: "release" }),
+    );
+    const entry = result.body.equivalent.find((c) => c.hash === renameHash);
+    assert.ok(entry, "rename commit should be patch-id equivalent");
+    assert.equal(entry.grade, "identical");
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }

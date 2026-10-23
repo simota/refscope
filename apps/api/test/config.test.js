@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { loadConfig, mergeRepositoryAllowlist, parseRepositoryAllowlist } from "../src/config.js";
+import { loadConfig, mergeRepositoryAllowlist, parseRepositoryAllowlist, removeRepository } from "../src/config.js";
+import { loadPersistedRepos } from "../src/reposStore.js";
 import {
   isValidGitRef,
   isValidObjectId,
@@ -601,5 +602,46 @@ test("mergeRepositoryAllowlist: env 16 + persisted 17 (union 33) throws", () => 
     );
   } finally {
     cleanup();
+  }
+});
+
+test("removing a repository also drops same-path store entries skipped at startup", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rtgv-remove-dup-"));
+  try {
+    const repoPath = path.join(tempDir, "repo");
+    fs.mkdirSync(path.join(repoPath, ".git"), { recursive: true });
+    const realPath = fs.realpathSync(repoPath);
+    const configHome = path.join(tempDir, "config");
+    fs.mkdirSync(path.join(configHome, "refscope"), { recursive: true });
+    fs.writeFileSync(
+      path.join(configHome, "refscope", "repos.json"),
+      JSON.stringify({
+        version: 1,
+        repos: [
+          { id: "a", path: realPath, addedAt: "2026-01-01T00:00:00.000Z" },
+          { id: "b", path: realPath, addedAt: "2026-01-02T00:00:00.000Z" },
+        ],
+      }),
+    );
+    const env = { RTGV_REPOS: "", XDG_CONFIG_HOME: configHome };
+
+    const origWarn = console.warn;
+    console.warn = () => {};
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = configHome;
+    try {
+      const config = loadConfig(env);
+      assert.deepEqual([...config.repositories.keys()], ["a"]);
+      removeRepository("a");
+      // "b" must not resurrect the removed repository on the next start.
+      assert.deepEqual(loadPersistedRepos(env), []);
+      assert.equal(loadConfig(env).repositories.size, 0);
+    } finally {
+      console.warn = origWarn;
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

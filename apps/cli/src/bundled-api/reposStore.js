@@ -119,18 +119,25 @@ export function appendRepo(entry, env = process.env) {
  * Remove a repository entry from the store file by id.
  * If the id does not exist in the store the operation is a no-op.
  *
+ * When `repoPath` is given, entries for the same repository under other ids
+ * are dropped too. Those were skipped at startup as duplicates, and would
+ * otherwise bring the removed repository back on the next start.
+ *
  * @param {string} id
  * @param {{ XDG_CONFIG_HOME?: string, HOME?: string } & NodeJS.ProcessEnv} [env]
+ * @param {string} [repoPath] canonical path of the removed repository
  * @returns {void}
  */
-export function removeRepo(id, env = process.env) {
+export function removeRepo(id, env = process.env, repoPath) {
   const storePath = resolveStorePath(env);
   if (!storePath) {
     throw new Error("[reposStore] Cannot persist: HOME directory is not set");
   }
 
   const current = _readStore(storePath);
-  const filtered = current.repos.filter((r) => r.id !== id);
+  const filtered = current.repos.filter(
+    (r) => r.id !== id && (repoPath === undefined || canonicalPath(r.path) !== repoPath),
+  );
   if (filtered.length === current.repos.length) {
     // Entry not present — no-op (caller responsibility to check existence).
     return;
@@ -141,6 +148,14 @@ export function removeRepo(id, env = process.env) {
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
+
+function canonicalPath(repoPath) {
+  try {
+    return fs.realpathSync(repoPath);
+  } catch {
+    return repoPath;
+  }
+}
 
 /**
  * Read the store file and return a validated store object.

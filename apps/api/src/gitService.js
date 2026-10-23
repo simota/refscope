@@ -1845,6 +1845,9 @@ export function createGitService(config) {
                 "diff",
                 "--name-only",
                 "-z",
+                // List both sides of a rename: with only the new path in the
+                // pathspec, step 2 would see an add of the whole file.
+                "--no-renames",
                 "--no-ext-diff",
                 "--no-textconv",
                 "--end-of-options",
@@ -3184,8 +3187,8 @@ export function buildSearchModeArgs(mode, pattern, searchValue) {
 
 /**
  * Argument vector for one side of the cherry-pick grading: the commit's own
- * patch (`<hash>^..<hash>`) with no context lines, limited to `paths`
- * (already literal pathspecs).
+ * patch (`<hash>^..<hash>`) with no context lines and rename detection,
+ * limited to `paths` (already literal pathspecs, both sides of any rename).
  *
  * @param {string} hash
  * @param {string[]} paths
@@ -3198,6 +3201,9 @@ export function cherryPatchArgs(hash, paths) {
     "--no-ext-diff",
     "--no-textconv",
     "-U0",
+    // Explicit so a pure rename is one header, not delete + add of every
+    // line, regardless of the repo's diff.renames setting.
+    "--find-renames",
     "--end-of-options",
     `${hash}^`,
     hash,
