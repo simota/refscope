@@ -124,6 +124,23 @@ test(
 );
 
 test(
+  "rejects a lowercase ambiguous name that Git would resolve under $GIT_DIR",
+  withRepo("rtgv-gitdir-lower-", async (repoPath, repo) => {
+    commitFile(repoPath, "a.txt", "a\n", "base");
+    git(repoPath, "checkout", "-q", "-b", "private-work");
+    const secret = commitFile(repoPath, "secret.txt", "s\n", "private secret commit");
+    git(repoPath, "checkout", "-q", "main");
+    git(repoPath, "branch", "-D", "private-work");
+    fs.writeFileSync(path.join(repoPath, ".git", "foo"), `${secret}\n`);
+    git(repoPath, "branch", "foo");
+
+    const service = createService();
+    const result = await service.listCommits(repo, new URLSearchParams({ ref: "foo" }));
+    assert.equal(result.status, 404);
+  }),
+);
+
+test(
   "an all-caps name shared by a branch and a tag still resolves",
   withRepo("rtgv-caps-ambiguous-", async (repoPath, repo) => {
     commitFile(repoPath, "a.txt", "a\n", "base");
@@ -295,6 +312,40 @@ test(
     } finally {
       Date.now = realNow;
     }
+  }),
+);
+
+test(
+  "hotspot enforces the deadline when the last batch finishes past it",
+  withRepo("rtgv-hotspot-deadline-last-", async (repoPath, repo) => {
+    commitFile(repoPath, "a.txt", "a\n", "first");
+    const service = createService({ hotspotTimeoutMs: 20_000 });
+    const realNow = Date.now;
+    let calls = 0;
+    // Readings 1-2 (deadline, check before the only batch) are on time;
+    // everything after the batch is late.
+    Date.now = () => (++calls <= 2 ? realNow() : realNow() + 60_000);
+    try {
+      const result = await service.getFileHotspot(repo, { ref: "HEAD", limit: 50, commitCap: 50, since: null });
+      assert.equal(result.status, 504);
+    } finally {
+      Date.now = realNow;
+    }
+  }),
+);
+
+test(
+  "listRefs peels many nested tags in one batch",
+  withRepo("rtgv-nested-batch-", async (repoPath, repo) => {
+    const head = commitFile(repoPath, "a.txt", "a\n", "base");
+    git(repoPath, "tag", "-a", "inner", "-m", "inner");
+    for (let i = 0; i < 5; i += 1) {
+      git(repoPath, "-c", "advice.nestedTag=false", "tag", "-a", `outer${i}`, "-m", "outer", "inner");
+    }
+    const refs = await createService().listRefs(repo);
+    const outers = refs.filter((ref) => ref.name.startsWith("refs/tags/outer"));
+    assert.equal(outers.length, 5);
+    assert.ok(outers.every((ref) => ref.hash === head));
   }),
 );
 

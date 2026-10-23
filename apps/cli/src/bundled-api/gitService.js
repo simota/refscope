@@ -2134,6 +2134,13 @@ export function createGitService(config) {
           sizeMap.set(chunk[j], results[j]);
         }
       }
+      // The last batch may have finished past the deadline too.
+      if (Date.now() > deadline) {
+        return {
+          status: 504,
+          body: { error: "timeout", truncated: true, truncationReason: "timeout" },
+        };
+      }
 
       // ── Step 5: compose and sort ────────────────────────────────────────────
       // Exclude paths where git show returned null (deleted/binary at this ref).
@@ -2163,7 +2170,12 @@ export function createGitService(config) {
       // This is a tiny, fast call (maxBytes=64, short timeout) and runs only
       // when log returned exactly commitCap records (likely overflow).
       let truncatedByCommitCap = false;
-      if (commitsAnalyzed >= commitCap) {
+      // The probe only refines the truncation flag, so it gets what is left of
+      // the request budget; with nothing left, report the cap as binding.
+      const probeBudgetMs = Math.min(hotspotTimeoutMs, 5_000, deadline - Date.now());
+      if (commitsAnalyzed >= commitCap && probeBudgetMs <= 0) {
+        truncatedByCommitCap = true;
+      } else if (commitsAnalyzed >= commitCap) {
         try {
           const probeArgs = [
             "--count",
@@ -2174,7 +2186,7 @@ export function createGitService(config) {
             "--",
           ];
           const { stdout: countOut } = await runGit(repo, ["rev-list", ...probeArgs], {
-            timeoutMs: Math.min(hotspotTimeoutMs, 5_000),
+            timeoutMs: probeBudgetMs,
             maxBytes: 64,
           });
           const revCount = Number(countOut.trim());
@@ -2230,9 +2242,8 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
       });
       const resolvedName = fullName.trim();
       // Empty output also covers an ambiguous short name. Git tries
-      // $GIT_DIR/<name> first (only for pseudo-ref syntax, e.g. a stray
-      // NOTES_MERGE_PARTIAL), then refs/<name>: the only candidates outside
-      // the public namespaces.
+      // $GIT_DIR/<name> first (e.g. a stray NOTES_MERGE_PARTIAL), then
+      // refs/<name>: the only candidates outside the public namespaces.
       if (
         resolvedName === ""
           ? (await isRootRefCandidate(repo, revision, timeoutMs)) ||
@@ -2263,20 +2274,22 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
   }
 }
 
-// Names Git looks up directly under $GIT_DIR when resolving a short name.
-const PSEUDOREF_SYNTAX_PATTERN = /^[A-Z_-]+$/;
-
-// Whether Git would resolve the ambiguous short name to $GIT_DIR/<name>.
-// A branch and tag that merely share an all-caps name (WIP) stay resolvable.
+// Whether Git would resolve the ambiguous short name to $GIT_DIR/<name>, the
+// first rule of its short-name lookup (any name, not only pseudo-ref syntax).
+// A branch and tag that merely share a name stay resolvable.
 async function isRootRefCandidate(repo, revision, timeoutMs) {
-  if (revision === "HEAD" || !PSEUDOREF_SYNTAX_PATTERN.test(revision)) {
+  if (revision === "HEAD") {
     return false;
   }
   const { stdout } = await runGit(repo, ["rev-parse", "--git-path", revision], {
     timeoutMs,
     maxBytes: 4096,
   });
-  return fs.existsSync(path.resolve(repo.path, stdout.trim()));
+  try {
+    return fs.statSync(path.resolve(repo.path, stdout.trim())).isFile();
+  } catch {
+    return false;
+  }
 }
 
 async function isNonPublicRefsChild(repo, revision, timeoutMs) {
@@ -3110,33 +3123,36 @@ export function parsePublicRefLines(stdout) {
 /**
  * Replace the hash of each tag-of-a-tag (flagged by `parsePublicRefLines`)
  * with the object the tag chain finally names, so a ref's hash is never a
- * tag object. Nested tags are rare, so one `rev-parse` each is acceptable.
+ * tag object. One `rev-parse` peels a whole batch; the arguments are full
+ * hashes, so none can read as an option.
  *
  * @param {{ path: string }} repo
  * @param {Array<{ name: string, hash: string, updatedAt: string | null, nestedTag?: boolean }>} refs
  * @param {number} timeoutMs
  */
 async function peelNestedTags(repo, refs, timeoutMs) {
-  await Promise.all(
-    refs
-      .filter((ref) => ref.nestedTag)
-      .map(async (ref) => {
-        try {
-          const { stdout } = await runGit(
-            repo,
-            ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref.hash}^{}`],
-            { timeoutMs, maxBytes: 128 },
-          );
-          const peeled = stdout.trim();
-          if (isValidObjectId(peeled)) ref.hash = peeled;
-        } catch (error) {
-          if (error instanceof GitCommandError && (error.timedOut || error.truncated)) throw error;
-          // A broken chain keeps the one-level peel.
-        }
-      }),
-  );
+  const nested = refs.filter((ref) => ref.nestedTag);
+  for (let i = 0; i < nested.length; i += NESTED_TAG_PEEL_BATCH) {
+    const batch = nested.slice(i, i + NESTED_TAG_PEEL_BATCH);
+    try {
+      const { stdout } = await runGit(
+        repo,
+        ["rev-parse", ...batch.map((ref) => `${ref.hash}^{}`)],
+        { timeoutMs, maxBytes: batch.length * 64 },
+      );
+      const peeled = stdout.split("\n");
+      batch.forEach((ref, index) => {
+        if (isValidObjectId(peeled[index] ?? "")) ref.hash = peeled[index];
+      });
+    } catch (error) {
+      if (error instanceof GitCommandError && (error.timedOut || error.truncated)) throw error;
+      // A broken chain fails the batch; its refs keep the one-level peel.
+    }
+  }
   return refs;
 }
+
+const NESTED_TAG_PEEL_BATCH = 512;
 
 function refDateMs(value) {
   const ms = value ? Date.parse(value) : Number.NaN;
