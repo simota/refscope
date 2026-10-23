@@ -476,3 +476,20 @@ test("snapshot does not leave its per-repo timeout timer pending", async () => {
   assert.equal(snapshot.repos[0].status, "ok");
   assert.equal(countTimers(), before);
 });
+
+test("fleet probes share one per-repo deadline instead of adding up", async () => {
+  // Each probe alone fits in the 5 s window; run one after another they
+  // would not (2.6 s + 2.6 s).
+  const slow = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 2600));
+  const svc = {
+    getHeadShortSha: () => slow("aabbccd"),
+    getCommits24hCount: () => slow(3),
+    getWorktreeDirtyBoolean: () => slow(false),
+  };
+  const config = {
+    repositories: new Map([["svc1", { id: "svc1", name: "svc1", path: os.tmpdir() }]]),
+  };
+  const snapshot = await createFleetService(config, svc).getFleetSnapshot({});
+  assert.equal(snapshot.repos[0].status, "ok");
+  assert.equal(snapshot.repos[0].commits24h, 3);
+});

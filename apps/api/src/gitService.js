@@ -3213,9 +3213,11 @@ export function cherryPatchArgs(hash, paths) {
 }
 
 /**
- * Compare the changed lines of two `-U0` patches, per file, as multisets.
+ * Compare the changed lines of two `-U0` patches, per file, in order.
  * Hunk positions are ignored (like `git patch-id`), so the same change
- * applied at a different line counts as identical.
+ * applied at a different line counts as identical, but the order of the
+ * changed lines is kept: two edits swapped between identical lines are a
+ * difference, not a match.
  *
  * `hunks` uses range-diff style double prefixes: `-+foo` is a `+foo` line
  * only in the base patch, `++foo` one only in the target patch.
@@ -3232,26 +3234,13 @@ export function comparePatchChanges(basePatch, targetPatch) {
   let deleted = 0;
   const out = [];
   for (const file of files) {
-    const baseLines = baseFiles.get(file) ?? [];
-    const remaining = new Map();
-    for (const line of targetFiles.get(file) ?? []) {
-      remaining.set(line, (remaining.get(line) ?? 0) + 1);
-    }
     const fileOut = [];
-    for (const line of baseLines) {
-      const count = remaining.get(line) ?? 0;
-      if (count > 0) {
-        remaining.set(line, count - 1);
-      } else {
-        fileOut.push(`-${line}`);
+    for (const op of diffLineSequences(baseFiles.get(file) ?? [], targetFiles.get(file) ?? [])) {
+      if (op.type === "base") {
+        fileOut.push(`-${op.line}`);
         deleted++;
-      }
-    }
-    for (const line of targetFiles.get(file) ?? []) {
-      const count = remaining.get(line) ?? 0;
-      if (count > 0) {
-        remaining.set(line, count - 1);
-        fileOut.push(`+${line}`);
+      } else if (op.type === "target") {
+        fileOut.push(`+${op.line}`);
         added++;
       }
     }
@@ -3260,6 +3249,75 @@ export function comparePatchChanges(basePatch, targetPatch) {
     }
   }
   return { added, deleted, hunks: out.join("\n") };
+}
+
+// Above this many LCS cells (~16 MB of Uint32) the comparison falls back to
+// an unordered multiset match; the per-entry byte cap keeps this rare.
+const PATCH_LCS_MAX_CELLS = 4_000_000;
+
+/**
+ * Edit script between two line sequences via longest common subsequence.
+ *
+ * @param {string[]} a base lines
+ * @param {string[]} b target lines
+ * @returns {Array<{ type: "same" | "base" | "target", line: string }>}
+ */
+function diffLineSequences(a, b) {
+  if ((a.length + 1) * (b.length + 1) > PATCH_LCS_MAX_CELLS) {
+    return diffLineMultisets(a, b);
+  }
+  const width = b.length + 1;
+  const lcs = new Uint32Array((a.length + 1) * width);
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lcs[i * width + j] =
+        a[i] === b[j]
+          ? lcs[(i + 1) * width + j + 1] + 1
+          : Math.max(lcs[(i + 1) * width + j], lcs[i * width + j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      ops.push({ type: "same", line: a[i] });
+      i++;
+      j++;
+    } else if (lcs[(i + 1) * width + j] >= lcs[i * width + j + 1]) {
+      ops.push({ type: "base", line: a[i++] });
+    } else {
+      ops.push({ type: "target", line: b[j++] });
+    }
+  }
+  while (i < a.length) ops.push({ type: "base", line: a[i++] });
+  while (j < b.length) ops.push({ type: "target", line: b[j++] });
+  return ops;
+}
+
+function diffLineMultisets(a, b) {
+  const remaining = new Map();
+  for (const line of b) {
+    remaining.set(line, (remaining.get(line) ?? 0) + 1);
+  }
+  const ops = [];
+  for (const line of a) {
+    const count = remaining.get(line) ?? 0;
+    if (count > 0) {
+      remaining.set(line, count - 1);
+      ops.push({ type: "same", line });
+    } else {
+      ops.push({ type: "base", line });
+    }
+  }
+  for (const line of b) {
+    const count = remaining.get(line) ?? 0;
+    if (count > 0) {
+      remaining.set(line, count - 1);
+      ops.push({ type: "target", line });
+    }
+  }
+  return ops;
 }
 
 /**

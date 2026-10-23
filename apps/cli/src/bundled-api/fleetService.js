@@ -130,17 +130,22 @@ async function getFleetRepoSnapshot(repoId, repoPath, window, gitService) {
 
   /** Wraps the git data collection so we can race it against a timeout. */
   async function collectGitFacts() {
-    const headShortSha = await gitService.getHeadShortSha(repoPath);
-    if (headShortSha === null) {
-      // Unborn HEAD (freshly initialised repo): no commits to count, and the
-      // HEAD-relative dirty check has nothing to compare against.
-      return { headShortSha, commits24h: 0, worktreeDirty: null };
-    }
-    const [commits24h, worktreeDirty] = await Promise.all([
+    // All three probes run in parallel so their latencies share one
+    // per-repo deadline instead of adding up.
+    const [head, commits, dirty] = await Promise.allSettled([
+      gitService.getHeadShortSha(repoPath),
       gitService.getCommits24hCount(repoPath, sinceISO),
       gitService.getWorktreeDirtyBoolean(repoPath),
     ]);
-    return { headShortSha, commits24h, worktreeDirty };
+    if (head.status === "rejected") throw head.reason;
+    if (head.value === null) {
+      // Unborn HEAD (freshly initialised repo): the HEAD-relative probes
+      // fail by design; there are no commits and nothing to diff against.
+      return { headShortSha: null, commits24h: 0, worktreeDirty: null };
+    }
+    if (commits.status === "rejected") throw commits.reason;
+    if (dirty.status === "rejected") throw dirty.reason;
+    return { headShortSha: head.value, commits24h: commits.value, worktreeDirty: dirty.value };
   }
 
   /**

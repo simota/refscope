@@ -1576,6 +1576,13 @@ test("comparePatchChanges ignores hunk positions and reports an interdiff", () =
     deleted: 1,
     hunks: [header, "-+new", "++  new"].join("\n"),
   });
+
+  // Edits swapped between two identical lines cancel out as a multiset but
+  // are a real difference: order is kept even though positions are not.
+  const swappedBase = [header, "@@ -1 +1 @@", "-a", "+ a", "@@ -3 +3 @@", "-a", "+  a"].join("\n");
+  const swappedTarget = [header, "@@ -1 +1 @@", "-a", "+  a", "@@ -3 +3 @@", "-a", "+ a"].join("\n");
+  const swapped = comparePatchChanges(swappedBase, swappedTarget);
+  assert.deepEqual([swapped.added, swapped.deleted], [2, 2]);
 });
 
 test("getCompareCherry grades a clean cherry-pick identical when the branches already differ in that file", async () => {
