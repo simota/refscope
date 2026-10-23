@@ -233,10 +233,13 @@ function validateRepoPath(repoPath, { fromCwd } = { fromCwd: false }) {
   return { ok: true, canonicalPath };
 }
 
-function displayHost(host) {
-  // 0.0.0.0 is hard to copy into a browser; show the loopback alias so the
-  // printed URL is clickable on the local machine.
+export function displayHost(host) {
+  // Wildcard binds are hard to copy into a browser; show the loopback alias
+  // so the printed URL is clickable on the local machine.
   if (host === "0.0.0.0") return "127.0.0.1";
+  if (host === "::") return "[::1]";
+  // An IPv6 literal needs brackets in a URL (`http://[::1]:4175`).
+  if (host.includes(":") && !host.startsWith("[")) return `[${host}]`;
   return host;
 }
 
