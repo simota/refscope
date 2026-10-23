@@ -30,6 +30,30 @@ const ALLOWED_GIT_SUBCOMMANDS = new Map([
 ]);
 const MAX_TIMEOUT_MS = 2_147_483_647;
 export const MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024;
+// Endpoints such as ref drift fan out several git reads per ref. Each child
+// holds three pipes, so an unbounded burst exhausts file descriptors; extra
+// calls wait for a slot instead. The timeout starts when the child spawns.
+export const MAX_CONCURRENT_GIT_PROCESSES = 32;
+
+let runningGitProcesses = 0;
+const waitingGitProcesses = [];
+
+function acquireGitSlot() {
+  if (runningGitProcesses < MAX_CONCURRENT_GIT_PROCESSES) {
+    runningGitProcesses += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => waitingGitProcesses.push(resolve));
+}
+
+function releaseGitSlot() {
+  const next = waitingGitProcesses.shift();
+  if (next) {
+    next();
+  } else {
+    runningGitProcesses -= 1;
+  }
+}
 
 export class GitCommandError extends Error {
   constructor(message, { exitCode, timedOut, truncated, stderr } = {}) {
@@ -50,6 +74,14 @@ export function runGit(repo, args, options = {}) {
   validateGitRepo(repo);
   validateGitArgs(args);
 
+  return acquireGitSlot().then(() => {
+    const run = spawnGit(repo, args, timeoutMs, maxBytes);
+    run.then(releaseGitSlot, releaseGitSlot);
+    return run;
+  });
+}
+
+function spawnGit(repo, args, timeoutMs, maxBytes) {
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["--no-pager", ...args], {
       cwd: repo.path,
@@ -57,6 +89,18 @@ export function runGit(repo, args, options = {}) {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
+
+    // A failed spawn (EMFILE, ENOENT, ...) is reported as an 'error' event,
+    // possibly without stdio streams. Listen first: an unhandled 'error'
+    // event would crash the process.
+    let timer;
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    if (!child.stdout || !child.stderr) {
+      return;
+    }
 
     // Buffer raw bytes and decode once on close: decoding each chunk on its
     // own corrupts multi-byte UTF-8 characters split across pipe reads.
@@ -67,7 +111,7 @@ export function runGit(repo, args, options = {}) {
     let timedOut = false;
     let truncated = false;
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
     }, timeoutMs);
@@ -90,11 +134,6 @@ export function runGit(repo, args, options = {}) {
         return;
       }
       stderrChunks.push(chunk);
-    });
-
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
     });
 
     child.on("close", (exitCode) => {

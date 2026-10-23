@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { GitCommandError, buildGitEnv, runGit } from "../src/gitRunner.js";
@@ -418,3 +419,28 @@ function git(cwd, ...args) {
   );
   return result.stdout;
 }
+
+test("survives a burst of concurrent git reads under a low open-file limit", { skip: process.platform === "win32" }, () => {
+  // Every spawned git holds three pipes open. Without a concurrency bound a
+  // burst exhausts file descriptors, and a failed spawn emitted an 'error'
+  // event with no listener, which killed the whole API process.
+  const runnerUrl = new URL("../src/gitRunner.js", import.meta.url).href;
+  const repoPath = fs.realpathSync(fileURLToPath(new URL("../../..", import.meta.url)));
+  const script = `
+    const { runGit } = await import(${JSON.stringify(runnerUrl)});
+    const repo = { path: ${JSON.stringify(repoPath)} };
+    const results = await Promise.allSettled(
+      Array.from({ length: 300 }, () => runGit(repo, ["rev-parse", "--verify", "HEAD"])),
+    );
+    const failed = results.filter((result) => result.status === "rejected");
+    console.log(JSON.stringify({ failed: failed.length, reason: failed[0]?.reason?.message }));
+  `;
+  const result = spawnSync(
+    "bash",
+    ["-c", 'ulimit -n 256 && exec "$0" --input-type=module -e "$1"', process.execPath, script],
+    { encoding: "utf8" },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), { failed: 0 });
+});
