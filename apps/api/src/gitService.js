@@ -2172,7 +2172,14 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
         maxBytes: 1024,
       });
       const resolvedName = fullName.trim();
-      if (resolvedName !== "" && !isPublicFullRefName(resolvedName)) {
+      // Empty output also covers an ambiguous short name, which Git resolves
+      // to refs/<name> first: the only candidate outside the public
+      // namespaces.
+      if (
+        resolvedName === ""
+          ? await isNonPublicRefsChild(repo, revision, timeoutMs)
+          : !isPublicFullRefName(resolvedName)
+      ) {
         return {
           ok: false,
           result: { status: 404, body: { error: "Ref not found or not a commit" } },
@@ -2195,6 +2202,19 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
     }
     throw error;
   }
+}
+
+async function isNonPublicRefsChild(repo, revision, timeoutMs) {
+  const refName = `refs/${revision}`;
+  if (isPublicFullRefName(refName)) {
+    return false;
+  }
+  // for-each-ref also lists refs below the pattern; only an exact match is
+  // the ref Git would pick.
+  const { stdout } = await runGit(repo, ["for-each-ref", "--format=%(refname)", refName], {
+    timeoutMs,
+  });
+  return stdout.split("\n").includes(refName);
 }
 
 async function validateCommitObject(repo, hash, timeoutMs) {
@@ -3767,7 +3787,8 @@ export function relatedFilesHashLogArgs({ revision, pathspec, maxCount }) {
  * order, with the target's own path names in each commit.
  *
  * Stream: `\0<hash>\0\n<status>\0<path>[\0<path>]\0` per commit; renames and
- * copies (`R…` / `C…`) carry two paths.
+ * copies (`R…` / `C…`) carry two paths. Both sides of a rename are target
+ * names; for a copy only the destination is.
  *
  * @param {string} stdout
  * @returns {Array<{ hash: string, targetNames: Set<string> }>}
@@ -3788,7 +3809,10 @@ export function parseFollowedCommits(stdout) {
     const status = token.replace(/^\n/, "");
     if (current && /^[A-Z]/.test(status)) {
       const pathCount = status.startsWith("R") || status.startsWith("C") ? 2 : 1;
-      for (let offset = 1; offset <= pathCount; offset += 1) {
+      // A rename source is the target's former name. A copy source is a
+      // separate file that still exists, so only the destination counts.
+      const firstTargetOffset = status.startsWith("C") ? 2 : 1;
+      for (let offset = firstTargetOffset; offset <= pathCount; offset += 1) {
         const name = tokens[index + offset];
         if (name) current.targetNames.add(name);
       }

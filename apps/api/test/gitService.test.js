@@ -729,8 +729,28 @@ test("does not resolve short names or symrefs to non-public refs", async () => {
       );
     }
 
+    // An ambiguous short name makes --symbolic-full-name print nothing, while
+    // Git still resolves it to refs/<name> first.
+    git(repoPath, "commit", "--allow-empty", "-m", "second commit");
+    const secondHash = git(repoPath, "rev-parse", "HEAD").trim();
+    git(repoPath, "branch", "notes/commits", "HEAD");
+    git(repoPath, "branch", "pull/1/head", "HEAD");
+    for (const revision of ["notes/commits", "pull/1/head"]) {
+      const result = await resolveCommitishRevision(repo, revision, 5000);
+      assert.equal(result.ok, false, revision);
+      assert.equal(result.result.status, 404, revision);
+    }
+    // A branch and a tag sharing a name stay resolvable (Git picks the tag).
+    git(repoPath, "tag", "same", commitHash);
+    git(repoPath, "branch", "same", "HEAD");
+    assert.deepEqual(await resolveCommitishRevision(repo, "same", 5000), { ok: true, hash: commitHash });
+    assert.deepEqual(
+      await resolveCommitishRevision(repo, secondHash.slice(0, 12), 5000),
+      { ok: true, hash: secondHash },
+    );
+
     git(repoPath, "checkout", "--detach", "HEAD");
-    assert.deepEqual(await resolveCommitishRevision(repo, "HEAD", 5000), { ok: true, hash: commitHash });
+    assert.deepEqual(await resolveCommitishRevision(repo, "HEAD", 5000), { ok: true, hash: secondHash });
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }

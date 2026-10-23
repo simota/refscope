@@ -567,6 +567,52 @@ test("getRelatedFiles does not list the target's former names as related", async
   }
 });
 
+test("getRelatedFiles keeps the source of a copy as a co-changed file", async () => {
+  const repoPath = createTempPath("rtgv-related-files-copy-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    const body = Array.from({ length: 20 }, (_, index) => `line ${index}\n`).join("");
+    writeFiles(repoPath, { "Bar.txt": body });
+    git(repoPath, "add", ".");
+    git(repoPath, "commit", "-m", "feat: bar");
+    // One commit edits Bar.txt and copies it to Copy.txt (detected as C).
+    writeFiles(repoPath, { "Bar.txt": `${body}more\n`, "Copy.txt": body });
+    git(repoPath, "add", ".");
+    git(repoPath, "commit", "-m", "feat: copy");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+    const followed = git(
+      repoPath,
+      "log",
+      "--follow",
+      "--find-renames",
+      "--find-copies",
+      "--format=",
+      "--name-status",
+      "--",
+      "Copy.txt",
+    );
+    assert.match(followed, /^C\d+\tBar\.txt\tCopy\.txt$/m);
+
+    const result = await service.getRelatedFiles(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ path: "Copy.txt" }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.deepEqual(
+      result.body.related.map((entry) => [entry.path, entry.coChangeCount]),
+      [["Bar.txt", 1]],
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("getRelatedFiles reads long rename chains beyond the default git output cap", async () => {
   const repoPath = createTempPath("rtgv-related-files-long-renames-");
   try {
