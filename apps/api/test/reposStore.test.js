@@ -37,7 +37,7 @@ function makeIsolatedEnv(label) {
     tempDir,
     env,
     cleanup() {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10 });
     },
   };
 }

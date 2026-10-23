@@ -56,7 +56,7 @@ test("getRefDrift returns ahead/behind for branches against the default HEAD bas
     assert.notEqual(featEntry.mergeBase, result.body.base.resolved);
     assert.notEqual(featEntry.mergeBase, featEntry.hash);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -94,7 +94,7 @@ test("getRefDrift switches base when ?base= is provided", async () => {
       { ahead: 0, behind: 0, type: "branch" },
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -127,7 +127,7 @@ test("getRefDrift excludes tags from the drift surface", async () => {
     const byShort = indexByShortName(result.body.refs);
     assert.ok(byShort.has("main"));
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -156,7 +156,7 @@ test("getRefDrift marks truncated:true when ref count exceeds the requested limi
     assert.equal(result.body.limit, 3);
     assert.equal(result.body.refs.length, 3);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -179,7 +179,7 @@ test("getRefDrift caps limit at REF_DRIFT_MAX_LIMIT (parseLimitQuery clamps, nev
     assert.equal(result.status, 200);
     assert.equal(result.body.limit, REF_DRIFT_MAX_LIMIT);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -242,7 +242,7 @@ test("getRefDrift returns 404 for an unknown base ref", async () => {
     assert.equal(result.status, 404);
     assert.deepEqual(result.body, { error: "Ref not found or not a commit" });
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 

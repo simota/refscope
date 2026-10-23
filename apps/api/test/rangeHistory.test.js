@@ -214,7 +214,7 @@ test("getRangeHistory returns commits touching the specified line range", async 
       assert.ok(Array.isArray(entry.urlsInBody));
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -243,7 +243,7 @@ test("getRangeHistory marks truncated:true when entries exceed the requested lim
     assert.equal(result.body.limit, 2);
     assert.equal(result.body.entries.length, 2);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -332,7 +332,7 @@ test("getRangeHistory caps limit at RANGE_HISTORY_MAX_LIMIT", async () => {
     assert.equal(result.status, 200);
     assert.equal(result.body.limit, RANGE_HISTORY_MAX_LIMIT);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -366,7 +366,7 @@ test("getRangeHistory urlsInBody contains literal URLs from commit body", async 
       assert.ok(withUrls.urlsInBody.includes("#42"));
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -397,7 +397,7 @@ test("getRangeHistory returns 404 for a missing path or an out-of-range line spa
       assert.equal(result.body.path, query.path);
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 

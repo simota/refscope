@@ -81,7 +81,7 @@ test("rejects explicit git pager options", async () => {
       /Git pager options are not allowed/,
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -106,7 +106,7 @@ test("rejects leading git global options", async () => {
       );
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -124,7 +124,7 @@ test("rejects git commands outside the API read allowlist", async () => {
       /Git command is not allowed/,
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -147,7 +147,7 @@ test("rejects git output file options before spawning git", async () => {
       );
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -165,7 +165,7 @@ test("rejects git no-index diff before spawning git", async () => {
       /Git no-index diff is not allowed/,
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -192,7 +192,7 @@ test("rejects invalid git timeout and output bounds before spawning git", () => 
       );
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -219,7 +219,7 @@ test("rejects non-git repository paths before spawning git", () => {
       /Git repository path must be a Git working tree root/,
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -239,8 +239,8 @@ test("rejects non-canonical repository paths before spawning git", () => {
       /Git repository path must be canonical/,
     );
   } finally {
-    fs.rmSync(linkPath, { recursive: true, force: true });
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(linkPath, { recursive: true, force: true, maxRetries: 10 });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -269,7 +269,7 @@ test("ignores repository replacement refs during git reads", async () => {
 
     assert.equal(stdout.trim(), "original commit");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -292,7 +292,7 @@ test("bounds git stderr output with the same maxBytes limit", async () => {
       },
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -318,7 +318,7 @@ test("decodes multi-byte UTF-8 output split across pipe chunks", async () => {
     assert.equal(stdout.includes("�"), false);
     assert.equal(stdout, content);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -355,8 +355,8 @@ test("ignores inherited git environment repository overrides", async () => {
     } else {
       process.env.GIT_DIR = originalGitDir;
     }
-    fs.rmSync(repoPath, { recursive: true, force: true });
-    fs.rmSync(otherRepoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+    fs.rmSync(otherRepoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -397,8 +397,8 @@ test("ignores user global git configuration during git reads", async () => {
     } else {
       process.env.HOME = originalHome;
     }
-    fs.rmSync(repoPath, { recursive: true, force: true });
-    fs.rmSync(homePath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+    fs.rmSync(homePath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 

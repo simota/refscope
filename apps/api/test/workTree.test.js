@@ -88,7 +88,7 @@ test("getWorkTreeChanges returns zero summaries on a clean working tree", async 
     assert.equal(result.body.notes.untrackedExcluded, false);
     assert.match(result.body.snapshotAt, /^\d{4}-\d{2}-\d{2}T/);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -124,7 +124,7 @@ test("getWorkTreeChanges separates unstaged-only changes into the unstaged side"
     assert.equal(result.body.unstaged.summary.added, 1);
     assert.equal(result.body.unstaged.summary.deleted, 0);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -160,7 +160,7 @@ test("getWorkTreeChanges separates staged-only changes into the staged side", as
     assert.equal(result.body.staged.summary.added, 1);
     assert.equal(result.body.staged.summary.deleted, 1);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -196,7 +196,7 @@ test("getWorkTreeChanges returns both sides when staged and unstaged changes coe
     assert.ok(result.body.unstaged.diff.includes("src/unstaged.txt"));
     assert.ok(!result.body.unstaged.diff.includes("src/staged.txt"));
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -228,7 +228,7 @@ test("getWorkTreeChanges surfaces Git's literal rename similarity in the staged 
     assert.match(result.body.staged.diff, /rename from src\/old-name\.txt/);
     assert.match(result.body.staged.diff, /rename to src\/new-name\.txt/);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -287,7 +287,7 @@ test("getWorkTreeChanges surfaces untracked files in a dedicated section", async
     });
     assert.equal(result.body.notes.untrackedExcluded, false);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -314,7 +314,7 @@ test("getWorkTreeChanges respects .gitignore for untracked listing", async () =>
     const paths = result.body.untracked.files.map((file) => file.path);
     assert.deepEqual(paths, ["kept.txt"]);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -340,7 +340,7 @@ test("getWorkTreeChanges reports added: 0 for binary untracked files", async () 
     const file = result.body.untracked.files.find((f) => f.path === "blob.bin");
     assert.equal(file.added, 0);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -382,7 +382,7 @@ test("getWorkTreeChanges synthesizes a unified diff for untracked text files", a
     assert.ok(diff.includes("+tail"));
     assert.ok(diff.includes("\\ No newline at end of file"));
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -409,7 +409,7 @@ test("getWorkTreeChanges emits binary marker for binary untracked files in diff"
     assert.ok(diff.includes("diff --git a/blob.bin b/blob.bin"));
     assert.ok(diff.includes("Binary files /dev/null and b/blob.bin differ"));
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -443,7 +443,7 @@ test("getWorkTreeChanges bounds the synthesized untracked diff by diffMaxBytes",
     assert.equal(diff.includes("+b.txt"), false);
     assert.equal(diff.includes("+c.txt"), false);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -469,7 +469,7 @@ test("getWorkTreeChanges keeps headers-only fallbacks within diffMaxBytes", asyn
     assert.equal(files.length, 200);
     assert.ok(Buffer.byteLength(diff) <= 10_000, `diff is ${Buffer.byteLength(diff)} bytes`);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -496,7 +496,7 @@ test("getWorkTreeChanges lists untracked names even when they exceed a small dif
     assert.equal(result.body.untracked.truncated, true);
     assert.ok(Buffer.byteLength(result.body.untracked.diff) <= 100);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -525,7 +525,7 @@ test("getWorkTreeChanges lists untracked names beyond the runner's default outpu
     assert.equal(result.body.untracked.files.length, 3000);
     assert.equal(result.body.untracked.truncated, false);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -558,8 +558,8 @@ test("getWorkTreeChanges does not read through untracked symlinks", async () => 
     assert.ok(diff.includes("diff --git a/link.txt b/link.txt"));
     assert.equal(diff.includes("SECRET-OUTSIDE"), false);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
-    fs.rmSync(outsidePath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+    fs.rmSync(outsidePath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 

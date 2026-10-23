@@ -441,7 +441,7 @@ test("getSymbolHistory returns commits that touched a JavaScript function", asyn
       }
     }
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -471,7 +471,7 @@ test("getSymbolHistory returns 404 when symbol is not found in the file", async 
     assert.equal(result.body.funcname, "nonExistentSymbolXYZ");
     assert.match(result.body.error, /Symbol not found/);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -516,7 +516,7 @@ test("getSymbolHistory marks truncated:true when entries exceed the requested li
     assert.equal(result.body.limit, 2);
     assert.equal(result.body.entries.length, 2);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -549,7 +549,7 @@ test("getSymbolHistory caps limit at SYMBOL_HISTORY_MAX_LIMIT", async () => {
     assert.equal(result.status, 200);
     assert.equal(result.body.limit, SYMBOL_HISTORY_MAX_LIMIT);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -618,6 +618,6 @@ test("getSymbolHistory traces qualified names containing ':'", async () => {
       "-L:Foo\\:\\:bar:a.cpp",
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });

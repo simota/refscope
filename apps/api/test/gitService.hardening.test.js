@@ -53,7 +53,7 @@ function withRepo(prefix, fn) {
     try {
       await fn(repoPath, { id: "demo", name: "demo", path: repoPath });
     } finally {
-      fs.rmSync(repoPath, { recursive: true, force: true });
+      fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
     }
   };
 }

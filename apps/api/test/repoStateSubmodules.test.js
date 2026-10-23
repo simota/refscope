@@ -21,7 +21,7 @@ test("getRepoState returns no operations on a clean repo", async () => {
     assert.deepEqual(result.body.operations, []);
     assert.match(result.body.gitDir, /\.git$/);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -44,7 +44,7 @@ test("getRepoState detects MERGE_HEAD with target hash and message", async () =>
     assert.equal(op.targetHash, dummyHash);
     assert.match(op.message, /Merge branch 'feature'/);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -67,7 +67,7 @@ test("getRepoState detects rebase via rebase-merge directory", async () => {
     assert.equal(rebase.headName, "refs/heads/feature");
     assert.equal(rebase.onto, "abcdef0");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -86,7 +86,7 @@ test("getRepoState detects bisect via BISECT_LOG presence", async () => {
     assert.ok(bisect, "bisect operation should be detected");
     assert.equal(bisect.start, "main");
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -102,7 +102,7 @@ test("listSubmodules returns empty list when no submodules are configured", asyn
     assert.equal(result.status, 200);
     assert.deepEqual(result.body.submodules, []);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -130,8 +130,8 @@ test("listSubmodules surfaces hash, path, and initialized flag for an added subm
     assert.equal(sub.initialized, true);
     assert.equal(sub.uninitialized, false);
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
-    fs.rmSync(upstreamPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+    fs.rmSync(upstreamPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -149,7 +149,7 @@ test("runGit rejects mutating submodule subcommands", async () => {
       /Git subcommand is not allowed/,
     );
   } finally {
-    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
