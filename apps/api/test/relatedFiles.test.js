@@ -567,6 +567,53 @@ test("getRelatedFiles does not list the target's former names as related", async
   }
 });
 
+test("getRelatedFiles reads long rename chains beyond the default git output cap", async () => {
+  const repoPath = createTempPath("rtgv-related-files-long-renames-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    // Built with fast-import so the long historical paths never touch the
+    // filesystem (and its PATH_MAX). Each rename lists both names in the
+    // follow pass: 50 renames x 2 x ~3 KB is well past 256 KB.
+    const longDir = Array.from({ length: 15 }, (_, index) => `${"d".repeat(195)}${index}`).join("/");
+    const name = (index) => `${longDir}/file-${index}.txt`;
+    let stream = "";
+    let mark = 0;
+    const commit = (message, body) => {
+      mark += 1;
+      stream += `commit refs/heads/main\nmark :${mark}\n`;
+      stream += `committer Alice <alice@example.test> ${1_700_000_000 + mark} +0000\n`;
+      stream += `data ${Buffer.byteLength(message)}\n${message}\n`;
+      if (mark > 1) stream += `from :${mark - 1}\n`;
+      stream += body;
+    };
+    commit("add", `M 100644 inline ${name(0)}\ndata 2\nx\nM 100644 inline s.txt\ndata 2\ny\n`);
+    for (let index = 1; index < RELATED_FILES_MAX_LIMIT; index += 1) {
+      commit(`rename ${index}`, `R "${name(index - 1)}" "${name(index)}"\n`);
+    }
+    // The current name has to pass the 200-character path query limit.
+    const target = "target.txt";
+    commit("rename to target", `R "${name(RELATED_FILES_MAX_LIMIT - 1)}" "${target}"\n`);
+    const imported = spawnSync("git", ["fast-import", "--quiet"], { cwd: repoPath, input: stream });
+    assert.equal(imported.status, 0, String(imported.stderr));
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 10_000,
+      diffMaxBytes: 4_000_000,
+    });
+    const result = await service.getRelatedFiles(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ path: target, limit: String(RELATED_FILES_MAX_LIMIT) }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.truncated, true);
+    assert.deepEqual(result.body.related, []);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("RELATED_FILES_DEFAULT_LIMIT is the wire default for the limit knob", () => {
   // Sanity: keeps the constants visible to consumers (UI / tests) honest.
   assert.equal(RELATED_FILES_DEFAULT_LIMIT, 30);

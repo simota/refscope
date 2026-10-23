@@ -1012,7 +1012,9 @@ export function createGitService(config) {
           pathspec: formatLiteralPathspec(pathValue),
           maxCount: readLimit,
         }),
-        { timeoutMs: config.gitTimeoutMs },
+        // Renames list both names per commit, and historical names are not
+        // bound by the path query limit.
+        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
       );
 
       const followed = parseFollowedCommits(hashesStdout);
