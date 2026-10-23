@@ -364,6 +364,43 @@ test("does not trust Host-derived same-origin when the Host guard is off", async
   assert.deepEqual(JSON.parse(response.body), { error: "Origin not allowed" });
 });
 
+test("event stream stops polling once its repository is removed from the allowlist", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const repo = { id: "demo", name: "demo", path: "/tmp/not-needed" };
+  const repositories = new Map([["demo", repo]]);
+  let polls = 0;
+  const handler = createRequestHandler(
+    { allowedOrigins: new Set(), refPollMs: 1000 },
+    {
+      getRepository: (id) => repositories.get(id),
+      getRefSnapshot: async () => new Map(),
+      collectRefEvents: async (_repo, snapshot) => {
+        polls += 1;
+        return { snapshot, events: [] };
+      },
+    },
+  );
+  const response = createMockResponse();
+  let ended = false;
+  response.on = () => {};
+  response.end = () => {
+    ended = true;
+  };
+
+  await handler(createMockRequest({ method: "GET", url: "/api/repos/demo/events" }), response);
+  assert.equal(response.statusCode, 200);
+  t.mock.timers.tick(1000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(polls, 1);
+
+  repositories.delete("demo");
+  t.mock.timers.tick(1000);
+  t.mock.timers.tick(1000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(polls, 1);
+  assert.equal(ended, true);
+});
+
 function createMockRequest({ method, url, headers = { host: "localhost" } }) {
   const request = new EventEmitter();
   request.method = method;

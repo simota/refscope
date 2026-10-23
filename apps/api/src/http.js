@@ -520,8 +520,22 @@ async function sendEventStream(req, res, config, gitService, repo) {
 
   let polling = false;
 
+  function stop() {
+    closed = true;
+    clearInterval(poller);
+    clearInterval(heartbeat);
+  }
+
   async function poll() {
     if (closed || polling) return;
+    // The repository was removed (or re-registered) after this stream opened:
+    // stop reading a path that is no longer allowlisted under this id. The
+    // client's reconnect then gets the usual 404.
+    if (gitService.getRepository(repo.id) !== repo) {
+      stop();
+      res.end();
+      return;
+    }
     polling = true;
     try {
       const result = await gitService.collectRefEvents(repo, snapshot);

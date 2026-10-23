@@ -130,8 +130,13 @@ async function getFleetRepoSnapshot(repoId, repoPath, window, gitService) {
 
   /** Wraps the git data collection so we can race it against a timeout. */
   async function collectGitFacts() {
-    const [headShortSha, commits24h, worktreeDirty] = await Promise.all([
-      gitService.getHeadShortSha(repoPath),
+    const headShortSha = await gitService.getHeadShortSha(repoPath);
+    if (headShortSha === null) {
+      // Unborn HEAD (freshly initialised repo): no commits to count, and the
+      // HEAD-relative dirty check has nothing to compare against.
+      return { headShortSha, commits24h: 0, worktreeDirty: null };
+    }
+    const [commits24h, worktreeDirty] = await Promise.all([
       gitService.getCommits24hCount(repoPath, sinceISO),
       gitService.getWorktreeDirtyBoolean(repoPath),
     ]);
@@ -142,12 +147,13 @@ async function getFleetRepoSnapshot(repoId, repoPath, window, gitService) {
    * Per-repo 5s timeout (proposal §5.6).
    * Promise.race ensures a slow git call in one repo cannot block the others.
    */
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(
+  let timeoutTimer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutTimer = setTimeout(
       () => reject(Object.assign(new Error("Fleet repo timeout"), { isFleetTimeout: true })),
       REPO_TIMEOUT_MS,
-    ),
-  );
+    );
+  });
 
   try {
     const { headShortSha, commits24h, worktreeDirty } = await Promise.race([
@@ -189,6 +195,9 @@ async function getFleetRepoSnapshot(repoId, repoPath, window, gitService) {
       ...nullRepoFields(),
       status: "git_error",
     };
+  } finally {
+    // Without this, every snapshot leaves one 5 s timer pending per repo.
+    clearTimeout(timeoutTimer);
   }
 }
 

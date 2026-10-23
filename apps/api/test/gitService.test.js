@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { loadConfig } from "../src/config.js";
 import {
   ancestorMergeBaseArgs,
   buildSearchModeArgs,
@@ -21,6 +22,8 @@ import {
   compareRefSnapshots,
   compareRevListArgs,
   appendRefFlightEvent,
+  cherryPatchArgs,
+  comparePatchChanges,
   createGitService,
   createRefFlightEvent,
   escapeGitRegexLiteral,
@@ -587,6 +590,7 @@ test("builds commit list git log arguments with option parsing ended before reso
       "--format=\u001e%H%x00%P%x00%an%x00%aI%x00%s%x00%D",
       "--no-show-signature",
       "--numstat",
+      "--full-diff",
       "--no-ext-diff",
       "--no-textconv",
       "--end-of-options",
@@ -595,6 +599,8 @@ test("builds commit list git log arguments with option parsing ended before reso
       ":(literal,top)src/App.tsx",
     ],
   );
+  // Without a path filter the stats are already whole-commit.
+  assert.equal(commitListLogArgs(25, [], [], hash, []).includes("--full-diff"), false);
 });
 
 test("builds commit-ish validation arguments with option parsing ended", () => {
@@ -1541,6 +1547,84 @@ test("getCompareCherry grades equivalent commits as identical on clean cherry-pi
   }
 });
 
+test("cherryPatchArgs reads one commit's own patch with options terminated", () => {
+  const hash = "a".repeat(40);
+  assert.deepEqual(cherryPatchArgs(hash, [":(literal,top)-x"]), [
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "-U0",
+    "--end-of-options",
+    `${hash}^`,
+    hash,
+    "--",
+    ":(literal,top)-x",
+  ]);
+});
+
+test("comparePatchChanges ignores hunk positions and reports an interdiff", () => {
+  const header = "diff --git a/f b/f";
+  const base = [header, "--- a/f", "+++ b/f", "@@ -5 +5 @@", "-old", "+new", "+same"].join("\n");
+  const moved = [header, "--- a/f", "+++ b/f", "@@ -50 +50 @@", "-old", "+new", "+same"].join("\n");
+  assert.deepEqual(comparePatchChanges(base, moved), { added: 0, deleted: 0, hunks: "" });
+
+  const spaced = [header, "--- a/f", "+++ b/f", "@@ -5 +5 @@", "-old", "+  new", "+same"].join("\n");
+  assert.deepEqual(comparePatchChanges(base, spaced), {
+    added: 1,
+    deleted: 1,
+    hunks: [header, "-+new", "++  new"].join("\n"),
+  });
+});
+
+test("getCompareCherry grades a clean cherry-pick identical when the branches already differ in that file", async () => {
+  // Comparing B and T file states counted the release branch's own edits to
+  // f.txt as cherry-pick divergence; only the two patches may be compared.
+  const repoPath = createTempPath("rtgv-cherry-drift-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+    fs.writeFileSync(path.join(repoPath, "f.txt"), `${lines.join("\n")}\n`);
+    git(repoPath, "add", "f.txt");
+    git(repoPath, "commit", "-m", "base commit");
+
+    git(repoPath, "checkout", "-b", "release");
+    const releaseLines = lines.map((line, i) => (i >= 40 && i < 90 ? `${line} (release)` : line));
+    fs.writeFileSync(path.join(repoPath, "f.txt"), `${releaseLines.join("\n")}\n`);
+    git(repoPath, "commit", "-am", "chore(release): release-only edits");
+    git(repoPath, "checkout", "main");
+
+    const fixedLines = [...lines];
+    fixedLines[4] = "line 5 fixed";
+    fs.writeFileSync(path.join(repoPath, "f.txt"), `${fixedLines.join("\n")}\n`);
+    git(repoPath, "commit", "-am", "fix: line 5");
+    const fixHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    git(repoPath, "checkout", "release");
+    git(repoPath, "cherry-pick", fixHash);
+    git(repoPath, "checkout", "main");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024 * 1024,
+    });
+    const result = await service.getCompareCherry(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ base: "main", target: "release" }),
+    );
+    assert.equal(result.status, 200);
+    const fixEntry = result.body.equivalent.find((c) => c.hash === fixHash);
+    assert.ok(fixEntry, "fix commit should be patch-id equivalent");
+    assert.equal(fixEntry.grade, "identical");
+    assert.deepEqual(fixEntry.diffLines, { added: 0, deleted: 0 });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("getCompareCherry grades near-identical when only whitespace differs", async () => {
   // `git patch-id` is whitespace-insensitive; a cherry-pick that adds or removes
   // only leading spaces will still report `-` (equivalent) but `git diff B T --
@@ -1791,5 +1875,117 @@ test("getCommitContainingRefs returns empty list for unreachable commit", async 
     assert.deepEqual(result, { status: 200, body: { refs: [] } });
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+function initTestRepo(repoPath) {
+  git(repoPath, "init", "-b", "main");
+  git(repoPath, "config", "user.name", "Realtime Test");
+  git(repoPath, "config", "user.email", "realtime@example.test");
+}
+
+test("getCommit reports non-ASCII paths verbatim, including renames", async () => {
+  const repoPath = createTempPath("rtgv-commit-nonascii-");
+  try {
+    initTestRepo(repoPath);
+    fs.writeFileSync(path.join(repoPath, "ü.txt"), "one\n");
+    fs.writeFileSync(path.join(repoPath, "日本.txt"), "two\n");
+    git(repoPath, "add", "-A");
+    git(repoPath, "commit", "-m", "add");
+    git(repoPath, "mv", "ü.txt", "é.txt");
+    git(repoPath, "mv", "日本.txt", "plain.txt");
+    fs.writeFileSync(path.join(repoPath, "新規.txt"), "a\nb\n");
+    git(repoPath, "add", "-A");
+    git(repoPath, "commit", "-m", "rename");
+    const hash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 1024 * 1024 });
+    const result = await service.getCommit({ id: "demo", name: "demo", path: repoPath }, hash);
+    assert.equal(result.status, 200);
+    const files = Object.fromEntries(
+      result.body.files.map((file) => [file.path, [file.status, file.added, file.deleted]]),
+    );
+    assert.deepEqual(files, {
+      "é.txt": ["R", 0, 0],
+      "plain.txt": ["R", 0, 0],
+      "新規.txt": ["A", 2, 0],
+    });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getCommit does not classify a binary change as whitespace_only", async () => {
+  const repoPath = createTempPath("rtgv-commit-binary-");
+  try {
+    initTestRepo(repoPath);
+    fs.writeFileSync(path.join(repoPath, "blob.dat"), Buffer.from([0, 1, 2, 0, 255]));
+    git(repoPath, "add", "-A");
+    git(repoPath, "commit", "-m", "binary");
+    const hash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 1024 * 1024 });
+    const result = await service.getCommit({ id: "demo", name: "demo", path: repoPath }, hash);
+    const [file] = result.body.files;
+    assert.equal(file.path, "blob.dat");
+    assert.equal(file.added, 0);
+    assert.equal(file.deleted, 0);
+    assert.notEqual(file.structuralKind, "whitespace_only");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("listCommits keeps whole-commit stats when filtered by path", async () => {
+  const repoPath = createTempPath("rtgv-list-fulldiff-");
+  try {
+    initTestRepo(repoPath);
+    fs.writeFileSync(path.join(repoPath, "a.txt"), "a\n");
+    fs.writeFileSync(path.join(repoPath, "b.txt"), "b\nb\n");
+    fs.writeFileSync(path.join(repoPath, "c.txt"), "c\nc\nc\n");
+    git(repoPath, "add", "-A");
+    git(repoPath, "commit", "-m", "three files");
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 1024 * 1024 });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+    const pick = ({ added, deleted, fileCount, riskScore }) => ({ added, deleted, fileCount, riskScore });
+    const all = await service.listCommits(repo, new URLSearchParams());
+    const filtered = await service.listCommits(repo, new URLSearchParams({ path: "a.txt" }));
+    assert.equal(filtered.status, 200);
+    assert.equal(filtered.body.length, 1);
+    assert.deepEqual(pick(filtered.body[0]), pick(all.body[0]));
+    assert.equal(filtered.body[0].fileCount, 3);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("removing a repository forgets its ref-flight log, so a re-added id starts clean", async () => {
+  const tempDir = createTempPath("rtgv-cache-reset-");
+  try {
+    const repoPath = path.join(tempDir, "repo");
+    fs.mkdirSync(repoPath);
+    initTestRepo(repoPath);
+    fs.writeFileSync(path.join(repoPath, "README.md"), "hello\n");
+    git(repoPath, "add", "README.md");
+    git(repoPath, "commit", "-m", "init");
+
+    const config = loadConfig({ RTGV_REPOS: "", XDG_CONFIG_HOME: path.join(tempDir, "config") });
+    const service = createGitService(config);
+    const repo = service.addRepository("x", repoPath);
+
+    const snapshot = await service.getRefSnapshot(repo);
+    const previous = new Map(snapshot);
+    previous.delete("refs/heads/main");
+    await service.collectRefEvents(repo, previous);
+    const before = await service.listRefFlightEvents(repo, new URLSearchParams());
+    assert.ok(before.body.events.length > 0, "fixture must record a flight event");
+
+    service.removeRepository("x");
+    const readded = service.addRepository("x", repoPath);
+    const after = await service.listRefFlightEvents(readded, new URLSearchParams());
+    assert.deepEqual(after.body.events, []);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

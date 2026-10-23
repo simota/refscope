@@ -160,6 +160,11 @@ export function createGitService(config) {
   /** @type {Map<string, Array<object>>} */
   const _refFlightLogs = new Map();
 
+  function forgetRepositoryCaches(id) {
+    _hotspotCache.delete(id);
+    _refFlightLogs.delete(id);
+  }
+
   /**
    * Refresh the hotspot churn cache for a repo (fire-and-forget safe).
    * Uses the last 200 commits, no LOC fetching needed.
@@ -303,6 +308,9 @@ export function createGitService(config) {
      */
     addRepository(id, normalizedPath) {
       const entry = configAddRepository(id, normalizedPath);
+      // An id can be removed and re-added for another path; never serve the
+      // previous repository's cached churn or ref-flight log under it.
+      forgetRepositoryCaches(id);
       return {
         id: entry.id,
         name: entry.name,
@@ -320,6 +328,7 @@ export function createGitService(config) {
      */
     removeRepository(id) {
       configRemoveRepository(id);
+      forgetRepositoryCaches(id);
     },
 
     async listRefs(repo) {
@@ -702,8 +711,21 @@ export function createGitService(config) {
       // This is a heuristic approximation; patch-text-based classification in
       // getDiff provides higher accuracy for the diff viewer.
       const rawFiles = parseChangedFiles(numstat.stdout, nameStatus.stdout);
+      // numstat prints `-` counts for binary files; parseChangedFiles reports
+      // them as 0, which classifyFileDiff would read as "whitespace_only".
+      const binaryPaths = new Set();
+      for (const line of numstat.stdout.split("\n")) {
+        const parts = line.trimEnd().split("\t");
+        if (parts.length >= 3 && (parts[0] === "-" || parts[1] === "-")) {
+          binaryPaths.add(normalizeNumstatPath(parts.at(-1)));
+        }
+      }
       const filesWithKind = rawFiles.map((f) => {
-        const { kind } = classifyFileDiff({ added: f.added, deleted: f.deleted });
+        const binary = binaryPaths.has(f.path);
+        const { kind } = classifyFileDiff({
+          added: binary ? -1 : f.added,
+          deleted: binary ? -1 : f.deleted,
+        });
         return { ...f, structuralKind: kind };
       });
 
@@ -1790,24 +1812,18 @@ export function createGitService(config) {
         }
 
         // For each equivalent entry (up to CHERRY_GRADE_MAX_ENTRIES), grade
-        // the cherry-pick fidelity.
+        // the cherry-pick fidelity by comparing the two *patches* (`B^..B`
+        // vs `T^..T`), not the file states of B and T: the branches may
+        // already differ in a touched file (which is why the change had to
+        // be cherry-picked), and that drift is not part of the patch.
         //
-        // Strategy: compare the file-state of the base commit (`B`) against
-        // the file-state of the target-side counterpart (`T`), but scoped
-        // only to the paths that `B` actually touched. This correctly returns
-        // an empty diff for a clean cherry-pick (same patch applied cleanly)
-        // while surfacing divergence when conflict resolution altered the
-        // logic on the target branch.
-        //
-        // Concretely:
         //   1. `git diff --name-only B^ B` → list of paths B touched.
-        //   2. `git diff -U3 B T -- <paths>` → compare B vs T on those paths.
+        //   2. `git diff -U0 X^ X -- <paths>` for X = B and X = T.
+        //   3. Compare the changed lines per file as multisets. Lines only in
+        //      B's patch count as `deleted`, lines only in T's as `added`.
         //
-        // Using `git diff B T` (not `T^..T`) avoids counting B's own changes
-        // as divergence — a clean cherry-pick has identical file state for the
-        // touched paths between B and T, so step 2 returns an empty diff.
-        //
-        // Entries beyond the cap receive grade "ungraded".
+        // Entries beyond the cap, or whose patches exceed the byte cap,
+        // receive grade "ungraded".
         const DIFF_MAX_BYTES_PER_ENTRY = Math.min(config.diffMaxBytes, 64 * 1024);
         for (let i = 0; i < equivalent.length; i++) {
           const entry = equivalent[i];
@@ -1845,33 +1861,20 @@ export function createGitService(config) {
               .filter(Boolean)
               .map(formatLiteralPathspec);
 
-            // Step 2: diff B vs T scoped to those paths. An empty diff means
-            // the cherry-pick was applied cleanly (identical file state on the
-            // touched paths). A non-empty diff reveals divergence.
-            const diffArgs = [
-              "diff",
-              "--no-color",
-              "--no-ext-diff",
-              "--no-textconv",
-              "-U3",
-              "--end-of-options",
-              entry.hash,
-              targetHash,
-              "--",
-              ...touchedPaths,
-            ];
-            const { stdout: diffOut, truncated: diffTruncated } = await runGit(
-              repo,
-              diffArgs,
-              { timeoutMs: config.gitTimeoutMs, maxBytes: DIFF_MAX_BYTES_PER_ENTRY },
+            // Step 2: each side's own patch, scoped to those paths.
+            const [basePatch, targetPatch] = await Promise.all(
+              [entry.hash, targetHash].map(async (hash) => {
+                const { stdout } = await runGit(
+                  repo,
+                  cherryPatchArgs(hash, touchedPaths),
+                  { timeoutMs: config.gitTimeoutMs, maxBytes: DIFF_MAX_BYTES_PER_ENTRY },
+                );
+                return stdout;
+              }),
             );
-            // Count added/deleted lines from the diff output.
-            let added = 0;
-            let deleted = 0;
-            for (const dline of diffOut.split("\n")) {
-              if (dline.startsWith("+") && !dline.startsWith("+++")) added++;
-              else if (dline.startsWith("-") && !dline.startsWith("---")) deleted++;
-            }
+
+            // Step 3: interdiff of the changed lines.
+            const { added, deleted, hunks } = comparePatchChanges(basePatch, targetPatch);
             const linesDiff = added + deleted;
             /** @type {"identical"|"near-identical"|"divergent"} */
             const grade =
@@ -1883,14 +1886,13 @@ export function createGitService(config) {
             entry.grade = grade;
             entry.diffLines = { added, deleted };
             if (grade !== "identical") {
-              entry.diffHunks = diffTruncated
-                ? diffOut + "\n[truncated]"
-                : diffOut;
-              entry.truncated = diffTruncated ?? false;
+              entry.diffHunks = hunks;
+              entry.truncated = false;
             }
           } catch {
-            // Diff failed (e.g. merge commit with no single parent) — mark
-            // as ungraded rather than failing the whole request.
+            // Diff failed (e.g. merge commit with no single parent, or a
+            // patch over the byte cap) — mark as ungraded rather than
+            // failing the whole request.
             entry.grade = "ungraded";
           }
         }
@@ -2265,6 +2267,9 @@ export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathA
     `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%P%x00%an%x00%aI%x00%s%x00%D`,
     "--no-show-signature",
     "--numstat",
+    // A path filter selects commits; stats and risk scores still describe
+    // the whole commit, as in the unfiltered list.
+    ...(pathArgs.length > 0 ? ["--full-diff"] : []),
     "--no-ext-diff",
     "--no-textconv",
     "--end-of-options",
@@ -2783,6 +2788,15 @@ function parseNumstatLine(line) {
 }
 
 function normalizeNumstatPath(filePath) {
+  // A rename where either side needs quoting is printed in full, with each
+  // side quoted on its own: `"old" => "new"` or `"old" => new`.
+  if (filePath?.startsWith('"')) {
+    const old = readQuotedGitPath(filePath, 0);
+    if (old && filePath.startsWith(" => ", old.end)) {
+      return unquoteGitPath(filePath.slice(old.end + " => ".length));
+    }
+    return unquoteGitPath(filePath);
+  }
   if (!filePath?.includes(" => ")) {
     return filePath;
   }
@@ -2792,7 +2806,7 @@ function normalizeNumstatPath(filePath) {
   const afterArrow = filePath.slice(arrowIndex + " => ".length);
   const braceIndex = beforeArrow.lastIndexOf("{");
   if (braceIndex === -1) {
-    return afterArrow;
+    return unquoteGitPath(afterArrow);
   }
 
   const closingBraceIndex = afterArrow.indexOf("}");
@@ -2832,7 +2846,7 @@ function parseNameStatusLine(line, stats) {
 
   const rawStatus = parts[0];
   const status = rawStatus[0] ?? "M";
-  const path = parts.at(-1);
+  const path = unquoteGitPath(parts.at(-1));
   const stat = stats.get(path) ?? { added: 0, deleted: 0 };
 
   return {
@@ -2841,6 +2855,68 @@ function parseNameStatusLine(line, stats) {
     added: stat.added,
     deleted: stat.deleted,
   };
+}
+
+const GIT_QUOTE_ESCAPES = new Map([
+  ["a", 0x07],
+  ["b", 0x08],
+  ["t", 0x09],
+  ["n", 0x0a],
+  ["v", 0x0b],
+  ["f", 0x0c],
+  ["r", 0x0d],
+  ['"', 0x22],
+  ["\\", 0x5c],
+]);
+
+/**
+ * Read a C-style quoted path (as printed by Git when `core.quotePath` applies,
+ * e.g. `"\303\274.txt"` for `ü.txt`) starting at `start`. Octal escapes are
+ * raw bytes, so they are collected and decoded as UTF-8 together.
+ *
+ * @param {string} value
+ * @param {number} start index of the opening quote
+ * @returns {{ path: string, end: number } | null} `end` is the index after the closing quote
+ */
+function readQuotedGitPath(value, start) {
+  if (value[start] !== '"') return null;
+  const bytes = [];
+  for (let i = start + 1; i < value.length; i++) {
+    const char = String.fromCodePoint(value.codePointAt(i));
+    if (char === '"') {
+      return { path: Buffer.from(bytes).toString("utf8"), end: i + 1 };
+    }
+    if (char !== "\\") {
+      // Raw characters appear when the repo sets core.quotePath=false.
+      bytes.push(...Buffer.from(char, "utf8"));
+      i += char.length - 1;
+      continue;
+    }
+    const next = value[i + 1];
+    if (/^[0-7]{3}$/.test(value.slice(i + 1, i + 4))) {
+      bytes.push(parseInt(value.slice(i + 1, i + 4), 8));
+      i += 3;
+    } else if (GIT_QUOTE_ESCAPES.has(next)) {
+      bytes.push(GIT_QUOTE_ESCAPES.get(next));
+      i += 1;
+    } else {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Undo Git's path quoting; values that are not one complete quoted path are
+ * returned unchanged.
+ *
+ * @param {string | undefined} value
+ * @returns {string | undefined}
+ */
+export function unquoteGitPath(value) {
+  if (!value?.startsWith('"')) return value;
+  const quoted = readQuotedGitPath(value, 0);
+  return quoted && quoted.end === value.length ? quoted.path : value;
 }
 
 function parseStatCount(value) {
@@ -3104,6 +3180,105 @@ export function buildSearchModeArgs(mode, pattern, searchValue) {
         ? ["--regexp-ignore-case", "--extended-regexp", `--grep=${escapeGitRegexLiteral(searchValue)}`]
         : [];
   }
+}
+
+/**
+ * Argument vector for one side of the cherry-pick grading: the commit's own
+ * patch (`<hash>^..<hash>`) with no context lines, limited to `paths`
+ * (already literal pathspecs).
+ *
+ * @param {string} hash
+ * @param {string[]} paths
+ * @returns {string[]}
+ */
+export function cherryPatchArgs(hash, paths) {
+  return [
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "-U0",
+    "--end-of-options",
+    `${hash}^`,
+    hash,
+    "--",
+    ...paths,
+  ];
+}
+
+/**
+ * Compare the changed lines of two `-U0` patches, per file, as multisets.
+ * Hunk positions are ignored (like `git patch-id`), so the same change
+ * applied at a different line counts as identical.
+ *
+ * `hunks` uses range-diff style double prefixes: `-+foo` is a `+foo` line
+ * only in the base patch, `++foo` one only in the target patch.
+ *
+ * @param {string} basePatch
+ * @param {string} targetPatch
+ * @returns {{ added: number, deleted: number, hunks: string }}
+ */
+export function comparePatchChanges(basePatch, targetPatch) {
+  const baseFiles = collectPatchChanges(basePatch);
+  const targetFiles = collectPatchChanges(targetPatch);
+  const files = [...new Set([...baseFiles.keys(), ...targetFiles.keys()])];
+  let added = 0;
+  let deleted = 0;
+  const out = [];
+  for (const file of files) {
+    const baseLines = baseFiles.get(file) ?? [];
+    const remaining = new Map();
+    for (const line of targetFiles.get(file) ?? []) {
+      remaining.set(line, (remaining.get(line) ?? 0) + 1);
+    }
+    const fileOut = [];
+    for (const line of baseLines) {
+      const count = remaining.get(line) ?? 0;
+      if (count > 0) {
+        remaining.set(line, count - 1);
+      } else {
+        fileOut.push(`-${line}`);
+        deleted++;
+      }
+    }
+    for (const line of targetFiles.get(file) ?? []) {
+      const count = remaining.get(line) ?? 0;
+      if (count > 0) {
+        remaining.set(line, count - 1);
+        fileOut.push(`+${line}`);
+        added++;
+      }
+    }
+    if (fileOut.length > 0) {
+      out.push(file, ...fileOut);
+    }
+  }
+  return { added, deleted, hunks: out.join("\n") };
+}
+
+/**
+ * Map each `diff --git` header of a `-U0` patch to its `+`/`-` lines.
+ * Lines before a file's first `@@` (the `---`/`+++` headers) are skipped.
+ *
+ * @param {string} patch
+ * @returns {Map<string, string[]>}
+ */
+function collectPatchChanges(patch) {
+  const files = new Map();
+  let lines = null;
+  let inHunk = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      lines = [];
+      files.set(line, lines);
+      inHunk = false;
+    } else if (line.startsWith("@@")) {
+      inHunk = true;
+    } else if (inHunk && lines && (line.startsWith("+") || line.startsWith("-"))) {
+      lines.push(line);
+    }
+  }
+  return files;
 }
 
 export function formatLiteralPathspec(value) {
@@ -3846,15 +4021,23 @@ function topPathSegment(filePath) {
  * if the repo needs more characters to avoid ambiguity.
  *
  * @param {string} repoPath - Absolute canonical path to the git working tree.
- * @returns {Promise<string|null>} Short SHA string, or null on error.
+ * @returns {Promise<string|null>} Short SHA string, or null when HEAD is unborn.
  */
 export async function getHeadShortSha(repoPath) {
-  const { stdout } = await runGit(
-    { path: repoPath },
-    ["rev-parse", "--short", "HEAD"],
-    { timeoutMs: FLEET_GIT_TIMEOUT_MS, maxBytes: 64 },
-  );
-  return stdout.trim() || null;
+  try {
+    const { stdout } = await runGit(
+      { path: repoPath },
+      ["rev-parse", "--short", "--verify", "--quiet", "HEAD"],
+      { timeoutMs: FLEET_GIT_TIMEOUT_MS, maxBytes: 64 },
+    );
+    return stdout.trim() || null;
+  } catch (err) {
+    // `--verify --quiet` exits 1 without output when HEAD is unborn.
+    if (err instanceof GitCommandError && err.exitCode === 1 && !err.timedOut) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /**
