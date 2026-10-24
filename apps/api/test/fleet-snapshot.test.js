@@ -5,7 +5,7 @@
  *   - GET /api/fleet/snapshot (http.js route)
  *   - createFleetService (fleetService.js orchestrator)
  *   - per-repo 5s timeout + Promise.allSettled partial response
- *   - estimatedCost 6N formula (Option A subset, proposal §4.1.6)
+ *   - estimatedCost 8N formula (Option A subset, proposal §4.1.6)
  *   - notes.untrackedExcluded + notes.sseAvailable assertions
  *   - fleet-response.schema.json structural validation (reuses fleet-schema.test.js validator)
  *
@@ -247,6 +247,77 @@ test("per-repo timeout: slow git call yields status=timeout and null fields", as
   }
 });
 
+test("per-repo timeout: a git call killed by its own timeout yields status=timeout", async () => {
+  const config = {
+    repositories: new Map([["slow-repo", { id: "slow-repo", name: "slow-repo", path: "/tmp/fake-slow-repo" }]]),
+  };
+  // What runGit throws when FLEET_GIT_TIMEOUT_MS (shorter than the 5 s race)
+  // kills the child.
+  const timedOut = () =>
+    Promise.reject(Object.assign(new Error("Git command failed"), { name: "GitCommandError", timedOut: true }));
+  const failed = () =>
+    Promise.reject(Object.assign(new Error("Git command failed"), { name: "GitCommandError", timedOut: false }));
+
+  const origStatSync = fs.statSync;
+  fs.statSync = (p) => {
+    if (p === "/tmp/fake-slow-repo") return { isDirectory: () => true };
+    return origStatSync(p);
+  };
+  try {
+    const slow = createFleetService(config, {
+      getHeadShortSha: timedOut,
+      getCommits24hCount: timedOut,
+      getWorktreeDirtyBoolean: timedOut,
+    });
+    assert.equal((await slow.getFleetSnapshot({})).repos[0].status, "timeout");
+
+    const broken = createFleetService(config, {
+      getHeadShortSha: failed,
+      getCommits24hCount: failed,
+      getWorktreeDirtyBoolean: failed,
+    });
+    assert.equal((await broken.getFleetSnapshot({})).repos[0].status, "git_error");
+  } finally {
+    fs.statSync = origStatSync;
+  }
+});
+
+test("concurrent snapshots for the same window and repo set share one round of probes", async () => {
+  const config = {
+    repositories: new Map([["r1", { id: "r1", name: "r1", path: "/tmp/fake-shared-repo" }]]),
+  };
+  let headCalls = 0;
+  const gitService = {
+    getHeadShortSha: () => {
+      headCalls += 1;
+      return new Promise((resolve) => setTimeout(() => resolve("aabbccd"), 20));
+    },
+    getCommits24hCount: async () => 0,
+    getWorktreeDirtyBoolean: async () => false,
+  };
+  const origStatSync = fs.statSync;
+  fs.statSync = (p) => {
+    if (p === "/tmp/fake-shared-repo") return { isDirectory: () => true };
+    return origStatSync(p);
+  };
+  try {
+    const fleetSvc = createFleetService(config, gitService);
+    const [a, b] = await Promise.all([fleetSvc.getFleetSnapshot({}), fleetSvc.getFleetSnapshot({})]);
+    assert.equal(headCalls, 1);
+    assert.equal(a.repos[0].status, "ok");
+    assert.deepEqual(a, b);
+
+    // A different window is a different snapshot; a finished one is not reused.
+    await Promise.all([
+      fleetSvc.getFleetSnapshot({ window: "1h" }),
+      fleetSvc.getFleetSnapshot({}),
+    ]);
+    assert.equal(headCalls, 3);
+  } finally {
+    fs.statSync = origStatSync;
+  }
+});
+
 // Test 3: partial response — 2 repos, 1 fails, both appear in repos[]
 test("partial response: 2 repos, 1 success 1 failure, both in response", async () => {
   const repoPath = createTempPath("rtgv-fleet-partial-");
@@ -341,8 +412,8 @@ test("invalid query: ?window=12h returns 400", async () => {
   assert.match(body.error, /window/i);
 });
 
-// Test 6: estimatedCost.gitCallsPerMin === 6 * subscribedRepoCount
-test("estimatedCost: gitCallsPerMin equals 6 * subscribedRepoCount (Option A formula)", async () => {
+// Test 6: estimatedCost.gitCallsPerMin === 8 * subscribedRepoCount
+test("estimatedCost: gitCallsPerMin equals 8 * subscribedRepoCount (Option A formula)", async () => {
   const repo1 = createTempPath("rtgv-fleet-cost1-");
   const repo2 = createTempPath("rtgv-fleet-cost2-");
   const repo3 = createTempPath("rtgv-fleet-cost3-");
@@ -366,8 +437,8 @@ test("estimatedCost: gitCallsPerMin equals 6 * subscribedRepoCount (Option A for
 
     const N = snapshot.estimatedCost.subscribedRepoCount;
     assert.equal(N, 3);
-    assert.equal(snapshot.estimatedCost.gitCallsPerMin, 6 * N,
-      `expected 6*N=${6 * N}, got ${snapshot.estimatedCost.gitCallsPerMin}`);
+    assert.equal(snapshot.estimatedCost.gitCallsPerMin, 8 * N,
+      `expected 8*N=${8 * N}, got ${snapshot.estimatedCost.gitCallsPerMin}`);
     assert.equal(snapshot.estimatedCost.snapshotIntervalMs, 30000);
   } finally {
     for (const rp of [repo1, repo2, repo3]) {

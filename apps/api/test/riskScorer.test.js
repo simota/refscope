@@ -384,3 +384,56 @@ test("listCommits: every returned commit has riskScore and no fileDiffs leak", a
     assert.ok("hash" in commit && "subject" in commit && "author" in commit);
   }
 });
+
+test("getCommitRisk: breakdown never goes negative for binary files and matches the score", async () => {
+  const repoPath = createTempPath("riskscorer-binary-breakdown-");
+  try {
+    initRepo(repoPath);
+    writeAndCommit(repoPath, "bin.dat", Buffer.from([0, 1, 2, 3]), "chore: add binary");
+    writeAndCommit(repoPath, "bin.dat", Buffer.from([0, 9, 9, 9]), "chore: change binary");
+    const hash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    const repo = { id: "binary-repo", name: "binary-repo", path: repoPath };
+    const result = await makeService().getCommitRisk(repo, hash);
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.breakdown.length, 1);
+    assert.equal(result.body.breakdown[0].path, "bin.dat");
+    assert.ok(result.body.breakdown[0].contribution >= 0);
+    assert.equal(result.body.breakdown[0].contribution, result.body.riskScore);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
+test("getCommitRisk: a hotspot cache older than its TTL is refreshed", async () => {
+  const repoPath = createTempPath("riskscorer-stale-cache-");
+  const realNow = Date.now;
+  try {
+    initRepo(repoPath);
+    writeAndCommit(repoPath, "src/a.js", "v0\n", "chore: seed");
+    const repo = { id: "stale-repo", name: "stale-repo", path: repoPath };
+    const service = makeService();
+
+    const first = await service.getCommitRisk(repo, git(repoPath, "rev-parse", "HEAD").trim());
+    assert.equal(first.status, 200);
+    const firstChurn = first.body.breakdown[0].churn;
+
+    for (let i = 1; i <= 3; i += 1) {
+      writeAndCommit(repoPath, "src/a.js", `v${i}\n`, `chore: touch ${i}`);
+    }
+    const head = git(repoPath, "rev-parse", "HEAD").trim();
+    Date.now = () => realNow() + 61_000;
+    // The stale read starts a background refresh; poll until it lands.
+    let churn = firstChurn;
+    for (let attempt = 0; attempt < 50 && churn === firstChurn; attempt += 1) {
+      const result = await service.getCommitRisk(repo, head);
+      churn = result.body.breakdown[0].churn;
+      if (churn === firstChurn) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(churn > firstChurn, `expected churn above ${firstChurn}, got ${churn}`);
+  } finally {
+    Date.now = realNow;
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 3 });
+  }
+});

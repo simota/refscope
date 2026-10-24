@@ -9,14 +9,15 @@
  * Option A subset (MVP):
  *   - Observed Git facts only: headShortSha / commits24h / worktreeDirty
  *   - No SSE integration — refMove1h is always null (v1 will wire SSE)
- *   - estimatedCost uses the Option A formula: 6*N git calls/min
+ *   - estimatedCost uses the Option A formula: 8*N git calls/min
  *     (Option B Hybrid formula is ~37*N calls/min per proposal §5.2;
  *      these two must never be mixed)
  *   - notes.sseAvailable: false
  *   - notes.untrackedExcluded: true (diff-only, no ls-files for dirty check)
  *
  * proposal §5.6: Promise.allSettled + per-repo 5s timeout + partial response.
- * proposal §4.1.6: cost formula 6N (Option A subset).
+ * proposal §4.1.6: cost formula 8N (Option A subset; the proposal's ~3
+ *   calls per snapshot plus the filter-driver lookup the dirty probe needs).
  * charter §5: version=1.
  */
 
@@ -35,11 +36,12 @@ const SNAPSHOT_INTERVAL_MS = 30_000;
 /**
  * Option A subset git calls per minute per repo.
  *
- * Formula: 6 * N (proposal §4.1.6, Option A subset).
+ * Formula: 8 * N (proposal §4.1.6, Option A subset).
  *   - rev-parse --short HEAD  (1 call)
  *   - log --since             (1 call)
+ *   - config --get-regexp     (1 call; filter drivers to neutralize below)
  *   - diff --quiet HEAD       (1 call)
- *   × refresh twice per minute (30s interval) = 6 calls/repo/min
+ *   × refresh twice per minute (30s interval) = 8 calls/repo/min
  *
  * Do NOT confuse with Option B Hybrid formula (~37*N calls/min, proposal §5.2).
  * Option B includes SSE polling + ahead/behind drift per ref, which are not
@@ -49,7 +51,7 @@ const SNAPSHOT_INTERVAL_MS = 30_000;
  * @returns {number}
  */
 function optionAGitCallsPerMin(n) {
-  return 6 * n;
+  return 8 * n;
 }
 
 /**
@@ -179,7 +181,10 @@ async function getFleetRepoSnapshot(repoId, repoPath, window, gitService) {
       status: "ok",
     };
   } catch (err) {
-    if (err.isFleetTimeout) {
+    // The probes carry their own git timeout, shorter than REPO_TIMEOUT_MS,
+    // so a slow repo usually surfaces as a timed-out GitCommandError rather
+    // than through the race; both mean the repo did not answer in time.
+    if (err.isFleetTimeout || (err?.name === "GitCommandError" && err.timedOut)) {
       return {
         repoId,
         ...nullRepoFields(),
@@ -216,13 +221,30 @@ async function getFleetRepoSnapshot(repoId, repoPath, window, gitService) {
  * @returns {function} getFleetSnapshot
  */
 export function createFleetService(config, gitService) {
+  // Snapshots in flight, keyed by window + repo set. Several tabs polling at
+  // once share one round of git probes instead of queueing a second round
+  // behind the first in the runner's process pool, where the queue wait
+  // would push every repo of the later request past its 5 s deadline.
+  const inFlight = new Map();
+
+  function getFleetSnapshot({ include = null, window = null } = {}) {
+    const key = JSON.stringify([window ?? "24h", include && include.length > 0 ? include : null]);
+    const pending = inFlight.get(key);
+    if (pending) return pending;
+    const promise = collectFleetSnapshot({ include, window }).finally(() => {
+      inFlight.delete(key);
+    });
+    inFlight.set(key, promise);
+    return promise;
+  }
+
   /**
    * Build and return a fleet snapshot response object.
    *
    * @param {{ include?: string[]|null, window?: string|null }} opts
    * @returns {Promise<object>} Fleet snapshot matching fleet-response.schema.json
    */
-  async function getFleetSnapshot({ include = null, window = null } = {}) {
+  async function collectFleetSnapshot({ include, window }) {
     const effectiveWindow = window ?? "24h";
 
     // Resolve the repos to observe. `include` is a validated string[] or null.
@@ -267,9 +289,9 @@ export function createFleetService(config, gitService) {
       /**
        * Literal cost figures for user transparency (charter §1.5, no adjectives).
        *
-       * Option A subset formula: 6 * N git calls/min (proposal §4.1.6).
-       *   3 git calls per repo per snapshot × 2 snapshots/min (30s interval)
-       *   = 6 * N
+       * Option A subset formula: 8 * N git calls/min (proposal §4.1.6).
+       *   4 git calls per repo per snapshot × 2 snapshots/min (30s interval)
+       *   = 8 * N
        *
        * Do NOT confuse with Option B Hybrid: ~37 * N calls/min (proposal §5.2).
        * Option B adds SSE polling + drift detection (not in this MVP surface).

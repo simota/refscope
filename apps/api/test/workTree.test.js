@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   createGitService,
+  getWorktreeDirtyBoolean,
   workTreeNumstatArgs,
   workTreePatchArgs,
 } from "../src/gitService.js";
@@ -560,6 +561,143 @@ test("getWorkTreeChanges does not read through untracked symlinks", async () => 
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
     fs.rmSync(outsidePath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("getWorkTreeChanges does not run fsmonitor or filter commands from the repo config", async () => {
+  const repoPath = createTempPath("rtgv-worktree-hooks-");
+  const markerDir = createTempPath("rtgv-worktree-markers-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, ".gitattributes", "*.txt filter=evil\n*.md filter=dotted.name\n", "chore: attrs");
+    writeAndCommit(repoPath, "a.txt", "one\n", "chore: seed txt");
+    writeAndCommit(repoPath, "b.md", "one\n", "chore: seed md");
+    const marker = (name) => path.join(markerDir, name);
+    // A repository handed to the user (archive, shared disk) carries its own
+    // .git/config; viewing it must not execute anything it names.
+    git(repoPath, "config", "core.fsmonitor", `touch ${marker("fsmonitor")}; false`);
+    git(repoPath, "config", "filter.evil.clean", `touch ${marker("clean")}; cat`);
+    git(repoPath, "config", "filter.evil.process", `touch ${marker("process")}`);
+    git(repoPath, "config", "filter.evil.required", "true");
+    git(repoPath, "config", "filter.dotted.name.clean", `touch ${marker("dotted")}; cat`);
+    // Modify both files and back-date them so Git cannot trust the stat
+    // data and has to hash the working-tree content.
+    fs.writeFileSync(path.join(repoPath, "a.txt"), "two\n");
+    fs.writeFileSync(path.join(repoPath, "b.md"), "two\n");
+    const old = new Date("2001-01-01T00:00:00Z");
+    fs.utimesSync(path.join(repoPath, "a.txt"), old, old);
+    fs.utimesSync(path.join(repoPath, "b.md"), old, old);
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+    const result = await service.getWorkTreeChanges({ id: "demo", name: "demo", path: repoPath });
+
+    assert.equal(result.status, 200);
+    assert.deepEqual(fs.readdirSync(markerDir), []);
+    assert.match(result.body.unstaged.diff, /^\+two$/m);
+    assert.deepEqual(result.body.unstaged.summary, { added: 2, deleted: 2, fileCount: 2 });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 3 });
+    fs.rmSync(markerDir, { recursive: true, force: true });
+  }
+});
+
+test("getWorkTreeChanges counts a conflicted path once on the unstaged side", async () => {
+  const repoPath = createTempPath("rtgv-worktree-conflict-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "f.txt", "base\n", "chore: seed");
+    git(repoPath, "checkout", "-b", "ours");
+    writeAndCommit(repoPath, "f.txt", "ours\n", "feat: ours");
+    git(repoPath, "checkout", "main");
+    writeAndCommit(repoPath, "f.txt", "theirs\n", "feat: theirs");
+    // Leaves f.txt unmerged with conflict markers in the working tree.
+    spawnSync("git", ["merge", "ours"], { cwd: repoPath, stdio: "ignore" });
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 65_536 });
+    const result = await service.getWorkTreeChanges({ id: "demo", name: "demo", path: repoPath });
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.unstaged.summary.fileCount, 1);
+    assert.equal(result.body.staged.summary.fileCount, 1);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
+test("the fleet dirty probe does not run filter commands from the repo config", async () => {
+  const repoPath = createTempPath("rtgv-dirty-hooks-");
+  const markerDir = createTempPath("rtgv-dirty-markers-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "a.txt", "one\n", "chore: seed");
+    // Attributes from .git/info/attributes, so the tracked tree stays clean
+    // and a.txt is the only path the probe has to hash.
+    fs.writeFileSync(path.join(repoPath, ".git", "info", "attributes"), "*.txt filter=evil\n");
+    git(repoPath, "config", "filter.evil.process", `touch ${path.join(markerDir, "process")}`);
+    git(repoPath, "config", "filter.evil.required", "true");
+    fs.writeFileSync(path.join(repoPath, "a.txt"), "two\n");
+    const old = new Date("2001-01-01T00:00:00Z");
+    fs.utimesSync(path.join(repoPath, "a.txt"), old, old);
+
+    assert.equal(await getWorktreeDirtyBoolean(repoPath), true);
+    assert.deepEqual(fs.readdirSync(markerDir), []);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 3 });
+    fs.rmSync(markerDir, { recursive: true, force: true });
+  }
+});
+
+test("worktree reads do not run a submodule's own filter commands", async () => {
+  const upstreamPath = createTempPath("rtgv-worktree-subup-");
+  const repoPath = createTempPath("rtgv-worktree-subhost-");
+  const markerDir = createTempPath("rtgv-worktree-submarkers-");
+  try {
+    initRepo(upstreamPath, "Alice", "alice@example.test");
+    writeAndCommit(upstreamPath, ".gitattributes", "*.txt filter=sub\n", "chore: attrs");
+    writeAndCommit(upstreamPath, "s.txt", "aaa\n", "chore: seed");
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "host\n", "chore: seed");
+    git(repoPath, "-c", "protocol.file.allow=always", "submodule", "add", upstreamPath, "sub");
+    git(repoPath, "commit", "-m", "feat: add submodule");
+    // The submodule's config lives in .git/modules/sub/config, which the
+    // superproject's filter lookup does not see.
+    git(path.join(repoPath, "sub"), "config", "filter.sub.clean", `touch ${path.join(markerDir, "clean")}; cat`);
+    fs.writeFileSync(path.join(repoPath, "sub", "s.txt"), "bbb\n");
+    const old = new Date("2001-01-01T00:00:00Z");
+    fs.utimesSync(path.join(repoPath, "sub", "s.txt"), old, old);
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 65_536 });
+    const result = await service.getWorkTreeChanges({ id: "demo", name: "demo", path: repoPath });
+    assert.equal(result.status, 200);
+    assert.equal(await getWorktreeDirtyBoolean(repoPath), false);
+    assert.deepEqual(fs.readdirSync(markerDir), []);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 3 });
+    fs.rmSync(upstreamPath, { recursive: true, force: true, maxRetries: 3 });
+    fs.rmSync(markerDir, { recursive: true, force: true });
+  }
+});
+
+test("listSubmodules does not run the repo-config fsmonitor hook", async () => {
+  const repoPath = createTempPath("rtgv-submodule-hooks-");
+  const markerDir = createTempPath("rtgv-submodule-markers-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "base\n", "chore: seed");
+    git(repoPath, "config", "core.fsmonitor", `touch ${path.join(markerDir, "fsmonitor")}; false`);
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 65_536 });
+    const result = await service.listSubmodules({ id: "demo", name: "demo", path: repoPath });
+
+    assert.equal(result.status, 200);
+    assert.deepEqual(fs.readdirSync(markerDir), []);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 3 });
+    fs.rmSync(markerDir, { recursive: true, force: true });
   }
 });
 

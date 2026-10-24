@@ -265,6 +265,10 @@ test("parsePatternQuery rejects non-string input", () => {
 
 // ─── parseFleetIncludeQuery ──────────────────────────────────────────────────
 
+test("parseFleetIncludeQuery drops repeated ids, keeping first-seen order", () => {
+  assert.deepEqual(parseFleetIncludeQuery("r2,r1,r2,r1,r1"), { ok: true, value: ["r2", "r1"] });
+});
+
 test("parseFleetIncludeQuery returns null for empty / null / blank input", () => {
   assert.deepEqual(parseFleetIncludeQuery(null), { ok: true, value: null });
   assert.deepEqual(parseFleetIncludeQuery(undefined), { ok: true, value: null });

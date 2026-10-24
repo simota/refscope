@@ -58,6 +58,55 @@ test("builds a non-interactive local-only git environment", () => {
   assert.equal(env.GCM_TRACE, undefined);
 });
 
+test("forces repo-config program hooks off through env-scoped config", () => {
+  const env = buildGitEnv({
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.fsmonitor",
+    GIT_CONFIG_VALUE_0: "/tmp/inherited-hook",
+  });
+  assert.equal(env.GIT_CONFIG_COUNT, "1");
+  assert.equal(env.GIT_CONFIG_KEY_0, "core.fsmonitor");
+  assert.equal(env.GIT_CONFIG_VALUE_0, "false");
+
+  const withFilter = buildGitEnv({}, [["filter.lfs.clean", ""]]);
+  assert.equal(withFilter.GIT_CONFIG_COUNT, "2");
+  assert.equal(withFilter.GIT_CONFIG_KEY_1, "filter.lfs.clean");
+  assert.equal(withFilter.GIT_CONFIG_VALUE_1, "");
+});
+
+test("allows git config only as a read-only --get-regexp lookup", () => {
+  const repoPath = createTempPath("rtgv-runner-config-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    const repo = { id: "demo", name: "demo", path: repoPath };
+    for (const args of [
+      ["config", "core.fsmonitor", "/tmp/hook"],
+      ["config", "--add", "core.fsmonitor", "/tmp/hook"],
+      ["config", "--get-regexp", "core", "--add"],
+      ["config", "--get-regexp", "core", "x"],
+      ["config", "--unset", "--get-regexp", "core"],
+      ["config", "--file=/tmp/x", "--get-regexp", "core"],
+      ["config", "--get-regexp", "--file=/tmp/x"],
+      ["config", "--get-regexp", "--add"],
+      ["config", "--list"],
+    ]) {
+      assert.throws(
+        () => runGit(repo, args, { timeoutMs: 5000, maxBytes: 1024 }),
+        /read-only lookup/,
+        JSON.stringify(args),
+      );
+    }
+    assert.throws(
+      () => runGit(repo, ["config", "-z", "--get-regexp", "^core\\."], {
+        disableFilterDrivers: ["a\nb"],
+      }),
+      /single-line/,
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("rejects explicit git pager options", async () => {
   const repoPath = createTempPath("rtgv-runner-pager-");
   try {

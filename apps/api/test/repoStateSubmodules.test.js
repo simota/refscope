@@ -135,6 +135,34 @@ test("listSubmodules surfaces hash, path, and initialized flag for an added subm
   }
 });
 
+test("listSubmodules keeps a parenthesised path whole for an uninitialized submodule", async () => {
+  const upstreamPath = createTempPath("rtgv-submod-upstream-");
+  const repoPath = createTempPath("rtgv-submod-host-");
+  try {
+    initRepo(upstreamPath);
+    writeAndCommit(upstreamPath, "lib.txt", "v1\n", "chore: lib v1");
+    git(upstreamPath, "tag", "v1");
+    initRepo(repoPath);
+    writeAndCommit(repoPath, "README.md", "host\n", "chore: seed");
+    git(repoPath, "-c", "protocol.file.allow=always", "submodule", "add", upstreamPath, "lib (v2)");
+    git(repoPath, "commit", "-m", "feat: add submodule");
+    git(repoPath, "submodule", "deinit", "-f", "--", "lib (v2)");
+
+    const service = createGitService(makeConfig());
+    const result = await service.listSubmodules(makeRepo(repoPath));
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.submodules.length, 1);
+    const [sub] = result.body.submodules;
+    assert.equal(sub.uninitialized, true);
+    assert.equal(sub.path, "lib (v2)");
+    assert.equal(sub.describe, null);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+    fs.rmSync(upstreamPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
 test("runGit rejects mutating submodule subcommands", async () => {
   const repoPath = createTempPath("rtgv-submod-guard-");
   try {

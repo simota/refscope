@@ -325,8 +325,10 @@ API error message in the timeline instead of silently dropping the event.
 - Malformed percent-encoded API paths are rejected as public `400` errors before repository lookup.
 - Git commands are executed with argument arrays and `shell: false`.
 - Git command execution is limited to the read-only command set used by the
-  API (`cat-file`, `diff`, `for-each-ref`, `log`, `merge-base`, `rev-list`,
-  `rev-parse`, and `show`).
+  API (`cat-file`, `cherry`, `config` (read-only lookup), `diff`,
+  `for-each-ref`, `log`, `ls-files`, `merge-base`, `rev-list`, `rev-parse`,
+  `show`, and the `stash list` / `submodule status` / `worktree list`
+  subcommands).
 - Git command arguments must start with a command name. Leading Git global
   options such as `-c`, `--git-dir`, `--work-tree`, and `--namespace` are
   rejected before spawn so internal call sites cannot override the hardened
@@ -370,6 +372,18 @@ API error message in the timeline instead of silently dropping the event.
 - Diff and changed-file reads pass `--no-ext-diff` and `--no-textconv`, so
   repository-configured external diff or textconv commands are not executed by
   API reads.
+- Git command execution forces `core.fsmonitor=false` through
+  `GIT_CONFIG_COUNT` (which outranks every config file), and reads that compare
+  against the working tree (worktree changes, the fleet dirty probe) first look
+  up the repository's `filter.<driver>` entries and blank their
+  `clean`/`smudge`/`process` commands for that call, so a repository's own
+  `.git/config` cannot make a read run an fsmonitor hook or filter program.
+  Those reads also pass `--ignore-submodules=dirty`, so Git does not run
+  `status` inside submodules (whose own filters would run); uncommitted edits
+  inside a submodule are therefore not reported, a moved submodule commit is.
+  `git config` is allowed only as that `--get-regexp` lookup. A side effect is
+  that worktree diffs show files without their clean filter applied (e.g. Git
+  LFS content instead of pointers).
 - Git commands have timeouts. Configure with `RTGV_GIT_TIMEOUT_MS`.
 - Git command stdout and stderr are bounded before being retained in memory;
   commands that exceed the bound are stopped and reported as truncated.
