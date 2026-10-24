@@ -550,7 +550,7 @@ export default function App() {
   // Per-repo stream state: reset when the effect opens a stream for another
   // repo, kept across the reopen of a refused stream.
   const streamRepoRef = useRef("");
-  const streamHasConnectedRef = useRef(false);
+  const streamResyncOnConnectRef = useRef(false);
   const streamRetryDelayRef = useRef(STREAM_RETRY_MIN_MS);
   const searchRef = useRef(search);
   const authorRef = useRef(author);
@@ -988,15 +988,16 @@ export default function App() {
     const source = new EventSource(eventsUrl(selectedRepo));
     if (streamRepoRef.current !== selectedRepo) {
       streamRepoRef.current = selectedRepo;
-      streamHasConnectedRef.current = false;
+      streamResyncOnConnectRef.current = false;
       streamRetryDelayRef.current = STREAM_RETRY_MIN_MS;
     }
-    // A stream reopened after a refused connect (see `onerror`) still counts
-    // as a reconnect for this repo, so it resyncs too.
-    let hasConnected = streamHasConnectedRef.current;
+    // Resync on `connected` once this repo has had a stream before or a
+    // refused one is being reopened (see `onerror`): changes made in the gap
+    // emit no events, since the server diffs against a fresh snapshot.
+    let hasConnected = streamResyncOnConnectRef.current;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     source.addEventListener("connected", () => {
-      streamHasConnectedRef.current = true;
+      streamResyncOnConnectRef.current = true;
       streamRetryDelayRef.current = STREAM_RETRY_MIN_MS;
       clearBackgroundError("stream");
       setEventStatus("connected");
@@ -1096,6 +1097,7 @@ export default function App() {
       if (source.readyState === EventSource.CLOSED && !retryTimer) {
         const delay = streamRetryDelayRef.current;
         streamRetryDelayRef.current = Math.min(delay * 2, STREAM_RETRY_MAX_MS);
+        streamResyncOnConnectRef.current = true;
         retryTimer = setTimeout(() => setStreamRetryKey((key) => key + 1), delay);
       }
     };
