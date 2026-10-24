@@ -890,13 +890,17 @@ export function createGitService(config) {
         })
         .filter(Boolean);
 
-      // Ensure hotspot cache is populated (best-effort)
-      if (!_hotspotCache.has(repo.id)) {
+      // Same cache policy as listCommits: a cold cache is awaited once, a
+      // stale one is refreshed in the background so later requests catch up.
+      const cached = _hotspotCache.get(repo.id);
+      if (!cached) {
         try {
           await refreshHotspotCache(repo);
         } catch {
           // Fall back to empty cache — score degrades gracefully to 0
         }
+      } else if (Date.now() - cached.ts > HOTSPOT_CACHE_TTL_MS) {
+        refreshHotspotCache(repo).catch(() => {});
       }
 
       const hotspotFiles = _hotspotCache.get(repo.id)?.files ?? new Map();
@@ -905,8 +909,7 @@ export function createGitService(config) {
       // Breakdown: top files by individual contribution
       const breakdown = fileDiffs.map((f) => {
         const churn = hotspotFiles.get(f.path)?.churn ?? 0;
-        const weight = churn > 0 ? Math.log2(churn + 1) : 0;
-        const contribution = Math.round(weight * ((f.added ?? 0) + (f.deleted ?? 0)));
+        const contribution = scoreDiff([f], hotspotFiles);
         return { path: f.path, churn, contribution };
       }).sort((a, b) => b.contribution - a.contribution).slice(0, 10);
 
@@ -1345,6 +1348,9 @@ export function createGitService(config) {
       //   `diffMaxBytes` overflow, which bubbles to http.js as a 504. The
       //   field stays in the payload so the UI's contract stays uniform with
       //   other truncation-aware endpoints, but is always `false` on success.
+      // The index-vs-worktree side hashes working-tree files, which runs any
+      // clean/process filter the repository config defines.
+      const disableFilterDrivers = await listFilterDriverNames(repo, config.gitTimeoutMs);
       const [stagedNumstat, stagedPatch, unstagedNumstat, unstagedPatch, untrackedRaw] =
         await Promise.all([
           runGit(repo, workTreeNumstatArgs({ staged: true }), {
@@ -1358,10 +1364,12 @@ export function createGitService(config) {
           runGit(repo, workTreeNumstatArgs({ staged: false }), {
             timeoutMs: config.gitTimeoutMs,
             maxBytes: config.diffMaxBytes,
+            disableFilterDrivers,
           }),
           runGit(repo, workTreePatchArgs({ staged: false }), {
             timeoutMs: config.gitTimeoutMs,
             maxBytes: config.diffMaxBytes,
+            disableFilterDrivers,
           }),
           runGit(repo, workTreeUntrackedArgs(), {
             timeoutMs: config.gitTimeoutMs,
@@ -2552,6 +2560,39 @@ export function workTreePatchArgs({ staged }) {
 }
 
 /**
+ * Names of the `filter.<driver>` entries the repository config defines a
+ * command for, so the runner can blank them (see `disableFilterDrivers`).
+ * Read from the effective config, includes and conditional includes
+ * resolved, `-z` so a quoted subsection name stays one token.
+ *
+ * @param {{ path: string }} repo
+ * @param {number} timeoutMs
+ * @returns {Promise<string[]>}
+ */
+export async function listFilterDriverNames(repo, timeoutMs) {
+  let stdout;
+  try {
+    ({ stdout } = await runGit(
+      repo,
+      ["config", "-z", "--name-only", "--get-regexp", "^filter\\..+\\.(clean|smudge|process)$"],
+      { timeoutMs },
+    ));
+  } catch (error) {
+    // Exit status 1 means no entry matched.
+    if (error instanceof GitCommandError && error.exitCode === 1 && !error.timedOut) {
+      return [];
+    }
+    throw error;
+  }
+  const names = new Set();
+  for (const key of stdout.split("\0")) {
+    const match = /^filter\.(.+)\.[^.]+$/s.exec(key);
+    if (match) names.add(match[1]);
+  }
+  return [...names];
+}
+
+/**
  * `git ls-files --others --exclude-standard -z` lists untracked paths that
  * are not gitignored. `-z` is mandatory: filenames may contain newlines and
  * the only safe separator is NUL. The runner's argument-array `spawn`
@@ -2983,18 +3024,19 @@ function normalizeNumstatPath(filePath) {
 }
 
 export function parseNumstatSummary(lines) {
-  return lines.reduce(
-    (summary, line) => {
-      const stat = parseNumstatLine(line.trimEnd());
-      if (!stat) return summary;
-      return {
-        added: summary.added + stat.added,
-        deleted: summary.deleted + stat.deleted,
-        fileCount: summary.fileCount + 1,
-      };
-    },
-    { added: 0, deleted: 0, fileCount: 0 },
-  );
+  // An unmerged path is listed twice by an index-vs-worktree diff (a `0 0`
+  // placeholder row, then its counts against stage 2); it is still one file.
+  const paths = new Set();
+  const summary = { added: 0, deleted: 0, fileCount: 0 };
+  for (const line of lines) {
+    const stat = parseNumstatLine(line.trimEnd());
+    if (!stat) continue;
+    summary.added += stat.added;
+    summary.deleted += stat.deleted;
+    paths.add(stat.path);
+  }
+  summary.fileCount = paths.size;
+  return summary;
 }
 
 function parseNameStatusLine(line, stats) {
@@ -3340,7 +3382,9 @@ function parseSubmoduleStatus(stdout) {
       const describeStart = afterHash.lastIndexOf(" (");
       let pathField;
       let describe = null;
-      if (describeStart !== -1 && afterHash.endsWith(")")) {
+      // Git prints no describe for an uninitialized submodule, so a path that
+      // itself ends in `(...)` must stay whole there.
+      if (flag !== "-" && describeStart !== -1 && afterHash.endsWith(")")) {
         pathField = afterHash.slice(0, describeStart);
         describe = afterHash.slice(describeStart + 2, -1);
       } else {
@@ -4473,10 +4517,9 @@ export async function getCommits24hCount(repoPath, sinceISO) {
  * clean. Untracked files are excluded (proposal §4.1.5; notes.untrackedExcluded
  * is set to true in the snapshot response to surface this limitation).
  *
- * Delegates to the existing getWorkTreeChanges helper to reuse the diff args
- * that are already hardened (--no-ext-diff, --no-textconv, --no-color, etc.).
- * Specifically calls `workTreeNumstatArgs({ staged: false })` and checks
- * whether any file rows appear, keeping the call surface minimal.
+ * Comparing against the working tree hashes changed files, so the
+ * repository's filter drivers are neutralized first (see
+ * `listFilterDriverNames`), as in getWorkTreeChanges.
  *
  * @param {string} repoPath - Absolute canonical path to the git working tree.
  * @returns {Promise<boolean>} true if tracked files differ from HEAD.
@@ -4485,11 +4528,12 @@ export async function getWorktreeDirtyBoolean(repoPath) {
   const repo = { path: repoPath };
   // diff HEAD (unstaged): exit 0 = clean, exit 1 = dirty (GitCommandError).
   // We use --quiet so git exits 1 immediately on first change; no output needed.
+  const disableFilterDrivers = await listFilterDriverNames(repo, FLEET_GIT_TIMEOUT_MS);
   try {
     await runGit(
       repo,
-      ["diff", "--quiet", "--no-ext-diff", "--end-of-options", "HEAD", "--"],
-      { timeoutMs: FLEET_GIT_TIMEOUT_MS, maxBytes: 64 },
+      ["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--end-of-options", "HEAD", "--"],
+      { timeoutMs: FLEET_GIT_TIMEOUT_MS, maxBytes: 64, disableFilterDrivers },
     );
     return false;
   } catch (err) {
@@ -4503,8 +4547,9 @@ export async function getWorktreeDirtyBoolean(repoPath) {
 
 /**
  * Default git call timeout for fleet helpers (ms).
- * Kept shorter than the global gitTimeoutMs so the per-repo 5s fleet timeout
- * in fleetService.js is the binding limit, not the git runner.
+ * Shorter than the per-repo 5s fleet deadline in fleetService.js, so a slow
+ * probe is killed (GitCommandError with `timedOut`, which fleetService reports
+ * as status "timeout") instead of outliving the snapshot that asked for it.
  *
  * @type {number}
  */

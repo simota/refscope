@@ -5,6 +5,7 @@ import path from "node:path";
 const ALLOWED_GIT_COMMANDS = new Set([
   "cat-file",
   "cherry",
+  "config",
   "diff",
   "for-each-ref",
   "log",
@@ -66,26 +67,36 @@ export class GitCommandError extends Error {
   }
 }
 
+/**
+ * @param {{ path: string }} repo
+ * @param {string[]} args
+ * @param {{ timeoutMs?: number, maxBytes?: number, disableFilterDrivers?: string[] }} [options]
+ *   `disableFilterDrivers` names `filter.<driver>` entries to neutralize for
+ *   this call. Pass the names from `listFilterDriverNames` to any command that
+ *   reads working-tree file content (index-vs-worktree `diff`).
+ */
 export function runGit(repo, args, options = {}) {
   const timeoutMs = options.timeoutMs ?? 5000;
   const maxBytes = options.maxBytes ?? 256_000;
+  const disableFilterDrivers = options.disableFilterDrivers ?? [];
 
   validateGitLimits({ timeoutMs, maxBytes });
   validateGitRepo(repo);
   validateGitArgs(args);
+  validateFilterDriverNames(disableFilterDrivers);
 
   return acquireGitSlot().then(() => {
-    const run = spawnGit(repo, args, timeoutMs, maxBytes);
+    const run = spawnGit(repo, args, timeoutMs, maxBytes, filterDriverOverrides(disableFilterDrivers));
     run.then(releaseGitSlot, releaseGitSlot);
     return run;
   });
 }
 
-function spawnGit(repo, args, timeoutMs, maxBytes) {
+function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides) {
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["--no-pager", ...args], {
       cwd: repo.path,
-      env: buildGitEnv(process.env),
+      env: buildGitEnv(process.env, configOverrides),
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -186,7 +197,19 @@ function validateGitLimits({ timeoutMs, maxBytes }) {
   }
 }
 
-export function buildGitEnv(sourceEnv) {
+/**
+ * Settings in the repository's own config that make read-only commands run a
+ * program. Diff drivers are disabled per call (`--no-ext-diff`,
+ * `--no-textconv`); these have no such flag, so they are overridden through
+ * GIT_CONFIG_COUNT, which outranks every config file (Git 2.31+). The values
+ * are inherited by the child processes Git starts (e.g. inside submodules).
+ */
+const FORCED_GIT_CONFIG = [
+  // Any command that reads the index runs the fsmonitor hook.
+  ["core.fsmonitor", "false"],
+];
+
+export function buildGitEnv(sourceEnv, configOverrides = []) {
   const env = {};
   for (const [name, value] of Object.entries(sourceEnv)) {
     if (!name.startsWith("GIT_") && !isBlockedSensitiveEnv(name)) {
@@ -202,7 +225,39 @@ export function buildGitEnv(sourceEnv) {
   env.GIT_ATTR_NOSYSTEM = "1";
   env.GIT_CONFIG_NOSYSTEM = "1";
   env.GIT_CONFIG_GLOBAL = osNullDevice();
+  const forced = [...FORCED_GIT_CONFIG, ...configOverrides];
+  env.GIT_CONFIG_COUNT = String(forced.length);
+  forced.forEach(([key, value], index) => {
+    env[`GIT_CONFIG_KEY_${index}`] = key;
+    env[`GIT_CONFIG_VALUE_${index}`] = value;
+  });
   return env;
+}
+
+// A clean/process filter runs whenever Git hashes a working-tree file whose
+// stat data changed, and Git has no switch to turn filters off wholesale, so
+// each configured driver is blanked by name. An empty command means "no
+// filter"; `required=false` keeps Git from failing on the missing one.
+function filterDriverOverrides(names) {
+  return names.flatMap((name) => [
+    [`filter.${name}.clean`, ""],
+    [`filter.${name}.smudge`, ""],
+    [`filter.${name}.process`, ""],
+    [`filter.${name}.required`, "false"],
+  ]);
+}
+
+function validateFilterDriverNames(names) {
+  if (!Array.isArray(names)) {
+    throw new Error("Git filter driver names must be an array");
+  }
+  for (const name of names) {
+    // Config subsections cannot contain newlines or NUL; env values cannot
+    // carry NUL either.
+    if (typeof name !== "string" || name.length === 0 || /[\0\n]/.test(name)) {
+      throw new Error("Git filter driver names must be non-empty single-line strings");
+    }
+  }
 }
 
 function isBlockedSensitiveEnv(name) {
@@ -252,4 +307,19 @@ function validateGitArgs(args) {
   if (subcommandAllowlist && !subcommandAllowlist.has(args[1])) {
     throw new Error("Git subcommand is not allowed");
   }
+  if (args[0] === "config" && !isReadOnlyConfigLookup(args)) {
+    throw new Error("Git config is allowed only as a read-only lookup");
+  }
+}
+
+// `git config` both reads and writes depending on its arguments. Only the
+// exact lookup shape `config [-z] [--name-only] --get-regexp <pattern>` is
+// accepted: one positional (the name pattern) can never form a write, and a
+// pattern that starts with `-` would be parsed as another option.
+function isReadOnlyConfigLookup(args) {
+  const rest = args.slice(1);
+  const getIndex = rest.indexOf("--get-regexp");
+  if (getIndex === -1 || getIndex !== rest.length - 2) return false;
+  if (rest[getIndex + 1].startsWith("-")) return false;
+  return rest.slice(0, getIndex).every((arg) => arg === "-z" || arg === "--name-only");
 }
