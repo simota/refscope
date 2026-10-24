@@ -200,6 +200,10 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
+// Backoff for reopening a live stream the server refused (non-200).
+const STREAM_RETRY_MIN_MS = 2_000;
+const STREAM_RETRY_MAX_MS = 30_000;
+
 export default function App() {
   const flightRecorderEnabled = useMemo(() => isFlightRecorderEnabled(), []);
   const availableLenses = useMemo<readonly LensId[]>(
@@ -329,6 +333,9 @@ export default function App() {
   // referenced via closure (declared further down; safe because the callback
   // only runs after mount), so the dependency array stays empty.
   const switchRepo = useCallback((repoId: string) => {
+    // Re-picking the open repo (palette, Fleet row) changes neither the repo
+    // nor the ref, so no effect would reload what the reset below clears.
+    if (repoId === selectedRepoRef.current) return;
     setSelectedRepo(repoId);
     setSelectedRef("HEAD");
     setSelected("");
@@ -526,7 +533,16 @@ export default function App() {
   const [flightRefreshKey, setFlightRefreshKey] = useState(0);
   const workTreeAbortRef = useRef<AbortController | null>(null);
   const workTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedRepoRef = useRef(selectedRepo);
   const selectedRefRef = useRef(selectedRef);
+  // Message last shown by a background refresh (live timeline, worktree
+  // poll, drift, stream). Such a refresh clears the banner again once it
+  // succeeds, but only if the banner still shows its own message.
+  const backgroundErrorRef = useRef<string | null>(null);
+  const timelineRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [streamRetryKey, setStreamRetryKey] = useState(0);
+  const streamConnectedRepoRef = useRef("");
+  const streamRetryDelayRef = useRef(STREAM_RETRY_MIN_MS);
   const searchRef = useRef(search);
   const authorRef = useRef(author);
   const pathRef = useRef(path);
@@ -591,8 +607,24 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    selectedRepoRef.current = selectedRepo;
+  }, [selectedRepo]);
+
+  useEffect(() => {
     selectedRefRef.current = selectedRef;
   }, [selectedRef]);
+
+  const reportBackgroundError = useCallback((message: string) => {
+    backgroundErrorRef.current = message;
+    setError(message);
+  }, []);
+
+  const clearBackgroundError = useCallback(() => {
+    const message = backgroundErrorRef.current;
+    if (message == null) return;
+    backgroundErrorRef.current = null;
+    setError((current) => (current === message ? "" : current));
+  }, []);
 
   useEffect(() => {
     searchRef.current = search;
@@ -809,6 +841,7 @@ export default function App() {
           if (controller.signal.aborted) return;
           setDriftMap(buildDriftMap(response.refs));
           setDriftBaseShortName(shortenBaseLabel(response.base.input));
+          clearBackgroundError();
         })
         .catch((err) => {
           // Aborts are routine (rapid SSE bursts cancel the previous in-flight
@@ -816,10 +849,10 @@ export default function App() {
           // through the existing error banner so users can see the API issue.
           if (controller.signal.aborted) return;
           if (err instanceof DOMException && err.name === "AbortError") return;
-          setError(errorMessage(err));
+          reportBackgroundError(errorMessage(err));
         });
     },
-    [],
+    [clearBackgroundError, reportBackgroundError],
   );
 
   // Debounce SSE-driven drift refetches. Multiple ref_* events can fire in
@@ -872,13 +905,14 @@ export default function App() {
         setWorkTree((prev) =>
           prev && isWorkTreeContentEqual(prev, response) ? prev : response,
         );
+        clearBackgroundError();
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
         if (err instanceof DOMException && err.name === "AbortError") return;
-        setError(errorMessage(err));
+        reportBackgroundError(errorMessage(err));
       });
-  }, []);
+  }, [clearBackgroundError, reportBackgroundError]);
 
   // Window focus + repo-change refresh. Multiple focus events can fire in
   // quick succession when the user alt-tabs through several windows; we
@@ -930,8 +964,14 @@ export default function App() {
   useEffect(() => {
     if (!selectedRepo) return;
     const source = new EventSource(eventsUrl(selectedRepo));
-    let hasConnected = false;
+    // A stream reopened after a refused connect (see `onerror`) still counts
+    // as a reconnect for this repo, so it resyncs too.
+    let hasConnected = streamConnectedRepoRef.current === selectedRepo;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     source.addEventListener("connected", () => {
+      streamConnectedRepoRef.current = selectedRepo;
+      streamRetryDelayRef.current = STREAM_RETRY_MIN_MS;
+      clearBackgroundError();
       setEventStatus("connected");
       if (hasConnected) {
         // Each connection diffs against a fresh server-side snapshot, so
@@ -1019,18 +1059,33 @@ export default function App() {
       // `connected` restores the status.
       const streamError = parseStreamErrorEvent(event);
       if (streamError) {
-        setError(streamError);
+        reportBackgroundError(streamError);
         return;
       }
       setEventStatus("error");
+      // EventSource retries a dropped connection by itself, but a non-200
+      // answer (e.g. the initial ref snapshot timed out on a busy repo)
+      // closes it for good. Reopen it with backoff by re-running this effect.
+      if (source.readyState === EventSource.CLOSED && !retryTimer) {
+        const delay = streamRetryDelayRef.current;
+        streamRetryDelayRef.current = Math.min(delay * 2, STREAM_RETRY_MAX_MS);
+        retryTimer = setTimeout(() => setStreamRetryKey((key) => key + 1), delay);
+      }
     };
-    return () => source.close();
+    return () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      if (timelineRefreshDebounceRef.current) {
+        clearTimeout(timelineRefreshDebounceRef.current);
+        timelineRefreshDebounceRef.current = null;
+      }
+      source.close();
+    };
     // `scheduleDriftRefresh` and other callbacks read from refs/state via
     // their useCallback closures; the only reactive identifier the EventSource
-    // itself depends on is `selectedRepo`, mirroring existing precedent in
-    // this file.
+    // itself depends on is `selectedRepo` (plus `streamRetryKey`, which only
+    // reopens it), mirroring existing precedent in this file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRepo]);
+  }, [selectedRepo, streamRetryKey]);
 
   // Repo-scoped sidebar facts refresh per repo. All four endpoints are
   // failure-soft — missing data degrades to an empty section / clean banner
@@ -1255,6 +1310,7 @@ export default function App() {
       throw err;
     }
     if (generation !== timelineGenerationRef.current) return;
+    clearBackgroundError();
     const { nextRefs, nextRef, nextCommits } = state;
     setRefs(nextRefs);
     setSelectedRef(nextRef);
@@ -1312,15 +1368,30 @@ export default function App() {
     }
     applyEvent();
     announceLiveThrottled(notice);
-    void refreshTimeline(
-      selectedRepo,
-      selectedRefRef.current,
-      searchRef.current,
-      authorRef.current,
-      pathRef.current,
-      searchModeRef.current,
-      searchPatternRef.current,
-    ).catch((err) => setError(errorMessage(err)));
+    scheduleTimelineRefresh();
+  }
+
+  // One push emits a `commit_added` per new commit (up to 50 per ref per
+  // poll). Each would otherwise start its own refs + commits refetch; they
+  // are coalesced into one, like `scheduleDriftRefresh`. The SSE effect
+  // cancels a pending refresh when the repo changes.
+  function scheduleTimelineRefresh() {
+    if (timelineRefreshDebounceRef.current) {
+      clearTimeout(timelineRefreshDebounceRef.current);
+    }
+    const repoId = selectedRepo;
+    timelineRefreshDebounceRef.current = setTimeout(() => {
+      timelineRefreshDebounceRef.current = null;
+      void refreshTimeline(
+        repoId,
+        selectedRefRef.current,
+        searchRef.current,
+        authorRef.current,
+        pathRef.current,
+        searchModeRef.current,
+        searchPatternRef.current,
+      ).catch((err) => reportBackgroundError(errorMessage(err)));
+    }, 150);
   }
 
   const flushPendingRealtimeEvents = useCallback(() => {
