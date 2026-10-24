@@ -378,6 +378,9 @@ API error message in the timeline instead of silently dropping the event.
   up the repository's `filter.<driver>` entries and blank their
   `clean`/`smudge`/`process` commands for that call, so a repository's own
   `.git/config` cannot make a read run an fsmonitor hook or filter program.
+  Those reads also pass `--ignore-submodules=dirty`, so Git does not run
+  `status` inside submodules (whose own filters would run); uncommitted edits
+  inside a submodule are therefore not reported, a moved submodule commit is.
   `git config` is allowed only as that `--get-regexp` lookup. A side effect is
   that worktree diffs show files without their clean filter applied (e.g. Git
   LFS content instead of pointers).

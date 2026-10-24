@@ -2511,6 +2511,12 @@ export function commitDiffShowArgs(hash) {
   ];
 }
 
+// Against the working tree, a plain `git diff` runs `git status` inside each
+// populated submodule, which hashes files with that submodule's own filter
+// drivers (not blanked by `disableFilterDrivers`). `dirty` still reports a
+// submodule whose checked-out commit moved, just not its uncommitted edits.
+const WORKTREE_SUBMODULE_ARGS = ["--ignore-submodules=dirty"];
+
 /**
  * Build `git diff` arguments for the working-tree numstat side. `staged: true`
  * uses `--cached` (HEAD vs index); `staged: false` uses index vs worktree.
@@ -2523,7 +2529,7 @@ export function commitDiffShowArgs(hash) {
  * @param {{ staged: boolean }} args
  */
 export function workTreeNumstatArgs({ staged }) {
-  const cached = staged ? ["--cached"] : [];
+  const cached = staged ? ["--cached"] : WORKTREE_SUBMODULE_ARGS;
   return [
     "diff",
     ...cached,
@@ -2546,7 +2552,7 @@ export function workTreeNumstatArgs({ staged }) {
  * @param {{ staged: boolean }} args
  */
 export function workTreePatchArgs({ staged }) {
-  const cached = staged ? ["--cached"] : [];
+  const cached = staged ? ["--cached"] : WORKTREE_SUBMODULE_ARGS;
   return [
     "diff",
     ...cached,
@@ -4528,12 +4534,27 @@ export async function getWorktreeDirtyBoolean(repoPath) {
   const repo = { path: repoPath };
   // diff HEAD (unstaged): exit 0 = clean, exit 1 = dirty (GitCommandError).
   // We use --quiet so git exits 1 immediately on first change; no output needed.
-  const disableFilterDrivers = await listFilterDriverNames(repo, FLEET_GIT_TIMEOUT_MS);
+  // The lookup and the diff run back to back, so their timeouts are split to
+  // stay inside the fleet's per-repo deadline together.
+  const disableFilterDrivers = await listFilterDriverNames(repo, FLEET_CONFIG_LOOKUP_TIMEOUT_MS);
   try {
     await runGit(
       repo,
-      ["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--end-of-options", "HEAD", "--"],
-      { timeoutMs: FLEET_GIT_TIMEOUT_MS, maxBytes: 64, disableFilterDrivers },
+      [
+        "diff",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        ...WORKTREE_SUBMODULE_ARGS,
+        "--end-of-options",
+        "HEAD",
+        "--",
+      ],
+      {
+        timeoutMs: FLEET_GIT_TIMEOUT_MS - FLEET_CONFIG_LOOKUP_TIMEOUT_MS,
+        maxBytes: 64,
+        disableFilterDrivers,
+      },
     );
     return false;
   } catch (err) {
@@ -4554,6 +4575,7 @@ export async function getWorktreeDirtyBoolean(repoPath) {
  * @type {number}
  */
 const FLEET_GIT_TIMEOUT_MS = 4000;
+const FLEET_CONFIG_LOOKUP_TIMEOUT_MS = 1000;
 
 /**
  * Dedicated git call timeout for Hotspot Lens (ms).

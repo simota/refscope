@@ -200,6 +200,8 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
+type BackgroundErrorSource = "drift" | "worktree" | "timeline" | "stream";
+
 // Backoff for reopening a live stream the server refused (non-200).
 const STREAM_RETRY_MIN_MS = 2_000;
 const STREAM_RETRY_MAX_MS = 30_000;
@@ -336,6 +338,10 @@ export default function App() {
     // Re-picking the open repo (palette, Fleet row) changes neither the repo
     // nor the ref, so no effect would reload what the reset below clears.
     if (repoId === selectedRepoRef.current) return;
+    // Updated here too, not only in the sync effect, so two switches in one
+    // batch (A→B→A) compare against the latest pick.
+    selectedRepoRef.current = repoId;
+    backgroundErrorsRef.current.clear();
     setSelectedRepo(repoId);
     setSelectedRef("HEAD");
     setSelected("");
@@ -535,13 +541,16 @@ export default function App() {
   const workTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRepoRef = useRef(selectedRepo);
   const selectedRefRef = useRef(selectedRef);
-  // Message last shown by a background refresh (live timeline, worktree
-  // poll, drift, stream). Such a refresh clears the banner again once it
-  // succeeds, but only if the banner still shows its own message.
-  const backgroundErrorRef = useRef<string | null>(null);
+  // Messages currently reported by background refreshes, per source. A
+  // source clears its own message once it succeeds; the banner then falls
+  // back to another source that is still failing, or empties.
+  const backgroundErrorsRef = useRef<Map<BackgroundErrorSource, string>>(new Map());
   const timelineRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [streamRetryKey, setStreamRetryKey] = useState(0);
-  const streamConnectedRepoRef = useRef("");
+  // Per-repo stream state: reset when the effect opens a stream for another
+  // repo, kept across the reopen of a refused stream.
+  const streamRepoRef = useRef("");
+  const streamHasConnectedRef = useRef(false);
   const streamRetryDelayRef = useRef(STREAM_RETRY_MIN_MS);
   const searchRef = useRef(search);
   const authorRef = useRef(author);
@@ -614,16 +623,29 @@ export default function App() {
     selectedRefRef.current = selectedRef;
   }, [selectedRef]);
 
-  const reportBackgroundError = useCallback((message: string) => {
-    backgroundErrorRef.current = message;
+  const reportBackgroundError = useCallback((source: BackgroundErrorSource, message: string) => {
+    backgroundErrorsRef.current.set(source, message);
     setError(message);
   }, []);
 
-  const clearBackgroundError = useCallback(() => {
-    const message = backgroundErrorRef.current;
-    if (message == null) return;
-    backgroundErrorRef.current = null;
-    setError((current) => (current === message ? "" : current));
+  const clearBackgroundError = useCallback((...sources: BackgroundErrorSource[]) => {
+    const errors = backgroundErrorsRef.current;
+    const cleared = new Set<string>();
+    for (const source of sources) {
+      const message = errors.get(source);
+      if (message == null) continue;
+      errors.delete(source);
+      cleared.add(message);
+    }
+    if (cleared.size === 0) return;
+    const remaining = [...errors.values()].at(-1) ?? "";
+    setError((current) => (cleared.has(current) ? remaining : current));
+  }, []);
+
+  // A foreground request (initial load, compare, commit detail) that succeeds
+  // replaces the banner with a background failure that is still active, if any.
+  const clearForegroundError = useCallback(() => {
+    setError([...backgroundErrorsRef.current.values()].at(-1) ?? "");
   }, []);
 
   useEffect(() => {
@@ -701,7 +723,7 @@ export default function App() {
           setSelectionNotice("Previous selection is not on this ref; selected the latest visible commit.");
           return markedCommits[0]?.hash || "";
         });
-        setError("");
+        clearForegroundError();
       })
       .catch((err) => {
         if (!cancelled) setError(errorMessage(err));
@@ -733,7 +755,7 @@ export default function App() {
       .then((result) => {
         if (cancelled) return;
         setCompareResult(result);
-        setError("");
+        clearForegroundError();
       })
       .catch((err) => {
         if (!cancelled) {
@@ -806,7 +828,7 @@ export default function App() {
           setDiff(nextDiff);
           // A successful load clears any error left by a previous failed
           // detail/diff fetch — otherwise the banner sticks forever.
-          setError("");
+          clearForegroundError();
         })
         .catch((err) => {
           if (controller.signal.aborted) return;
@@ -841,7 +863,7 @@ export default function App() {
           if (controller.signal.aborted) return;
           setDriftMap(buildDriftMap(response.refs));
           setDriftBaseShortName(shortenBaseLabel(response.base.input));
-          clearBackgroundError();
+          clearBackgroundError("drift");
         })
         .catch((err) => {
           // Aborts are routine (rapid SSE bursts cancel the previous in-flight
@@ -849,7 +871,7 @@ export default function App() {
           // through the existing error banner so users can see the API issue.
           if (controller.signal.aborted) return;
           if (err instanceof DOMException && err.name === "AbortError") return;
-          reportBackgroundError(errorMessage(err));
+          reportBackgroundError("drift", errorMessage(err));
         });
     },
     [clearBackgroundError, reportBackgroundError],
@@ -905,12 +927,12 @@ export default function App() {
         setWorkTree((prev) =>
           prev && isWorkTreeContentEqual(prev, response) ? prev : response,
         );
-        clearBackgroundError();
+        clearBackgroundError("worktree");
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
         if (err instanceof DOMException && err.name === "AbortError") return;
-        reportBackgroundError(errorMessage(err));
+        reportBackgroundError("worktree", errorMessage(err));
       });
   }, [clearBackgroundError, reportBackgroundError]);
 
@@ -964,14 +986,19 @@ export default function App() {
   useEffect(() => {
     if (!selectedRepo) return;
     const source = new EventSource(eventsUrl(selectedRepo));
+    if (streamRepoRef.current !== selectedRepo) {
+      streamRepoRef.current = selectedRepo;
+      streamHasConnectedRef.current = false;
+      streamRetryDelayRef.current = STREAM_RETRY_MIN_MS;
+    }
     // A stream reopened after a refused connect (see `onerror`) still counts
     // as a reconnect for this repo, so it resyncs too.
-    let hasConnected = streamConnectedRepoRef.current === selectedRepo;
+    let hasConnected = streamHasConnectedRef.current;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     source.addEventListener("connected", () => {
-      streamConnectedRepoRef.current = selectedRepo;
+      streamHasConnectedRef.current = true;
       streamRetryDelayRef.current = STREAM_RETRY_MIN_MS;
-      clearBackgroundError();
+      clearBackgroundError("stream");
       setEventStatus("connected");
       if (hasConnected) {
         // Each connection diffs against a fresh server-side snapshot, so
@@ -1059,7 +1086,7 @@ export default function App() {
       // `connected` restores the status.
       const streamError = parseStreamErrorEvent(event);
       if (streamError) {
-        reportBackgroundError(streamError);
+        reportBackgroundError("stream", streamError);
         return;
       }
       setEventStatus("error");
@@ -1310,7 +1337,9 @@ export default function App() {
       throw err;
     }
     if (generation !== timelineGenerationRef.current) return;
-    clearBackgroundError();
+    // A server-side poll failure arrives as a stream `error` event with no
+    // matching success event; a successful refs read stands in for one.
+    clearBackgroundError("timeline", "stream");
     const { nextRefs, nextRef, nextCommits } = state;
     setRefs(nextRefs);
     setSelectedRef(nextRef);
@@ -1390,7 +1419,7 @@ export default function App() {
         pathRef.current,
         searchModeRef.current,
         searchPatternRef.current,
-      ).catch((err) => reportBackgroundError(errorMessage(err)));
+      ).catch((err) => reportBackgroundError("timeline", errorMessage(err)));
     }, 150);
   }
 
