@@ -516,6 +516,7 @@ test("builds compare git arguments with option parsing ended for resolved revisi
   assert.deepEqual(compareNumstatArgs("main", "feature/refscope"), [
     "diff",
     "--numstat",
+    "-z",
     "--no-ext-diff",
     "--no-textconv",
     "--no-color",
@@ -588,9 +589,10 @@ test("builds commit list git log arguments with option parsing ended before reso
       "--regexp-ignore-case",
       "--extended-regexp",
       "--author=Alice",
-      "--format=\u001e%H%x00%P%x00%an%x00%aI%x00%s%x00%D",
+      "--format=%x00%H%x00%P%x00%an%x00%aI%x00%s%x00%D",
       "--no-show-signature",
       "--numstat",
+      "-z",
       "--full-diff",
       "--no-ext-diff",
       "--no-textconv",
@@ -633,6 +635,7 @@ test("builds commit show arguments with option parsing ended before hashes", () 
     "-m",
     "--first-parent",
     "--numstat",
+    "-z",
     "--find-renames",
     "--no-ext-diff",
     "--no-textconv",
@@ -648,6 +651,7 @@ test("builds commit show arguments with option parsing ended before hashes", () 
     "-m",
     "--first-parent",
     "--name-status",
+    "-z",
     "--find-renames",
     "--no-ext-diff",
     "--no-textconv",
@@ -1059,24 +1063,26 @@ function writeFakeSignedCommit(repoPath, treeHash, parentHash) {
   return git(repoPath, "hash-object", "-t", "commit", "-w", commitPath).trim();
 }
 
-test("parses changed files from numstat and name-status output", () => {
+test("parses changed files from NUL-separated numstat and name-status output", () => {
   const files = parseChangedFiles(
     [
       "12\t3\tsrc/App.tsx",
       "-\t-\tassets/logo.png",
       "0\t8\tdocs/old.md",
-      "4\t1\tsrc/new-name.ts",
-      "1\t0\tsrc/{old.txt => renamed.txt}",
-      "2\t1\t{old-dir => new-dir}/nested.ts",
-    ].join("\n"),
+      "4\t1\t\0src/old-name.ts\0src/new-name.ts",
+      "1\t0\t\0src/old.txt\0src/renamed.txt",
+      "2\t1\t\0old-dir/nested.ts\0new-dir/nested.ts",
+      "",
+    ].join("\0"),
     [
-      "M\tsrc/App.tsx",
-      "A\tassets/logo.png",
-      "D\tdocs/old.md",
-      "R087\tsrc/old-name.ts\tsrc/new-name.ts",
-      "R050\tsrc/old.txt\tsrc/renamed.txt",
-      "R075\told-dir/nested.ts\tnew-dir/nested.ts",
-    ].join("\n"),
+      "M\0src/App.tsx",
+      "A\0assets/logo.png",
+      "D\0docs/old.md",
+      "R087\0src/old-name.ts\0src/new-name.ts",
+      "R050\0src/old.txt\0src/renamed.txt",
+      "R075\0old-dir/nested.ts\0new-dir/nested.ts",
+      "",
+    ].join("\0"),
   );
 
   assert.deepEqual(files, [
@@ -1089,14 +1095,15 @@ test("parses changed files from numstat and name-status output", () => {
   ]);
 });
 
-test("summarizes numstat lines for commit list metadata", () => {
+test("summarizes NUL-separated numstat records for commit list metadata", () => {
   assert.deepEqual(
     parseNumstatSummary([
       "12\t3\tsrc/App.tsx",
       "-\t-\tassets/logo.png",
       "0\t8\tdocs/old.md",
-      "1\t0\tsrc/{old.txt => renamed.txt}",
-    ]),
+      "1\t0\t\0src/old.txt\0src/renamed.txt",
+      "",
+    ].join("\0")),
     { added: 13, deleted: 11, fileCount: 4 },
   );
 });

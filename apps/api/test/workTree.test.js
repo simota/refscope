@@ -17,6 +17,7 @@ test("workTreeNumstatArgs uses --cached only when staged, with hardening flags",
   assert.equal(staged[0], "diff");
   assert.ok(staged.includes("--cached"));
   assert.ok(staged.includes("--numstat"));
+  assert.ok(staged.includes("-z"));
   assert.ok(staged.includes("--no-renames"));
   assert.ok(staged.includes("--no-ext-diff"));
   assert.ok(staged.includes("--no-textconv"));
@@ -29,6 +30,7 @@ test("workTreeNumstatArgs uses --cached only when staged, with hardening flags",
   assert.equal(unstaged[0], "diff");
   assert.ok(!unstaged.includes("--cached"));
   assert.ok(unstaged.includes("--numstat"));
+  assert.ok(unstaged.includes("-z"));
 });
 
 test("workTreePatchArgs requests rename detection in the patch lane only", () => {
