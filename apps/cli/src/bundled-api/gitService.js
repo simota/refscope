@@ -3412,9 +3412,11 @@ function readFile(filePath) {
   return readMarkerFile(filePath)?.trim() ?? null;
 }
 
+// lstat: a symlinked marker directory is not Git's doing either, and reading
+// head-name/onto through it would escape the git dir.
 function statIsDir(filePath) {
   try {
-    return fs.statSync(filePath).isDirectory();
+    return fs.lstatSync(filePath).isDirectory();
   } catch {
     return false;
   }
@@ -3876,8 +3878,14 @@ async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
     ]);
   } catch (error) {
     // A ref may name a blob or tree; it has no drift and must not fail the
-    // whole fan-out. Timeouts and overflows still surface as 504.
-    if (error instanceof GitCommandError && !error.timedOut && !error.truncated) {
+    // whole fan-out. Any other failure (missing objects, timeouts) still
+    // surfaces.
+    if (
+      error instanceof GitCommandError &&
+      !error.timedOut &&
+      !error.truncated &&
+      (await validateCommitObject(repo, ref.hash, timeoutMs)).result?.status === 400
+    ) {
       return null;
     }
     throw error;

@@ -567,6 +567,11 @@ export default function App() {
   // changes so an SSE-triggered refresh that resolves after a repo switch is
   // discarded instead of clobbering the new repo's refs/commits.
   const timelineGenerationRef = useRef(0);
+  // Every timeline load/refresh takes a ticket when it starts; a result is
+  // applied only if no later-started one has been applied already. A newer
+  // request that fails therefore never discards an older one that succeeded.
+  const timelineTicketRef = useRef(0);
+  const appliedTimelineTicketRef = useRef(0);
   const pendingRealtimeEventsRef = useRef<Array<() => void>>([]);
   const realtimeNewCommitHashesRef = useRef<Set<string>>(new Set());
   const { quietMode, prefersReducedMotion, isQuiet, toggleQuietMode } = useQuietMode();
@@ -697,10 +702,10 @@ export default function App() {
   useEffect(() => {
     if (!selectedRepo) return;
     let cancelled = false;
-    // Take a generation of our own: a live refresh that starts later bumps
-    // it again, so this (older) load cannot overwrite the newer result.
-    const generation = ++timelineGenerationRef.current;
-    const isStale = () => cancelled || generation !== timelineGenerationRef.current;
+    // A live refresh that starts later and lands first must win over this
+    // (older) load; see timelineTicketRef.
+    const ticket = ++timelineTicketRef.current;
+    const isStale = () => cancelled || ticket < appliedTimelineTicketRef.current;
     setLoading(true);
     loadRepositoryState(
       selectedRepo,
@@ -713,6 +718,7 @@ export default function App() {
     )
       .then(({ nextRefs, nextRef, nextCommits }) => {
         if (isStale()) return;
+        appliedTimelineTicketRef.current = ticket;
         const markedCommits = markRealtimeNewCommits(
           nextCommits,
           realtimeNewCommitHashesRef.current,
@@ -1342,13 +1348,14 @@ export default function App() {
     mode: SearchMode,
     pattern: string,
   ) {
-    // Take a new generation before awaiting; if the user switches repos or
-    // a newer load/refresh starts while this one is in flight, the
-    // generation moves on and the stale result is discarded before any state
-    // write below. A refresh for a repo that is no longer open must not take
-    // a generation, or it would invalidate the open repo's own load.
+    // Capture the generation before awaiting; if the user switches repos
+    // while the request is in flight, the generation moves on and the stale
+    // result is discarded before any state write below. The ticket orders
+    // this refresh against other loads/refreshes of the same view; a refresh
+    // for a repo that is no longer open never takes one.
     if (repoId !== selectedRepoRef.current) return;
-    const generation = ++timelineGenerationRef.current;
+    const generation = timelineGenerationRef.current;
+    const ticket = ++timelineTicketRef.current;
     let state: Awaited<ReturnType<typeof loadRepositoryState>>;
     try {
       state = await loadRepositoryState(
@@ -1366,6 +1373,8 @@ export default function App() {
       throw err;
     }
     if (generation !== timelineGenerationRef.current) return;
+    if (ticket < appliedTimelineTicketRef.current) return;
+    appliedTimelineTicketRef.current = ticket;
     // A server-side poll failure arrives as a stream `error` event with no
     // matching success event; a successful refs read stands in for one.
     clearBackgroundError("timeline", "stream");
