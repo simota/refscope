@@ -131,6 +131,37 @@ test("getRefDrift excludes tags from the drift surface", async () => {
   }
 });
 
+test("getRefDrift and branch groups skip refs that do not name a commit", async () => {
+  const repoPath = createTempPath("rtgv-ref-drift-blob-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "v0\n", "chore: seed");
+    git(repoPath, "branch", "feat/ok");
+    const blob = git(repoPath, "rev-parse", "HEAD:README.md").trim();
+    git(repoPath, "update-ref", "refs/remotes/origin/blobref", blob);
+    // update-ref refuses a non-commit under refs/heads; write it directly.
+    fs.writeFileSync(path.join(repoPath, ".git", "refs", "heads", "feat", "blob"), `${blob}\n`);
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const drift = await service.getRefDrift(repo, new URLSearchParams());
+    assert.equal(drift.status, 200);
+    const names = drift.body.refs.map((entry) => entry.name).sort();
+    assert.deepEqual(names, ["refs/heads/feat/ok", "refs/heads/main"]);
+
+    const groups = await service.getBranchGroupHealth(repo, new URLSearchParams({ prefix: "feat/" }));
+    assert.equal(groups.status, 200);
+    assert.deepEqual(groups.body.branches.map((branch) => branch.shortName), ["feat/ok"]);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
 test("getRefDrift marks truncated:true when ref count exceeds the requested limit", async () => {
   const repoPath = createTempPath("rtgv-ref-drift-truncated-");
   try {

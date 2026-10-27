@@ -304,6 +304,7 @@ export function createGitService(config) {
         "--max-count=50",
         "--date=iso-strict",
         NUMSTAT_COMMIT_FORMAT,
+        ...PUBLIC_DECORATION_ARGS,
         "--no-show-signature",
         "--numstat",
         "-z",
@@ -1173,11 +1174,13 @@ export function createGitService(config) {
       // Drift per ref runs in parallel; the outer Promise.all unions all
       // refs, and `computeRefDrift` itself runs ahead/behind/merge-base in
       // parallel internally. Total fanout is 3 * processedRefs git calls.
-      const driftEntries = await Promise.all(
-        refsToProcess.map((ref) =>
-          computeRefDrift(repo, baseRevision.hash, ref, config.gitTimeoutMs),
-        ),
-      );
+      const driftEntries = (
+        await Promise.all(
+          refsToProcess.map((ref) =>
+            computeRefDrift(repo, baseRevision.hash, ref, config.gitTimeoutMs),
+          ),
+        )
+      ).filter(Boolean);
 
       return {
         status: 200,
@@ -1253,9 +1256,10 @@ export function createGitService(config) {
       const now = Date.now();
 
       // Compute drift + rotScore in parallel across matching branches.
-      const branches = await Promise.all(
+      const branches = (await Promise.all(
         matchingBranches.map(async (ref) => {
           const drift = await computeRefDrift(repo, baseRevision.hash, ref, config.gitTimeoutMs);
+          if (!drift) return null;
           const ahead = drift.ahead;
           const behind = drift.behind;
           const daysSinceLast = ref.updatedAt
@@ -1281,7 +1285,7 @@ export function createGitService(config) {
             rotScore,
           };
         }),
-      );
+      )).filter(Boolean);
 
       // Resolve HEAD so the UI can identify which entry in `branches` is the
       // currently checked-out branch. `git rev-parse --symbolic-full-name HEAD`
@@ -1849,8 +1853,14 @@ export function createGitService(config) {
             "log",
             "--left-right",
             "--cherry-mark",
+            // `git cherry` lists oldest first; match it so same-subject
+            // commits pair up in the order they were applied.
+            "--reverse",
             "--no-show-signature",
             `--format=%m%H %s`,
+            // Symmetric difference needs the `...` form; both sides are
+            // resolved object IDs.
+            "--end-of-options",
             `${baseRevision.hash}...${targetRevision.hash}`,
           ],
           { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
@@ -1876,8 +1886,8 @@ export function createGitService(config) {
         }
 
         // Map each equivalent base entry to its target-side counterpart.
-        // Subject collisions are resolved by consumption order (FIFO), which
-        // is the same traversal order git uses for both sides.
+        // Subject collisions are resolved by consumption order (FIFO): both
+        // `git cherry` and the reversed log above list oldest first.
         /** @type {Map<string, string>} baseHash → targetHash */
         const targetHashForBase = new Map();
         // Track per-subject consumption index (reset per subject group).
@@ -2250,7 +2260,8 @@ export async function resolveCommitishRevision(repo, revision, timeoutMs) {
       if (
         resolvedName === ""
           ? (await isRootRefCandidate(repo, revision, timeoutMs)) ||
-            (await isNonPublicRefsChild(repo, revision, timeoutMs))
+            (await isNonPublicRefsChild(repo, revision, timeoutMs)) ||
+            (await hasHiddenSymrefCandidate(repo, revision, timeoutMs))
           : !isPublicFullRefName(resolvedName)
       ) {
         return {
@@ -2306,6 +2317,40 @@ async function isNonPublicRefsChild(repo, revision, timeoutMs) {
     timeoutMs,
   });
   return stdout.split("\n").includes(refName);
+}
+
+// The remaining lookup rules only reach public namespaces, but the ref Git
+// picks there can be a symref into a hidden one (refs/tags/x -> refs/notes/y
+// beside a branch x). Without the full name we cannot tell which candidate
+// wins, so any candidate symref that ends outside the public namespaces makes
+// the short name unusable.
+async function hasHiddenSymrefCandidate(repo, revision, timeoutMs) {
+  const candidates = [
+    `refs/${revision}`,
+    `refs/tags/${revision}`,
+    `refs/heads/${revision}`,
+    `refs/remotes/${revision}`,
+    `refs/remotes/${revision}/HEAD`,
+  ];
+  const { stdout } = await runGit(
+    repo,
+    ["for-each-ref", "--format=%(refname)%00%(symref)", ...candidates],
+    { timeoutMs },
+  );
+  for (const line of stdout.split("\n")) {
+    const [refName, symref] = line.split("\0");
+    // for-each-ref also lists refs below each pattern; only exact names are
+    // lookup candidates.
+    if (!symref || !candidates.includes(refName)) continue;
+    const { stdout: target } = await runGit(repo, symbolicFullNameArgs(refName), {
+      timeoutMs,
+      maxBytes: 1024,
+    });
+    if (!isPublicFullRefName(target.trim())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function validateCommitObject(repo, hash, timeoutMs) {
@@ -2377,6 +2422,16 @@ export function compareRevListArgs(fromRevision, notRevision) {
   return ["rev-list", "--count", "--not", notRevision, "--not", "--end-of-options", fromRevision];
 }
 
+// `%D` lists whatever the repository's decoration config selects (e.g.
+// `log.initialDecorationSet=all` adds refs/notes, refs/pull, ...). Explicit
+// filters override that config and keep hidden ref names out of `refs`.
+export const PUBLIC_DECORATION_ARGS = [
+  "--decorate-refs=HEAD",
+  "--decorate-refs=refs/heads/",
+  "--decorate-refs=refs/tags/",
+  "--decorate-refs=refs/remotes/",
+];
+
 export function commitRangeLogArgs(fromRevision, toRevision) {
   return ["--not", fromRevision, "--not", "--end-of-options", toRevision];
 }
@@ -2389,6 +2444,7 @@ export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathA
     ...searchArgs,
     ...authorArgs,
     NUMSTAT_COMMIT_FORMAT,
+    ...PUBLIC_DECORATION_ARGS,
     "--no-show-signature",
     "--numstat",
     "-z",
@@ -2445,6 +2501,7 @@ export function commitMetadataShowArgs(hash) {
     "-s",
     "--date=iso-strict",
     "--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00%D",
+    ...PUBLIC_DECORATION_ARGS,
     "--no-show-signature",
     "--end-of-options",
     hash,
@@ -3318,22 +3375,34 @@ function collectInProgressOperations(gitDir) {
   return operations;
 }
 
-function readFirstLine(filePath) {
+// Marker files are small; a symlink or a huge file there is not Git's doing
+// and must not let the API read (and return) content from elsewhere.
+const MARKER_FILE_MAX_BYTES = 64 * 1024;
+
+function readMarkerFile(filePath) {
+  let fd;
   try {
-    const data = fs.readFileSync(filePath, "utf8");
-    const newline = data.indexOf("\n");
-    return (newline === -1 ? data : data.slice(0, newline)).trim();
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    if (!fs.fstatSync(fd).isFile()) return null;
+    const buffer = Buffer.alloc(MARKER_FILE_MAX_BYTES);
+    const bytesRead = fs.readSync(fd, buffer, 0, MARKER_FILE_MAX_BYTES, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
 }
 
+function readFirstLine(filePath) {
+  const data = readMarkerFile(filePath);
+  if (data === null) return null;
+  const newline = data.indexOf("\n");
+  return (newline === -1 ? data : data.slice(0, newline)).trim();
+}
+
 function readFile(filePath) {
-  try {
-    return fs.readFileSync(filePath, "utf8").trim();
-  } catch {
-    return null;
-  }
+  return readMarkerFile(filePath)?.trim() ?? null;
 }
 
 function statIsDir(filePath) {
@@ -3791,11 +3860,21 @@ async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
       hash: ref.hash,
     };
   }
-  const [ahead, behind, mergeBase] = await Promise.all([
-    runGit(repo, compareRevListArgs(ref.hash, baseHash), { timeoutMs }),
-    runGit(repo, compareRevListArgs(baseHash, ref.hash), { timeoutMs }),
-    readMergeBase(repo, baseHash, ref.hash, timeoutMs),
-  ]);
+  let ahead, behind, mergeBase;
+  try {
+    [ahead, behind, mergeBase] = await Promise.all([
+      runGit(repo, compareRevListArgs(ref.hash, baseHash), { timeoutMs }),
+      runGit(repo, compareRevListArgs(baseHash, ref.hash), { timeoutMs }),
+      readMergeBase(repo, baseHash, ref.hash, timeoutMs),
+    ]);
+  } catch (error) {
+    // A ref may name a blob or tree; it has no drift and must not fail the
+    // whole fan-out. Timeouts and overflows still surface as 504.
+    if (error instanceof GitCommandError && !error.timedOut && !error.truncated) {
+      return null;
+    }
+    throw error;
+  }
   return {
     name: ref.name,
     type: ref.type,
