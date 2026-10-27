@@ -2341,7 +2341,8 @@ async function hasHiddenSymrefCandidate(repo, revision, timeoutMs) {
   const { stdout } = await runGit(
     repo,
     ["for-each-ref", "--format=%(refname)%00%(symref)", ...candidates],
-    { timeoutMs },
+    // The patterns also list every ref below them (refs/remotes/<name>/*).
+    { timeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
   );
   for (const line of stdout.split("\n")) {
     const [refName, symref] = line.split("\0");

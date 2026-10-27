@@ -350,6 +350,10 @@ export default function App() {
     // Clear the previous repo's commits so the timeline shows the loading
     // placeholder instead of briefly rendering repo A's history as repo B's.
     setCommits([]);
+    // Likewise drop repo A's refs and drift so the sidebar and compare
+    // pickers never offer A's refs against repo B.
+    setRefs([]);
+    setDriftMap(new Map());
     realtimeNewCommitHashesRef.current.clear();
     setEventStatus("connecting");
     setEventNotice("");
@@ -693,6 +697,10 @@ export default function App() {
   useEffect(() => {
     if (!selectedRepo) return;
     let cancelled = false;
+    // Take a generation of our own: a live refresh that starts later bumps
+    // it again, so this (older) load cannot overwrite the newer result.
+    const generation = ++timelineGenerationRef.current;
+    const isStale = () => cancelled || generation !== timelineGenerationRef.current;
     setLoading(true);
     loadRepositoryState(
       selectedRepo,
@@ -704,7 +712,7 @@ export default function App() {
       debouncedSearchPattern,
     )
       .then(({ nextRefs, nextRef, nextCommits }) => {
-        if (cancelled) return;
+        if (isStale()) return;
         const markedCommits = markRealtimeNewCommits(
           nextCommits,
           realtimeNewCommitHashesRef.current,
@@ -727,7 +735,7 @@ export default function App() {
         clearForegroundError();
       })
       .catch((err) => {
-        if (!cancelled) setError(errorMessage(err));
+        if (!isStale()) setError(errorMessage(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -1334,10 +1342,13 @@ export default function App() {
     mode: SearchMode,
     pattern: string,
   ) {
-    // Capture the generation before awaiting; if the user switches repos
-    // while the request is in flight, the generation moves on and the stale
-    // result is discarded before any state write below.
-    const generation = timelineGenerationRef.current;
+    // Take a new generation before awaiting; if the user switches repos or
+    // a newer load/refresh starts while this one is in flight, the
+    // generation moves on and the stale result is discarded before any state
+    // write below. A refresh for a repo that is no longer open must not take
+    // a generation, or it would invalidate the open repo's own load.
+    if (repoId !== selectedRepoRef.current) return;
+    const generation = ++timelineGenerationRef.current;
     let state: Awaited<ReturnType<typeof loadRepositoryState>>;
     try {
       state = await loadRepositoryState(
@@ -1762,6 +1773,9 @@ export default function App() {
       {activeLens === 'stream' && mode === "detail" && (
         <div className="flex-1 overflow-hidden" id="lens-panel-stream" role="tabpanel" aria-labelledby="lens-tab-stream">
           <FileStreamLens
+            // Remount per repo: its commit-detail cache is keyed by hash
+            // only, and forks share hashes across repositories.
+            key={selectedRepo}
             repoId={selectedRepo || null}
             commits={commits}
             selectedCommitHash={selected || null}
