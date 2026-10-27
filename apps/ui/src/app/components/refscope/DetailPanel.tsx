@@ -135,7 +135,9 @@ export function DetailPanel({
   if (!commit) {
     return (
       <PanelShell>
-        <Empty>No commit selected</Empty>
+        <div role="status" aria-busy={loading}>
+          <Empty>{loading ? "Loading commit detail…" : error || "No commit selected"}</Empty>
+        </div>
       </PanelShell>
     );
   }

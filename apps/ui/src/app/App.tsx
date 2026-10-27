@@ -55,6 +55,7 @@ import type {
   Repository,
 } from "./components/refscope/data";
 import {
+  commitFromDetail,
   compareRefs,
   deleteRepo,
   eventsUrl,
@@ -783,8 +784,10 @@ export default function App() {
       setDetailLoading(false);
       return;
     }
-    // Reset reachability while loading so the previous commit's "Contained
-    // in" list never bleeds into the new selection.
+    // A new selection must not retain the previous commit's detail or diff,
+    // including when the new read fails or the commit is outside this ref.
+    setDetail(null);
+    setDiff(EMPTY_DIFF);
     setContainingRefs(null);
     // Show the indicator immediately so rapid navigation has visible feedback
     // while we coalesce key-repeat bursts before issuing a fetch.
@@ -1163,7 +1166,13 @@ export default function App() {
   // so it can read `current`, `commits`, and `diff` availability that are
   // computed below.
 
-  const current = commits.find((c) => c.hash === selected) ?? commits[0] ?? null;
+  // Lenses can select a commit outside the current ref or filters. Keep that
+  // selection independent of the timeline instead of borrowing its first row.
+  // Detail and diff are fetched together, so the detail hash identifies both.
+  const selectedDetail = detail?.hash === selected ? detail : null;
+  const selectedDiff = selectedDetail ? diff : EMPTY_DIFF;
+  const current = commits.find((c) => c.hash === selected)
+    ?? (selectedDetail ? commitFromDetail(selectedDetail) : null);
   // Client-side commit kind filter (D-2). Applied after server-side filters so the
   // list endpoint payload is unchanged; only the rendered subset changes.
   const filteredCommits = useMemo(() => {
@@ -1226,6 +1235,7 @@ export default function App() {
   const handleSelectCommit = useCallback((hash: string) => {
     setSelected(hash);
     setSelectedWorkTree(false);
+    setSelectionNotice("");
   }, []);
   const handleSelectWorkTree = useCallback(() => {
     setSelectedWorkTree(true);
@@ -1473,7 +1483,7 @@ export default function App() {
   // Mirrors the gating used in CommandPalette so the shortcut behaves identically
   // to the palette command and doesn't surprise users with a no-op.
   const diffFullscreenAvailable =
-    Boolean(current) && (Boolean(diff.diff) || diff.truncated);
+    Boolean(current) && (Boolean(selectedDiff.diff) || selectedDiff.truncated);
 
   const goToAdjacentCommit = useCallback(
     (direction: 1 | -1) => {
@@ -1813,10 +1823,13 @@ export default function App() {
             repoId={selectedRepo}
             refs={refs}
             onSelectCommit={(hash) => {
-              setSelected(hash);
+              handleSelectCommit(hash);
               setActiveLens('live');
             }}
-            onOpenWorktree={() => { setActiveLens('live'); }}
+            onOpenWorktree={() => {
+              handleSelectWorkTree();
+              setActiveLens('live');
+            }}
             onChangeLens={setActiveLens}
           />
         </div>
@@ -2108,8 +2121,8 @@ export default function App() {
           <section aria-label="Commit details" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
             <DetailPanel
               commit={current}
-              detail={detail}
-              diff={diff}
+              detail={selectedDetail}
+              diff={selectedDiff}
               loading={detailLoading}
               error={error}
               diffFullscreen={diffFullscreen}
@@ -2119,7 +2132,7 @@ export default function App() {
               repoId={selectedRepo}
               workTreeSelected={selectedWorkTree}
               workTree={workTree}
-              containingRefs={containingRefs}
+              containingRefs={selectedDetail ? containingRefs : null}
               onOpenFileHistory={submitFileHistoryPath}
               onFilterByPath={(value) => {
                 setPath(value);
@@ -2154,7 +2167,7 @@ export default function App() {
         onToggleSummaryView={toggleSummaryView}
         onToggleQuietMode={toggleQuietMode}
         onToggleLiveUpdates={toggleLiveUpdates}
-        diffAvailable={Boolean(current) && (Boolean(diff.diff) || diff.truncated)}
+        diffAvailable={diffFullscreenAvailable}
         diffFullscreen={diffFullscreen}
         onToggleDiffFullscreen={() => setDiffFullscreen((prev) => !prev)}
         sidebarCollapsed={sidebarCollapsed}
