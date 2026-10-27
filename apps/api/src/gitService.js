@@ -111,6 +111,9 @@ const COMMIT_RECORD_SEPARATOR = "\u001e";
 // on it lets commit text forge records. A real header starts a line and is
 // followed by the full hash and a NUL, which neither can contain.
 const COMMIT_RECORD_HEADER_PATTERN = /(?:^|\n)\u001e(?=[0-9a-f]{40}\u0000)/;
+// The leading empty NUL token frames each numstat log record. Metadata has
+// six fields; paths cannot contain NUL and are consumed as numstat records.
+const NUMSTAT_COMMIT_FORMAT = "--format=%x00%H%x00%P%x00%an%x00%aI%x00%s%x00%D";
 
 /**
  * Options of a `git log -z --name-only` read whose records
@@ -300,9 +303,10 @@ export function createGitService(config) {
         "log",
         "--max-count=50",
         "--date=iso-strict",
-        `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%P%x00%an%x00%aI%x00%s%x00%D`,
+        NUMSTAT_COMMIT_FORMAT,
         "--no-show-signature",
         "--numstat",
+        "-z",
         "--no-ext-diff",
         "--no-textconv",
         ...commitRangeLogArgs(fromHash, toHash),
@@ -793,10 +797,9 @@ export function createGitService(config) {
       // numstat prints `-` counts for binary files; parseChangedFiles reports
       // them as 0, which classifyFileDiff would read as "whitespace_only".
       const binaryPaths = new Set();
-      for (const line of numstat.stdout.split("\n")) {
-        const parts = line.trimEnd().split("\t");
-        if (parts.length >= 3 && (parts[0] === "-" || parts[1] === "-")) {
-          binaryPaths.add(normalizeNumstatPath(parts.at(-1)));
+      for (const file of parseNumstatRecords(numstat.stdout)) {
+        if (file.added === -1 || file.deleted === -1) {
+          binaryPaths.add(file.path);
         }
       }
       const filesWithKind = rawFiles.map((f) => {
@@ -873,22 +876,7 @@ export function createGitService(config) {
         { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
       );
 
-      const fileDiffs = numstatOut
-        .split("\n")
-        .map((line) => {
-          const parts = line.trimEnd().split("\t");
-          if (parts.length < 3) return null;
-          const filePath = normalizeNumstatPath(parts.at(-1));
-          // Binary files are represented as "-" in numstat output.
-          // Signal binary with -1 so scoreDiff can apply the binary penalty.
-          const isBinaryLine = parts[0] === "-" || parts[1] === "-";
-          return {
-            path: filePath,
-            added: isBinaryLine ? -1 : parseStatCount(parts[0]),
-            deleted: isBinaryLine ? -1 : parseStatCount(parts[1]),
-          };
-        })
-        .filter(Boolean);
+      const fileDiffs = parseNumstatRecords(numstatOut);
 
       // Same cache policy as listCommits: a cold cache is awaited once, a
       // stale one is refreshed in the background so later requests catch up.
@@ -1391,7 +1379,7 @@ export function createGitService(config) {
         body: {
           staged: {
             diff: stagedPatch.stdout,
-            summary: parseNumstatSummary(stagedNumstat.stdout.split("\n")),
+            summary: parseNumstatSummary(stagedNumstat.stdout),
             // Mirrors `getDiff`: the runner throws on `diffMaxBytes`
             // overflow, so by the time we get here the diff was read in
             // full. We keep the field so the UI contract stays uniform with
@@ -1402,7 +1390,7 @@ export function createGitService(config) {
           },
           unstaged: {
             diff: unstagedPatch.stdout,
-            summary: parseNumstatSummary(unstagedNumstat.stdout.split("\n")),
+            summary: parseNumstatSummary(unstagedNumstat.stdout),
             truncated: false,
           },
           untracked: {
@@ -1718,7 +1706,7 @@ export function createGitService(config) {
         }),
         readMergeBase(repo, baseRevision.hash, targetRevision.hash, config.gitTimeoutMs),
       ]);
-      const stats = parseNumstatSummary(numstat.stdout.split("\n"));
+      const stats = parseNumstatSummary(numstat.stdout);
 
       return {
         status: 200,
@@ -2393,9 +2381,10 @@ export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathA
     "--date=iso-strict",
     ...searchArgs,
     ...authorArgs,
-    `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%P%x00%an%x00%aI%x00%s%x00%D`,
+    NUMSTAT_COMMIT_FORMAT,
     "--no-show-signature",
     "--numstat",
+    "-z",
     // A path filter selects commits; stats and risk scores still describe
     // the whole commit, as in the unfiltered list.
     ...(pathArgs.length > 0 ? ["--full-diff"] : []),
@@ -2420,6 +2409,7 @@ export function compareNumstatArgs(base, target) {
   return [
     "diff",
     "--numstat",
+    "-z",
     "--no-ext-diff",
     "--no-textconv",
     "--no-color",
@@ -2465,6 +2455,7 @@ export function commitNumstatShowArgs(hash) {
     "-m",
     "--first-parent",
     "--numstat",
+    "-z",
     "--find-renames",
     "--no-ext-diff",
     "--no-textconv",
@@ -2483,6 +2474,7 @@ export function commitNameStatusShowArgs(hash) {
     "-m",
     "--first-parent",
     "--name-status",
+    "-z",
     "--find-renames",
     "--no-ext-diff",
     "--no-textconv",
@@ -2534,6 +2526,7 @@ export function workTreeNumstatArgs({ staged }) {
     "diff",
     ...cached,
     "--numstat",
+    "-z",
     "--no-renames",
     "--no-ext-diff",
     "--no-textconv",
@@ -2821,34 +2814,10 @@ export function appendRefFlightEvent(logs, repoId, event) {
 }
 
 function parseCommitRecords(stdout) {
-  return splitCommitRecords(stdout)
-    .map((record) => record.trim())
-    .filter(Boolean)
-    .map((record) => {
-      const lines = record.split("\n").filter(Boolean);
-      const metadata = lines[0] ?? "";
-      const [hash, parents, author, authorDate, subject, refs, signatureCode] =
-        metadata.split(COMMIT_FIELD_SEPARATOR);
-      const numstatLines = lines.slice(1);
-      const stats = parseNumstatSummary(numstatLines);
-      // Parse per-file diffs for risk scoring (used by collectRefEvents).
-      // parseNumstatLine returns added=0 for binary "-" lines, but scoreDiff
-      // needs -1 to trigger the binary penalty, so we parse raw here.
-      const fileDiffs = numstatLines.reduce((acc, line) => {
-        const trimmed = line.trimEnd();
-        if (!trimmed) return acc;
-        const parts = trimmed.split("\t");
-        if (parts.length < 3) return acc;
-        const isBinaryLine = parts[0] === "-" || parts[1] === "-";
-        const filePath = normalizeNumstatPath(parts.at(-1));
-        if (!filePath) return acc;
-        acc.push({
-          path: filePath,
-          added: isBinaryLine ? -1 : parseStatCount(parts[0]),
-          deleted: isBinaryLine ? -1 : parseStatCount(parts[1]),
-        });
-        return acc;
-      }, []);
+  return parseNumstatLogRecords(stdout, 6)
+    .map(({ fields, files: fileDiffs }) => {
+      const [hash, parents, author, authorDate, subject, refs] = fields;
+      const stats = summarizeNumstatFiles(fileDiffs);
       return {
         hash,
         shortHash: hash.slice(0, 7),
@@ -2858,8 +2827,8 @@ function parseCommitRecords(stdout) {
         authorDate,
         refs: parseRefs(refs),
         isMerge: splitParents(parents).length > 1,
-        signed: isSignedSignatureCode(signatureCode),
-        signatureStatus: parseSignatureStatus(signatureCode),
+        signed: false,
+        signatureStatus: "unknown",
         added: stats.added,
         deleted: stats.deleted,
         fileCount: stats.fileCount,
@@ -2956,110 +2925,124 @@ function parseRefs(value) {
 }
 
 export function parseChangedFiles(numstatOutput, nameStatusOutput) {
-  const stats = new Map();
-
-  for (const rawLine of numstatOutput.split("\n")) {
-    const line = rawLine.trimEnd();
-    if (!line) continue;
-    const stat = parseNumstatLine(line);
-    if (stat) {
-      stats.set(stat.path, stat);
-    }
-  }
-
+  const stats = new Map(parseNumstatRecords(numstatOutput).map((file) => [file.path, file]));
+  const tokens = nameStatusOutput.split("\0");
   const files = [];
-  for (const rawLine of nameStatusOutput.split("\n")) {
-    const line = rawLine.trimEnd();
-    if (!line) continue;
-    const file = parseNameStatusLine(line, stats);
-    if (file) {
-      files.push(file);
-    }
+  for (let index = 0; index < tokens.length;) {
+    const status = tokens[index++][0];
+    if (!status) continue;
+    // Rename/copy records have a source and destination; every other status
+    // has one path. With -z none of these paths needs quoting or trimming.
+    if (status === "R" || status === "C") index += 1;
+    const filePath = tokens[index++];
+    if (!filePath) continue;
+    const stat = stats.get(filePath) ?? { added: 0, deleted: 0 };
+    files.push({
+      status,
+      path: filePath,
+      added: Math.max(0, stat.added),
+      deleted: Math.max(0, stat.deleted),
+    });
   }
-
   return files;
 }
 
-function parseNumstatLine(line) {
-  const parts = line.split("\t");
-  if (parts.length < 3) return null;
-  const path = normalizeNumstatPath(parts.at(-1));
+/**
+ * Consume one `--numstat -z` record. The first two tabs delimit the counts;
+ * all remaining bytes belong to the path. An empty path in that token marks
+ * a rename/copy, whose source and destination are the next two NUL tokens.
+ * Binary counts stay -1 internally for risk scoring and structural kinds.
+ */
+function readNumstatRecord(tokens, index, first = false) {
+  // `log` adds one newline between its format and the first numstat record.
+  const token = first ? tokens[index].replace(/^\n/, "") : tokens[index];
+  const match = /^(\d+|-)\t(\d+|-)\t(.*)$/s.exec(token);
+  if (!match) return null;
+  let filePath = match[3];
+  let nextIndex = index + 1;
+  if (filePath === "") {
+    if (!tokens[index + 1] || !tokens[index + 2]) return null;
+    filePath = tokens[index + 2];
+    nextIndex += 2;
+  }
+  const binary = match[1] === "-" || match[2] === "-";
   return {
-    path,
-    added: parseStatCount(parts[0]),
-    deleted: parseStatCount(parts[1]),
+    file: {
+      path: filePath,
+      added: binary ? -1 : parseStatCount(match[1]),
+      deleted: binary ? -1 : parseStatCount(match[2]),
+    },
+    nextIndex,
   };
 }
 
-function normalizeNumstatPath(filePath) {
-  // A rename where either side needs quoting is printed in full, with each
-  // side quoted on its own: `"old" => "new"` or `"old" => new`.
-  if (filePath?.startsWith('"')) {
-    const old = readQuotedGitPath(filePath, 0);
-    if (old && filePath.startsWith(" => ", old.end)) {
-      return unquoteGitPath(filePath.slice(old.end + " => ".length));
+function parseNumstatRecords(stdout) {
+  const tokens = stdout.split("\0");
+  const files = [];
+  for (let index = 0; index < tokens.length;) {
+    const record = readNumstatRecord(tokens, index);
+    if (!record) {
+      index += 1;
+      continue;
     }
-    return unquoteGitPath(filePath);
+    files.push(record.file);
+    index = record.nextIndex;
   }
-  if (!filePath?.includes(" => ")) {
-    return filePath;
-  }
-
-  const arrowIndex = filePath.lastIndexOf(" => ");
-  const beforeArrow = filePath.slice(0, arrowIndex);
-  const afterArrow = filePath.slice(arrowIndex + " => ".length);
-  const braceIndex = beforeArrow.lastIndexOf("{");
-  if (braceIndex === -1) {
-    return unquoteGitPath(afterArrow);
-  }
-
-  const closingBraceIndex = afterArrow.indexOf("}");
-  if (closingBraceIndex === -1) {
-    return afterArrow;
-  }
-
-  const prefix = beforeArrow.slice(0, braceIndex);
-  const newMiddle = afterArrow.slice(0, closingBraceIndex);
-  const suffix = afterArrow.slice(closingBraceIndex + 1);
-  // A rename into a parent directory renders as `a/{b => }/f`; with an empty
-  // new side the separators on both sides of the braces would double up.
-  if (newMiddle === "") {
-    return `${prefix}${suffix.replace(/^\//, "")}`;
-  }
-  return `${prefix}${newMiddle}${suffix}`;
+  return files;
 }
 
-export function parseNumstatSummary(lines) {
+/**
+ * Read a `log -z --numstat --format=%x00...` stream without searching inside
+ * filenames for commit headers. Fixed-size metadata is followed by numstat
+ * records; rename paths are consumed together before looking for the next
+ * empty header token. Empty metadata fields and empty commits remain valid.
+ * Raw patch readers use their separate `splitCommitRecords` framing.
+ */
+function parseNumstatLogRecords(stdout, fieldCount) {
+  const tokens = stdout.split("\0");
+  const records = [];
+  let index = 0;
+  while (index < tokens.length) {
+    if (tokens[index] !== "" || !isValidObjectId(tokens[index + 1] ?? "")) {
+      index += 1;
+      continue;
+    }
+    const fields = tokens.slice(index + 1, index + 1 + fieldCount);
+    if (fields.length !== fieldCount) break;
+    index += 1 + fieldCount;
+    const files = [];
+    let first = true;
+    while (index < tokens.length && tokens[index] !== "") {
+      const record = readNumstatRecord(tokens, index, first);
+      if (!record) {
+        index += 1;
+        continue;
+      }
+      files.push(record.file);
+      index = record.nextIndex;
+      first = false;
+    }
+    records.push({ fields, files });
+  }
+  return records;
+}
+
+export function parseNumstatSummary(stdout) {
+  return summarizeNumstatFiles(parseNumstatRecords(stdout));
+}
+
+function summarizeNumstatFiles(files) {
   // An unmerged path is listed twice by an index-vs-worktree diff (a `0 0`
   // placeholder row, then its counts against stage 2); it is still one file.
   const paths = new Set();
   const summary = { added: 0, deleted: 0, fileCount: 0 };
-  for (const line of lines) {
-    const stat = parseNumstatLine(line.trimEnd());
-    if (!stat) continue;
-    summary.added += stat.added;
-    summary.deleted += stat.deleted;
-    paths.add(stat.path);
+  for (const file of files) {
+    summary.added += Math.max(0, file.added);
+    summary.deleted += Math.max(0, file.deleted);
+    paths.add(file.path);
   }
   summary.fileCount = paths.size;
   return summary;
-}
-
-function parseNameStatusLine(line, stats) {
-  const parts = line.split("\t").filter(Boolean);
-  if (parts.length < 2) return null;
-
-  const rawStatus = parts[0];
-  const status = rawStatus[0] ?? "M";
-  const path = unquoteGitPath(parts.at(-1));
-  const stat = stats.get(path) ?? { added: 0, deleted: 0 };
-
-  return {
-    status,
-    path,
-    added: stat.added,
-    deleted: stat.deleted,
-  };
 }
 
 const GIT_QUOTE_ESCAPES = new Map([
@@ -3707,9 +3690,10 @@ export function commitSummaryLogArgs({ since, until, revision, maxCount }) {
     "--no-show-signature",
     "--no-renames",
     "--numstat",
+    "-z",
     "--no-ext-diff",
     "--no-textconv",
-    `--format=${COMMIT_RECORD_SEPARATOR}%H%x00%an%x00%aI%x00%s`,
+    "--format=%x00%H%x00%an%x00%aI%x00%s",
     ...dateBounds,
     "--end-of-options",
     revision,
@@ -3725,38 +3709,20 @@ export function commitSummaryLogArgs({ since, until, revision, maxCount }) {
  * @returns {Array<{ hash: string, author: string, authorDate: string, subject: string, added: number, deleted: number, paths: string[] }>}
  */
 export function parseSummaryRecords(stdout) {
-  return splitCommitRecords(stdout)
-    .map((record) => record.replace(/^\n+/, ""))
-    .filter((record) => record.length > 0)
-    .map((record) => {
-      const lines = record.split("\n");
-      const metadata = lines[0] ?? "";
-      const [hash, author, authorDate, subject] = metadata.split(COMMIT_FIELD_SEPARATOR);
-      let added = 0;
-      let deleted = 0;
-      const paths = [];
-      for (const rawLine of lines.slice(1)) {
-        const line = rawLine.trimEnd();
-        if (!line) continue;
-        const stat = parseSummaryNumstatLine(line);
-        if (!stat) continue;
-        added += stat.added;
-        deleted += stat.deleted;
-        if (stat.path) {
-          paths.push(stat.path);
-        }
-      }
+  return parseNumstatLogRecords(stdout, 4)
+    .map(({ fields, files }) => {
+      const [hash, author, authorDate, subject] = fields;
+      const { added, deleted } = summarizeNumstatFiles(files);
       return {
-        hash: hash ?? "",
-        author: author ?? "",
-        authorDate: authorDate ?? "",
-        subject: subject ?? "",
+        hash,
+        author,
+        authorDate,
+        subject,
         added,
         deleted,
-        paths,
+        paths: files.map((file) => file.path),
       };
-    })
-    .filter((record) => record.hash.length === 40);
+    });
 }
 
 function readRefDriftQuery(query) {
@@ -4287,17 +4253,6 @@ export function parseRelatedFilesRecords(stdout, targetPath, targetNamesByHash =
     .slice(0, RELATED_FILES_TOP_K);
 
   return { scannedCommits, related };
-}
-
-function parseSummaryNumstatLine(line) {
-  const parts = line.split("\t");
-  if (parts.length < 3) return null;
-  const rawAdded = parts[0];
-  const rawDeleted = parts[1];
-  const path = normalizeNumstatPath(parts.at(-1));
-  const added = rawAdded === "-" ? 0 : parseStatCount(rawAdded);
-  const deleted = rawDeleted === "-" ? 0 : parseStatCount(rawDeleted);
-  return { added, deleted, path: path ?? "" };
 }
 
 function aggregateObservedTotals(records) {

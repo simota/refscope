@@ -236,6 +236,11 @@ derived from read-only `git show --numstat` and `git show --name-status`
 commands. Full patch text remains available through the separate diff endpoint.
 For renamed files, the summary attaches additions and deletions to the
 destination path reported by `--name-status`.
+File statistics use Git's NUL-delimited output, preserving literal file names
+containing tabs, newlines, trailing spaces, or ` => ` without treating them as
+record separators or rename notation. Commit lists, details, comparisons,
+period summaries, risk inputs, working-tree totals, and live commit events use
+the same numstat parser.
 The `:hash` path parameter for commit detail and diff endpoints must be a full
 40-character hexadecimal commit object ID; abbreviated hashes are rejected before
 Git execution to avoid ambiguous object resolution. Full object IDs are also

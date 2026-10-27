@@ -293,6 +293,29 @@ export async function getCommit(repoId: string, hash: string, signal?: AbortSign
   );
 }
 
+/** Build the selected-commit view when a lens opens a commit outside the timeline. */
+export function commitFromDetail(detail: CommitDetail): Commit {
+  return {
+    ...toCommit({
+      hash: detail.hash,
+      shortHash: detail.hash.slice(0, 7),
+      parents: detail.parents,
+      subject: detail.subject,
+      author: detail.author.name,
+      authorDate: detail.authorDate,
+      refs: detail.refs,
+      isMerge: detail.parents.length > 1,
+      signed: detail.signed,
+      signatureStatus: detail.signatureStatus,
+      added: detail.files.reduce((total, file) => total + file.added, 0),
+      deleted: detail.files.reduce((total, file) => total + file.deleted, 0),
+      fileCount: detail.files.length,
+    }),
+    body: detail.body,
+    files: detail.files,
+  };
+}
+
 export type ContainingRef = {
   name: string;
   shortName: string;

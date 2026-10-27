@@ -367,12 +367,12 @@ export function BranchSidebar({
               stash={stash}
               onSetCompareBase={
                 onSetRefAsCompareBase
-                  ? () => onSetRefAsCompareBase(stash.name)
+                  ? () => onSetRefAsCompareBase(stash.hash)
                   : undefined
               }
               onSetCompareTarget={
                 onSetRefAsCompareTarget
-                  ? () => onSetRefAsCompareTarget(stash.name)
+                  ? () => onSetRefAsCompareTarget(stash.hash)
                   : undefined
               }
             />
@@ -1263,8 +1263,9 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
 
 /**
  * Stash entry row. Each stash is a real commit object so the right-click
- * menu can drive the same compare endpoints as branches/refs (callers wire
- * `onSetCompareBase/Target` against `stash.name`, e.g. `stash@{0}`).
+ * menu can drive the same compare endpoints as branches/refs. Use the observed
+ * commit hash: reflog selectors such as `stash@{0}` are rejected by the API
+ * and can refer to a different stash after the list changes.
  */
 function StashRow({
   stash,
