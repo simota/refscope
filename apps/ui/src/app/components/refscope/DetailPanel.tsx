@@ -260,6 +260,10 @@ export function DetailPanel({
                 color: "var(--rs-text-secondary)",
                 marginTop: 8,
                 lineHeight: 1.55,
+                // Commit bodies are preformatted (paragraphs, bullet lists);
+                // collapsing their newlines turns them into one wall of text.
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
               }}
             >
               {body}
