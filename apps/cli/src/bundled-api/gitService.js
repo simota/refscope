@@ -229,6 +229,9 @@ export function createGitService(config) {
   // one (A->C after A->B, B->C were logged). See shouldRecordRefFlight.
   /** @type {Map<string, Map<string, RefFlightState>>} */
   const _refFlightStates = new Map();
+  // Taken before each poll reads its refs, so a poll whose classification
+  // finishes late can be told apart from a newer one that already logged.
+  let _refObservationSeq = 0;
 
   // Bumped when a repository id is removed or re-registered, so a hotspot
   // refresh that started before that cannot store churn for the old path.
@@ -498,6 +501,7 @@ export function createGitService(config) {
     },
 
     async collectRefEvents(repo, previousSnapshot) {
+      const observationSeq = ++_refObservationSeq;
       const refs = await listRefs(repo);
       const currentSnapshot = new Map(refs.map((ref) => [ref.name, ref]));
       const changes = compareRefSnapshots(previousSnapshot, currentSnapshot);
@@ -508,7 +512,7 @@ export function createGitService(config) {
         _refFlightStates.set(repo.id, flightStates);
       }
       const recordFlight = (event) => {
-        if (!shouldRecordRefFlight(flightStates, event)) return;
+        if (!shouldRecordRefFlight(flightStates, event, observationSeq)) return;
         appendRefFlightEvent(_refFlightLogs, repo.id, event);
       };
 
@@ -2923,7 +2927,7 @@ export function createRefFlightEvent({
 }
 
 /**
- * @typedef {{ current: string | null, recent: Array<string | null> }} RefFlightState
+ * @typedef {{ current: string | null, recent: Array<string | null>, seq: number }} RefFlightState
  */
 
 // Hashes (and null for "absent") a ref recently passed through in the log.
@@ -2940,13 +2944,21 @@ const REF_FLIGHT_TRACKED_REFS = 4096;
  * (moves that happened while no stream was polling) is logged, as is any
  * real recurrence (A->B, B->A, A->B).
  *
+ * `seq` orders observations by when their refs were read. Classification is
+ * asynchronous, so a poll that read earlier can finish after a newer one has
+ * logged this ref; its change is stale and must not move the state back.
+ *
  * @param {Map<string, RefFlightState>} states
  * @param {{ ref: { name: string }, previousHash: string | null, currentHash: string | null }} event
+ * @param {number} seq
  * @returns {boolean}
  */
-export function shouldRecordRefFlight(states, event) {
+export function shouldRecordRefFlight(states, event, seq) {
   const name = event.ref.name;
   const state = states.get(name);
+  if (state && seq < state.seq) {
+    return false;
+  }
   if (state && state.current === event.currentHash && state.recent.includes(event.previousHash)) {
     return false;
   }
@@ -2956,7 +2968,7 @@ export function shouldRecordRefFlight(states, event) {
   recent.push(event.previousHash, event.currentHash);
   // Re-inserting keeps Map order as least-recently-touched first.
   states.delete(name);
-  states.set(name, { current: event.currentHash, recent: recent.slice(-REF_FLIGHT_RECENT_STATES) });
+  states.set(name, { current: event.currentHash, recent: recent.slice(-REF_FLIGHT_RECENT_STATES), seq });
   if (states.size > REF_FLIGHT_TRACKED_REFS) {
     states.delete(states.keys().next().value);
   }

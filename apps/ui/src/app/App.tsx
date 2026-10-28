@@ -572,8 +572,10 @@ export default function App() {
   // The list a live refresh replaces: tells a timeline row that left the
   // list apart from a lens selection that was never in it.
   const commitsRef = useRef(commits);
-  // repo/base/target of the compare on screen; a run with the same key is a
-  // live refresh of it.
+  // repo/base/target of the compare result on screen; a run with the same
+  // key is a live refresh of it. Set only once a result is applied, so a
+  // refresh that replaces a still-pending first request is treated as the
+  // first request (loading shown, errors in the foreground).
   const compareKeyRef = useRef("");
   const livePausedRef = useRef(livePaused);
   // Generation guard for refreshTimeline: bumped whenever the active repo
@@ -799,11 +801,11 @@ export default function App() {
     // failure keeps the last result and reports like other background work
     // instead of replacing an unrelated foreground error.
     const refresh = compareKeyRef.current === key;
-    compareKeyRef.current = key;
     if (!refresh) setCompareLoading(true);
     compareRefs(selectedRepo, compareBase, compareTarget)
       .then((result) => {
         if (cancelled) return;
+        compareKeyRef.current = key;
         setCompareResult(result);
         clearBackgroundError("compare");
         if (!refresh) clearForegroundError();
@@ -814,11 +816,14 @@ export default function App() {
           reportBackgroundError("compare", errorMessage(err));
           return;
         }
+        compareKeyRef.current = "";
         setCompareResult(null);
         setError(errorMessage(err));
       })
       .finally(() => {
-        if (!cancelled && !refresh) setCompareLoading(false);
+        // Whichever request is current settles loading, including one that
+        // replaced the request that set it.
+        if (!cancelled) setCompareLoading(false);
       });
     return () => {
       cancelled = true;

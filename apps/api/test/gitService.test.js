@@ -2621,8 +2621,11 @@ test("ref flight recorder logs repeated moves once each, across several streams"
 
 test("shouldRecordRefFlight skips a catching-up stream but logs moves after an unwatched gap", () => {
   const states = new Map();
+  let seq = 0;
   const move = (previousHash, currentHash) =>
-    shouldRecordRefFlight(states, { ref: { name: "refs/heads/main" }, previousHash, currentHash });
+    shouldRecordRefFlight(states, { ref: { name: "refs/heads/main" }, previousHash, currentHash }, ++seq);
+  const tag = (previousHash, currentHash) =>
+    shouldRecordRefFlight(states, { ref: { name: "refs/tags/v1" }, previousHash, currentHash }, ++seq);
 
   assert.equal(move("A", "B"), true);
   assert.equal(move("B", "C"), true);
@@ -2632,10 +2635,25 @@ test("shouldRecordRefFlight skips a catching-up stream but logs moves after an u
   // then sees D -> C. D was never logged, so this is a new incident.
   assert.equal(move("D", "C"), true);
   // Creation and deletion repeats are gated the same way.
-  assert.equal(shouldRecordRefFlight(states, { ref: { name: "refs/tags/v1" }, previousHash: null, currentHash: "T" }), true);
-  assert.equal(shouldRecordRefFlight(states, { ref: { name: "refs/tags/v1" }, previousHash: null, currentHash: "T" }), false);
-  assert.equal(shouldRecordRefFlight(states, { ref: { name: "refs/tags/v1" }, previousHash: "T", currentHash: null }), true);
-  assert.equal(shouldRecordRefFlight(states, { ref: { name: "refs/tags/v1" }, previousHash: "T", currentHash: null }), false);
+  assert.equal(tag(null, "T"), true);
+  assert.equal(tag(null, "T"), false);
+  assert.equal(tag("T", null), true);
+  assert.equal(tag("T", null), false);
+});
+
+test("shouldRecordRefFlight ignores a poll that read its refs before a newer logged one", () => {
+  const states = new Map();
+  const event = (previousHash, currentHash) => ({ ref: { name: "refs/heads/main" }, previousHash, currentHash });
+
+  // Stream 2 read main at B (seq 2) but its classification is slow; stream 1
+  // read at seq 1 and seq 3 and logs both moves first.
+  assert.equal(shouldRecordRefFlight(states, event("A", "B"), 1), true);
+  assert.equal(shouldRecordRefFlight(states, event("B", "C"), 3), true);
+  // Stream 2's late A -> B must neither log nor rewind the state to B ...
+  assert.equal(shouldRecordRefFlight(states, event("A", "B"), 2), false);
+  // ... so its next poll's B -> C is still recognized as a repeat.
+  assert.equal(shouldRecordRefFlight(states, event("B", "C"), 4), false);
+  assert.equal(states.get("refs/heads/main").current, "C");
 });
 
 test("a branch that stops being a symref is classified like any branch move", async () => {
