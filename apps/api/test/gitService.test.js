@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { loadConfig } from "../src/config.js";
-import { GitCommandError } from "../src/gitRunner.js";
+import { GitCommandError, runGit } from "../src/gitRunner.js";
 import {
   ancestorMergeBaseArgs,
   buildSearchModeArgs,
@@ -2492,30 +2492,40 @@ test("commit detail, risk and compare are not bounded by the patch cap", async (
   }
 });
 
-test("listRefs keeps serving refs when a nested tag chain is broken", async () => {
+test("a broken nested tag chain fails the batched peel as a handled error, not a truncation", async () => {
+  // peelNestedTags runs `rev-parse <tag>^{}` capped at 64 bytes per hash and
+  // rethrows only timeouts and truncation. Git's error for a broken chain is
+  // longer than that cap; counted as truncation, it took down listRefs and
+  // every SSE connect. (Newer Git fully peels %(*...) in for-each-ref and
+  // rejects such a repository itself, so this pins the runner contract the
+  // peel depends on rather than the listing.)
   const repoPath = createTempPath("rtgv-broken-nested-tag-");
   try {
     initTestRepo(repoPath);
-    const head = commitFile(repoPath, "README.md", "hi\n", "base");
+    commitFile(repoPath, "README.md", "hi\n", "base");
     const missing = "0123456789abcdef0123456789abcdef01234567";
     const tagObject = (object, type, name) =>
       `object ${object}\ntype ${type}\ntag ${name}\ntagger T <t@example.test> 0 +0000\n\n${name}\n`;
-    const inner = spawnSync("git", ["hash-object", "-t", "tag", "-w", "--literally", "--stdin"], {
-      cwd: repoPath, input: tagObject(missing, "commit", "inner"), encoding: "utf8",
-    }).stdout.trim();
-    const outer = spawnSync("git", ["hash-object", "-t", "tag", "-w", "--literally", "--stdin"], {
-      cwd: repoPath, input: tagObject(inner, "tag", "outer"), encoding: "utf8",
-    }).stdout.trim();
-    git(repoPath, "update-ref", "refs/tags/outer", outer);
+    const writeTag = (body) =>
+      spawnSync("git", ["hash-object", "-t", "tag", "-w", "--literally", "--stdin"], {
+        cwd: repoPath, input: body, encoding: "utf8",
+      }).stdout.trim();
+    const inner = writeTag(tagObject(missing, "commit", "inner"));
+    const outer = writeTag(tagObject(inner, "tag", "outer"));
 
-    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 1024 });
-    const repo = { id: "demo", name: "demo", path: repoPath };
-
-    const refs = await service.listRefs(repo);
-    assert.equal(refs.find((ref) => ref.name === "refs/heads/main")?.hash, head);
-    // The chain cannot be peeled further; the tag keeps its one-level peel.
-    assert.equal(refs.find((ref) => ref.name === "refs/tags/outer")?.hash, inner);
-    await service.getRefSnapshot(repo);
+    await assert.rejects(
+      runGit({ id: "demo", name: "demo", path: repoPath }, ["rev-parse", `${outer}^{}`], {
+        timeoutMs: 5000,
+        maxBytes: 64,
+      }),
+      (error) => {
+        assert.equal(error instanceof GitCommandError, true);
+        assert.equal(error.truncated, false);
+        assert.equal(error.timedOut, false);
+        assert.ok(error.stderr.length > 64);
+        return true;
+      },
+    );
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
