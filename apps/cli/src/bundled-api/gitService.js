@@ -264,13 +264,17 @@ export function createGitService(config) {
   }
 
   async function readHotspotChurn(repo) {
-    const { stdout } = await runGit(repo, ["log", ...nameOnlyLogArgs(200), "HEAD", "--"], {
+    /** @type {Map<string, { churn: number }>} */
+    const files = new Map();
+    // HEAD can be a symref into a hidden namespace; churn must come only from
+    // history the API would show. An unborn or hidden HEAD has no churn.
+    const head = await resolveCommitishRevision(repo, "HEAD", config.gitTimeoutMs);
+    if (!head.ok) return files;
+    const { stdout } = await runGit(repo, ["log", ...nameOnlyLogArgs(200), head.hash, "--"], {
       timeoutMs: config.gitTimeoutMs,
       maxBytes: MAX_GIT_OUTPUT_BYTES,
     });
 
-    /** @type {Map<string, { churn: number }>} */
-    const files = new Map();
     for (const record of parseNameOnlyLogRecords(stdout)) {
       for (const filePath of record.paths) {
         const existing = files.get(filePath);
@@ -2105,7 +2109,9 @@ export function createGitService(config) {
         try {
           const { stdout } = await runGit(
             repo,
-            ["show", "--no-show-signature", "--end-of-options", `${resolvedOid}:${filePath}`],
+            // `cat-file blob` fails on a tree or gitlink at that path, where
+            // `show` would print a directory listing and count its entries.
+            ["cat-file", "blob", "--end-of-options", `${resolvedOid}:${filePath}`],
             { timeoutMs: hotspotTimeoutMs, maxBytes: hotspotMaxBytes },
           );
           // Split on \n; trailing newline produces an empty final element —
@@ -2123,7 +2129,7 @@ export function createGitService(config) {
             // Per-file maxBytes truncation: omit this single path. A huge blob
             // (bundled assets, lockfiles) shouldn't fail the entire hotspot.
             if (err.truncated) return null;
-            // exit 128 = file is deleted at this ref, binary blob, or path
+            // exit 128 = the path is deleted at this ref, is not a blob, or
             // does not exist. Return null so the caller omits this path.
             if (err.exitCode === 128) return null;
           }

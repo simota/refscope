@@ -58,6 +58,31 @@ function makeService(overrides = {}) {
 
 // ─── AC-LIMIT-1: truncated when files > limit ────────────────────────────────
 
+test("omits a path that is a directory at the ref", async () => {
+  const repoPath = createTempPath("rtgv-hotspot-dir-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "thing", "one\ntwo\n", "feat: thing as a file");
+    git(repoPath, "rm", "-q", "thing");
+    git(repoPath, "commit", "-q", "-m", "chore: drop file");
+    writeAndCommit(repoPath, "thing/a.txt", "a\n", "feat: thing as a directory");
+
+    const service = makeService();
+    const result = await service.getFileHotspot(
+      { id: "dir-repo", path: repoPath },
+      { ref: "HEAD", limit: 50, commitCap: HOTSPOT_DEFAULT_COMMIT_CAP },
+    );
+
+    assert.equal(result.status, 200);
+    assert.deepEqual(
+      result.body.files.map((file) => file.path),
+      ["thing/a.txt"],
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
 test("marks truncated when files exceed limit", async () => {
   const repoPath = createTempPath("rtgv-hotspot-limit-");
   try {
