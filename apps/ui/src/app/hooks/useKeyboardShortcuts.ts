@@ -80,9 +80,9 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-// Widgets whose own keyboard model uses unmodified keys (arrows, letters for
-// type-ahead). A focused radio group, menu or tab list must receive ArrowDown
-// itself instead of having it moved to the selected commit.
+// Widgets whose keyboard model moves focus with the arrow keys. A focused
+// radio group, menu or tab list must receive ArrowDown itself instead of
+// having it move the selected commit.
 const COMPOSITE_WIDGET_SELECTOR = [
   "radiogroup",
   "menu",
@@ -99,8 +99,25 @@ const COMPOSITE_WIDGET_SELECTOR = [
   .map((role) => `[role="${role}"]`)
   .join(",");
 
-function isCompositeWidgetTarget(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(COMPOSITE_WIDGET_SELECTOR) !== null;
+// Keys a composite widget uses to move within itself. Other single keys
+// (j/k, ?) still reach the app from a focused tab or tree row.
+const WIDGET_NAVIGATION_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
+
+function isWidgetNavigation(event: KeyboardEvent): boolean {
+  return (
+    WIDGET_NAVIGATION_KEYS.has(event.key) &&
+    event.target instanceof Element &&
+    event.target.closest(COMPOSITE_WIDGET_SELECTOR) !== null
+  );
 }
 
 /**
@@ -143,12 +160,12 @@ export function useKeyboardShortcuts(
       // shortcut activations would corrupt user input in any text field.
       if (event.isComposing) return;
       // A key the focused widget already handled (Radix menus, sliders) or
-      // one aimed at a composite widget belongs to that widget, like typing
-      // in an input does.
+      // an arrow aimed at a composite widget belongs to that widget, like
+      // typing in an input does.
       const editable =
         event.defaultPrevented ||
         isEditableTarget(event.target) ||
-        isCompositeWidgetTarget(event.target);
+        isWidgetNavigation(event);
       const isSuppressed = suppressedRef.current;
       for (const { binding, parsed } of bindingsRef.current) {
         if (!eventMatches(parsed, event)) continue;

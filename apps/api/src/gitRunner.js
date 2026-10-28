@@ -133,6 +133,7 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncat
     let stderrBytes = 0;
     let timedOut = false;
     let stdoutTruncated = false;
+    let stderrOverflow = false;
 
     timer = setTimeout(() => {
       timedOut = true;
@@ -158,13 +159,17 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncat
     // decide the outcome. Tying it to the caller's stdout cap failed small
     // reads (a batched `rev-parse` capped at 64 bytes per hash) whenever Git
     // printed one ordinary error message, turning a handled failure into a
-    // truncation the caller has to propagate.
+    // truncation the caller has to propagate. A child that floods stderr
+    // past the runner's overall output bound is still stopped.
     child.stderr.on("data", (chunk) => {
+      if (stderrOverflow) return;
       const room = MAX_GIT_STDERR_BYTES - stderrBytes;
-      if (room <= 0) return;
-      const kept = chunk.length > room ? chunk.subarray(0, room) : chunk;
-      stderrBytes += kept.length;
-      stderrChunks.push(kept);
+      stderrBytes += chunk.length;
+      if (room > 0) stderrChunks.push(chunk.length > room ? chunk.subarray(0, room) : chunk);
+      if (stderrBytes > MAX_GIT_OUTPUT_BYTES) {
+        stderrOverflow = true;
+        child.kill("SIGTERM");
+      }
     });
 
     child.on("close", (exitCode) => {
@@ -172,11 +177,11 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncat
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
       // The kill after an stdout overflow makes the exit code meaningless.
-      if (stdoutTruncated && allowTruncatedStdout && !timedOut) {
+      if (stdoutTruncated && allowTruncatedStdout && !timedOut && !stderrOverflow) {
         resolve({ stdout, stderr, truncated: true });
         return;
       }
-      const truncated = stdoutTruncated;
+      const truncated = stdoutTruncated || stderrOverflow;
       if (timedOut || truncated || exitCode !== 0) {
         reject(
           new GitCommandError("Git command failed", {

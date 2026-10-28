@@ -201,7 +201,7 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
-type BackgroundErrorSource = "drift" | "worktree" | "timeline" | "stream";
+type BackgroundErrorSource = "drift" | "worktree" | "timeline" | "stream" | "compare";
 
 // Backoff for reopening a live stream the server refused (non-200).
 const STREAM_RETRY_MIN_MS = 2_000;
@@ -569,6 +569,12 @@ export default function App() {
   const searchModeRef = useRef(searchMode);
   const searchPatternRef = useRef(debouncedSearchPattern);
   const selectedWorkTreeRef = useRef(selectedWorkTree);
+  // The list a live refresh replaces: tells a timeline row that left the
+  // list apart from a lens selection that was never in it.
+  const commitsRef = useRef(commits);
+  // repo/base/target of the compare on screen; a run with the same key is a
+  // live refresh of it.
+  const compareKeyRef = useRef("");
   const livePausedRef = useRef(livePaused);
   // Generation guard for refreshTimeline: bumped whenever the active repo
   // changes so an SSE-triggered refresh that resolves after a repo switch is
@@ -690,6 +696,10 @@ export default function App() {
   }, [selectedWorkTree]);
 
   useEffect(() => {
+    commitsRef.current = commits;
+  }, [commits]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     listRepositories()
@@ -778,25 +788,37 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedRepo || !compareBase || !compareTarget) {
+      compareKeyRef.current = "";
+      clearBackgroundError("compare");
       setCompareResult(null);
       return;
     }
     let cancelled = false;
-    setCompareLoading(true);
+    const key = `${selectedRepo}\0${compareBase}\0${compareTarget}`;
+    // A live refresh updates the result in place: no loading flash, and a
+    // failure keeps the last result and reports like other background work
+    // instead of replacing an unrelated foreground error.
+    const refresh = compareKeyRef.current === key;
+    compareKeyRef.current = key;
+    if (!refresh) setCompareLoading(true);
     compareRefs(selectedRepo, compareBase, compareTarget)
       .then((result) => {
         if (cancelled) return;
         setCompareResult(result);
-        clearForegroundError();
+        clearBackgroundError("compare");
+        if (!refresh) clearForegroundError();
       })
       .catch((err) => {
-        if (!cancelled) {
-          setCompareResult(null);
-          setError(errorMessage(err));
+        if (cancelled) return;
+        if (refresh) {
+          reportBackgroundError("compare", errorMessage(err));
+          return;
         }
+        setCompareResult(null);
+        setError(errorMessage(err));
       })
       .finally(() => {
-        if (!cancelled) setCompareLoading(false);
+        if (!cancelled && !refresh) setCompareLoading(false);
       });
     return () => {
       cancelled = true;
@@ -1404,9 +1426,22 @@ export default function App() {
     // lens (another ref, older than the list, hidden by a filter) is shown
     // from its own detail, and the working tree has no row at all.
     setSelected((current) => {
-      if (current || selectedWorkTreeRef.current) return current;
-      setSelectionNotice("");
-      return markedCommits[0]?.hash || "";
+      if (selectedWorkTreeRef.current) return current;
+      if (!current) {
+        setSelectionNotice("");
+        return markedCommits[0]?.hash || "";
+      }
+      if (markedCommits.some((commit) => commit.hash === current)) {
+        setSelectionNotice("");
+        return current;
+      }
+      // A timeline row that left the list (force-push, filter) falls back
+      // with a notice; a lens selection was never a row and stays.
+      if (commitsRef.current.some((commit) => commit.hash === current)) {
+        setSelectionNotice("Previous selection is not on this ref; selected the latest visible commit.");
+        return markedCommits[0]?.hash || "";
+      }
+      return current;
     });
     // The compared refs may be the ones that just moved.
     setCompareRefreshKey((key) => key + 1);

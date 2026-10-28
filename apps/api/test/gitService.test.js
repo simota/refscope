@@ -23,6 +23,7 @@ import {
   compareRefSnapshots,
   compareRevListArgs,
   appendRefFlightEvent,
+  shouldRecordRefFlight,
   cherryPatchArgs,
   comparePatchChanges,
   createGitService,
@@ -656,7 +657,6 @@ test("builds commit list git log arguments with option parsing ended before reso
       "--decorate-refs=refs/remotes/",
       "--no-show-signature",
       "--numstat",
-      "--diff-merges=first-parent",
       "-z",
       "--full-diff",
       "--no-ext-diff",
@@ -669,6 +669,10 @@ test("builds commit list git log arguments with option parsing ended before reso
   );
   // Without a path filter the stats are already whole-commit.
   assert.equal(commitListLogArgs(25, [], [], hash, []).includes("--full-diff"), false);
+  // Merge stats only where they cannot change which commits are selected.
+  assert.equal(commitListLogArgs(25, [], [], hash, []).includes("--diff-merges=first-parent"), true);
+  assert.equal(commitListLogArgs(25, ["-Sneedle"], [], hash, []).includes("--diff-merges=first-parent"), false);
+  assert.equal(commitListLogArgs(25, ["-Gneedle"], [], hash, []).includes("--diff-merges=first-parent"), false);
 });
 
 test("builds commit-ish validation arguments with option parsing ended", () => {
@@ -2419,7 +2423,7 @@ test("listCommits and live commit_added report a merge's first-parent file stats
     initTestRepo(repoPath);
     commitFile(repoPath, "base.txt", "base\n", "base");
     git(repoPath, "checkout", "-b", "feat");
-    commitFile(repoPath, "a.txt", "a\n", "a");
+    commitFile(repoPath, "a.txt", "needle\n", "a");
     commitFile(repoPath, "b.txt", "b\n", "b");
     git(repoPath, "checkout", "main");
     const before = commitFile(repoPath, "main.txt", "m\n", "main");
@@ -2437,6 +2441,12 @@ test("listCommits and live commit_added report a merge's first-parent file stats
     // Every commit is still walked, not only the first-parent chain.
     const all = await service.listCommits(repo, new URLSearchParams({ limit: "10" }));
     assert.equal(all.body.length, 5);
+    // Content search and path filters still list the commit that made the
+    // change, not also the merge that brought it in.
+    const pickaxe = await service.listCommits(repo, new URLSearchParams({ mode: "pickaxe", pattern: "needle" }));
+    assert.deepEqual(pickaxe.body.map((commit) => commit.subject), ["a"]);
+    const byPath = await service.listCommits(repo, new URLSearchParams({ path: "b.txt" }));
+    assert.deepEqual(byPath.body.map((commit) => commit.subject), ["b"]);
 
     const snapshot = await service.getRefSnapshot(repo);
     const previous = new Map(snapshot);
@@ -2594,6 +2604,68 @@ test("ref flight recorder logs repeated moves once each, across several streams"
       `history_rewritten ${short(c)}->${short(b)}`,
       `ref_fast_forward ${short(b)}->${short(c)}`,
     ]);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("shouldRecordRefFlight skips a catching-up stream but logs moves after an unwatched gap", () => {
+  const states = new Map();
+  const move = (previousHash, currentHash) =>
+    shouldRecordRefFlight(states, { ref: { name: "refs/heads/main" }, previousHash, currentHash });
+
+  assert.equal(move("A", "B"), true);
+  assert.equal(move("B", "C"), true);
+  // A second stream that last saw A folds both moves into one.
+  assert.equal(move("A", "C"), false);
+  // No stream polled while main went C -> D; a new stream starts at D and
+  // then sees D -> C. D was never logged, so this is a new incident.
+  assert.equal(move("D", "C"), true);
+  // Creation and deletion repeats are gated the same way.
+  assert.equal(shouldRecordRefFlight(states, { ref: { name: "refs/tags/v1" }, previousHash: null, currentHash: "T" }), true);
+  assert.equal(shouldRecordRefFlight(states, { ref: { name: "refs/tags/v1" }, previousHash: null, currentHash: "T" }), false);
+  assert.equal(shouldRecordRefFlight(states, { ref: { name: "refs/tags/v1" }, previousHash: "T", currentHash: null }), true);
+  assert.equal(shouldRecordRefFlight(states, { ref: { name: "refs/tags/v1" }, previousHash: "T", currentHash: null }), false);
+});
+
+test("a branch that stops being a symref is classified like any branch move", async () => {
+  const repoPath = createTempPath("rtgv-symref-to-branch-");
+  try {
+    initTestRepo(repoPath);
+    commitFile(repoPath, "a.txt", "a\n", "a");
+    git(repoPath, "symbolic-ref", "refs/heads/alias", "refs/heads/main");
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 1024 * 1024 });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const snapshot = await service.getRefSnapshot(repo);
+    commitFile(repoPath, "b.txt", "b\n", "b");
+    // main moved and alias followed it: one commit, reported once, on main.
+    const followed = await service.collectRefEvents(repo, snapshot);
+    assert.deepEqual(
+      followed.events.map((event) => `${event.type} ${event.ref.name}`).sort(),
+      ["commit_added refs/heads/main", "ref_updated refs/heads/alias"],
+    );
+
+    // alias becomes a real branch, then gets a commit of its own.
+    git(repoPath, "update-ref", "--no-deref", "refs/heads/alias", "HEAD");
+    const real = (await service.collectRefEvents(repo, followed.snapshot)).snapshot;
+    git(repoPath, "checkout", "-q", "alias");
+    commitFile(repoPath, "c.txt", "c\n", "c");
+    const moved = await service.collectRefEvents(repo, real);
+    assert.deepEqual(
+      moved.events.map((event) => `${event.type} ${event.ref.name}`),
+      ["commit_added refs/heads/alias"],
+    );
+
+    // Turning the real branch back into an alias of main drops commit c from
+    // it: that is a rewrite of alias, not a harmless retarget.
+    git(repoPath, "checkout", "-q", "main");
+    git(repoPath, "symbolic-ref", "refs/heads/alias", "refs/heads/main");
+    const realiased = await service.collectRefEvents(repo, moved.snapshot);
+    assert.deepEqual(
+      realiased.events.map((event) => `${event.type} ${event.ref.name}`),
+      ["history_rewritten refs/heads/alias"],
+    );
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }

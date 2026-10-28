@@ -223,12 +223,11 @@ export function createGitService(config) {
   const _hotspotCache = new Map();
   /** @type {Map<string, Array<object>>} */
   const _refFlightLogs = new Map();
-  // Per repo, the state (hash, or null once deleted) each ref was last logged
-  // at. Every SSE stream diffs against its own snapshot, so one move reaches
-  // collectRefEvents once per open stream, and a stream that polls late folds
-  // several moves into one. The recorder logs a change only when it moves a
-  // ref away from the state already logged for it.
-  /** @type {Map<string, Map<string, string | null>>} */
+  // Per repo and ref, what the flight recorder last logged. Every SSE stream
+  // diffs against its own snapshot, so one move reaches collectRefEvents once
+  // per open stream, and a stream that polls late folds several moves into
+  // one (A->C after A->B, B->C were logged). See shouldRecordRefFlight.
+  /** @type {Map<string, Map<string, RefFlightState>>} */
   const _refFlightStates = new Map();
 
   // Bumped when a repository id is removed or re-registered, so a hotspot
@@ -509,9 +508,7 @@ export function createGitService(config) {
         _refFlightStates.set(repo.id, flightStates);
       }
       const recordFlight = (event) => {
-        const name = event.ref.name;
-        if (flightStates.has(name) && flightStates.get(name) === event.currentHash) return;
-        flightStates.set(name, event.currentHash);
+        if (!shouldRecordRefFlight(flightStates, event)) return;
         appendRefFlightEvent(_refFlightLogs, repo.id, event);
       };
 
@@ -555,7 +552,7 @@ export function createGitService(config) {
         // rewrites no history, and a move of its target is reported on the
         // target ref itself, so classifying it would raise a false
         // history_rewritten or emit every new commit twice.
-        if (change.ref.symref) {
+        if (change.ref.symref && previousSnapshot.get(change.ref.name)?.symref) {
           recordFlight(createRefFlightEvent({
             repoId: repo.id,
             change,
@@ -2488,7 +2485,14 @@ export const PUBLIC_DECORATION_ARGS = [
 // empty (0 files, +0/-0, risk 0) while their detail showed the merged files.
 // Diff each merge against its first parent, as the detail view (`show -m
 // --first-parent`) does. Unlike `--first-parent`, this keeps the commit walk.
+// It also makes merges match diff-based selection (-S/-G, pathspecs), so
+// those lists keep Git's default, where only the commit that made a change
+// is listed rather than every merge that brought it in.
 const MERGE_STATS_DIFF_ARG = "--diff-merges=first-parent";
+
+function selectsByDiff(searchArgs, pathArgs) {
+  return pathArgs.length > 0 || searchArgs.some((arg) => arg.startsWith("-S") || arg.startsWith("-G"));
+}
 
 export function commitRangeLogArgs(fromRevision, toRevision) {
   return ["--not", fromRevision, "--not", "--end-of-options", toRevision];
@@ -2505,7 +2509,7 @@ export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathA
     ...PUBLIC_DECORATION_ARGS,
     "--no-show-signature",
     "--numstat",
-    MERGE_STATS_DIFF_ARG,
+    ...(selectsByDiff(searchArgs, pathArgs) ? [] : [MERGE_STATS_DIFF_ARG]),
     "-z",
     // A path filter selects commits; stats and risk scores still describe
     // the whole commit, as in the unfiltered list.
@@ -2916,6 +2920,47 @@ export function createRefFlightEvent({
     dangerous,
     explanation,
   };
+}
+
+/**
+ * @typedef {{ current: string | null, recent: Array<string | null> }} RefFlightState
+ */
+
+// Hashes (and null for "absent") a ref recently passed through in the log.
+const REF_FLIGHT_RECENT_STATES = 16;
+// Refs remembered per repository; the oldest-touched are forgotten first.
+const REF_FLIGHT_TRACKED_REFS = 4096;
+
+/**
+ * Decide whether a ref change is new to the flight log and remember it.
+ *
+ * A change is a repeat when the log already holds the ref at the change's
+ * current state *and* the change starts from a state the log has seen: that
+ * is another stream catching up. A change from a state the log never saw
+ * (moves that happened while no stream was polling) is logged, as is any
+ * real recurrence (A->B, B->A, A->B).
+ *
+ * @param {Map<string, RefFlightState>} states
+ * @param {{ ref: { name: string }, previousHash: string | null, currentHash: string | null }} event
+ * @returns {boolean}
+ */
+export function shouldRecordRefFlight(states, event) {
+  const name = event.ref.name;
+  const state = states.get(name);
+  if (state && state.current === event.currentHash && state.recent.includes(event.previousHash)) {
+    return false;
+  }
+  const recent = (state?.recent ?? []).filter(
+    (hash) => hash !== event.previousHash && hash !== event.currentHash,
+  );
+  recent.push(event.previousHash, event.currentHash);
+  // Re-inserting keeps Map order as least-recently-touched first.
+  states.delete(name);
+  states.set(name, { current: event.currentHash, recent: recent.slice(-REF_FLIGHT_RECENT_STATES) });
+  if (states.size > REF_FLIGHT_TRACKED_REFS) {
+    states.delete(states.keys().next().value);
+  }
+  return true;
 }
 
 export function appendRefFlightEvent(logs, repoId, event) {
