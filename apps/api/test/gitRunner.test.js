@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { GitCommandError, buildGitEnv, runGit } from "../src/gitRunner.js";
+import { GitCommandError, MAX_GIT_STDERR_BYTES, buildGitEnv, runGit } from "../src/gitRunner.js";
 
 test("builds a non-interactive local-only git environment", () => {
   const env = buildGitEnv({
@@ -322,7 +322,30 @@ test("ignores repository replacement refs during git reads", async () => {
   }
 });
 
-test("bounds git stderr output with the same maxBytes limit", async () => {
+test("bounds retained git stderr at MAX_GIT_STDERR_BYTES", async () => {
+  const repoPath = createTempPath("rtgv-runner-stderr-cap-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    // Git caps one message at 4 KiB, so produce many: every broken loose ref
+    // prints its own warning.
+    const refsDir = path.join(repoPath, ".git", "refs", "heads");
+    for (let i = 0; i < 2000; i += 1) {
+      fs.writeFileSync(path.join(refsDir, `broken-${"x".repeat(40)}-${i}`), "not a hash\n");
+    }
+
+    const result = await runGit(
+      { id: "demo", name: "demo", path: repoPath },
+      ["for-each-ref", "--format=%(refname)"],
+      { timeoutMs: 10_000 },
+    );
+    assert.equal(result.truncated, false);
+    assert.equal(Buffer.byteLength(result.stderr), MAX_GIT_STDERR_BYTES);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("keeps git stderr independent of a small stdout maxBytes", async () => {
   const repoPath = createTempPath("rtgv-runner-stderr-");
   try {
     git(repoPath, "init", "-b", "main");
@@ -334,9 +357,13 @@ test("bounds git stderr output with the same maxBytes limit", async () => {
         { timeoutMs: 5000, maxBytes: 64 },
       ),
       (error) => {
+        // An ordinary error message longer than the stdout cap is the
+        // command's failure, not a truncation.
         assert.equal(error instanceof GitCommandError, true);
-        assert.equal(error.truncated, true);
-        assert.equal(error.stderr.length, 0);
+        assert.equal(error.truncated, false);
+        assert.equal(error.exitCode, 128);
+        assert.ok(error.stderr.length > 64);
+        assert.ok(error.stderr.length <= MAX_GIT_STDERR_BYTES);
         return true;
       },
     );

@@ -656,6 +656,7 @@ test("builds commit list git log arguments with option parsing ended before reso
       "--decorate-refs=refs/remotes/",
       "--no-show-signature",
       "--numstat",
+      "--diff-merges=first-parent",
       "-z",
       "--full-diff",
       "--no-ext-diff",
@@ -1027,7 +1028,7 @@ test("creates ref flight event from updated ref change", () => {
   );
 });
 
-test("appends ref flight events newest-first and de-duplicates same movement", () => {
+test("appends ref flight events newest-first and keeps a repeated movement", () => {
   const logs = new Map();
   const base = {
     repoId: "demo",
@@ -1049,7 +1050,9 @@ test("appends ref flight events newest-first and de-duplicates same movement", (
   appendRefFlightEvent(logs, "demo", { ...base, id: "1", observedAt: "t1" });
   appendRefFlightEvent(logs, "demo", { ...base, id: "2", observedAt: "t2" });
 
-  assert.deepEqual(logs.get("demo").map((event) => event.id), ["2"]);
+  // The same transition observed again later is a new incident (A→B, B→A,
+  // A→B); repeats from several streams are gated in collectRefEvents.
+  assert.deepEqual(logs.get("demo").map((event) => event.id), ["2", "1"]);
 });
 
 test("collectRefEvents classifies a missing old commit object as history_rewritten", async () => {
@@ -2398,6 +2401,199 @@ test("reports a git timeout while resolving a ref instead of a missing ref", asy
       process.env.PATH = originalPath;
       fs.rmSync(binDir, { recursive: true, force: true, maxRetries: 10 });
     }
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+function commitFile(repoPath, name, content, message) {
+  fs.writeFileSync(path.join(repoPath, name), content);
+  git(repoPath, "add", name);
+  git(repoPath, "commit", "-m", message);
+  return git(repoPath, "rev-parse", "HEAD").trim();
+}
+
+test("listCommits and live commit_added report a merge's first-parent file stats", async () => {
+  const repoPath = createTempPath("rtgv-merge-stats-");
+  try {
+    initTestRepo(repoPath);
+    commitFile(repoPath, "base.txt", "base\n", "base");
+    git(repoPath, "checkout", "-b", "feat");
+    commitFile(repoPath, "a.txt", "a\n", "a");
+    commitFile(repoPath, "b.txt", "b\n", "b");
+    git(repoPath, "checkout", "main");
+    const before = commitFile(repoPath, "main.txt", "m\n", "main");
+    git(repoPath, "merge", "--no-ff", "-m", "merge feat", "feat");
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 1024 * 1024 });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const list = await service.listCommits(repo, new URLSearchParams({ limit: "1" }));
+    assert.equal(list.status, 200);
+    const [merge] = list.body;
+    assert.equal(merge.isMerge, true);
+    assert.equal(merge.fileCount, 2);
+    assert.equal(merge.added, 2);
+    // Every commit is still walked, not only the first-parent chain.
+    const all = await service.listCommits(repo, new URLSearchParams({ limit: "10" }));
+    assert.equal(all.body.length, 5);
+
+    const snapshot = await service.getRefSnapshot(repo);
+    const previous = new Map(snapshot);
+    previous.set("refs/heads/main", { ...snapshot.get("refs/heads/main"), hash: before });
+    const { events } = await service.collectRefEvents(repo, previous);
+    const added = events.filter((event) => event.type === "commit_added");
+    const mergeEvent = added.find((event) => event.commit.isMerge);
+    assert.ok(mergeEvent, "the merge is reported as commit_added");
+    assert.equal(mergeEvent.commit.fileCount, 2);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("commit detail, risk and compare are not bounded by the patch cap", async () => {
+  const repoPath = createTempPath("rtgv-wide-commit-");
+  try {
+    initTestRepo(repoPath);
+    commitFile(repoPath, "README.md", "hi\n", "base");
+    git(repoPath, "tag", "base");
+    fs.mkdirSync(path.join(repoPath, "vendor"));
+    for (let i = 0; i < 200; i += 1) {
+      fs.writeFileSync(path.join(repoPath, "vendor", `file-with-a-long-name-${i}.txt`), `${i}\n`);
+    }
+    git(repoPath, "add", "-A");
+    git(repoPath, "commit", "-m", "vendor");
+    const hash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    // The file list alone is several times this cap.
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 2048 });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const commit = await service.getCommit(repo, hash);
+    assert.equal(commit.status, 200);
+    assert.equal(commit.body.files.length, 200);
+    const risk = await service.getCommitRisk(repo, hash);
+    assert.equal(risk.status, 200);
+    const compare = await service.compareRefs(repo, new URLSearchParams({ base: "base", target: "main" }));
+    assert.equal(compare.status, 200);
+    assert.equal(compare.body.files, 200);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("listRefs keeps serving refs when a nested tag chain is broken", async () => {
+  const repoPath = createTempPath("rtgv-broken-nested-tag-");
+  try {
+    initTestRepo(repoPath);
+    const head = commitFile(repoPath, "README.md", "hi\n", "base");
+    const missing = "0123456789abcdef0123456789abcdef01234567";
+    const tagObject = (object, type, name) =>
+      `object ${object}\ntype ${type}\ntag ${name}\ntagger T <t@example.test> 0 +0000\n\n${name}\n`;
+    const inner = spawnSync("git", ["hash-object", "-t", "tag", "-w", "--literally", "--stdin"], {
+      cwd: repoPath, input: tagObject(missing, "commit", "inner"), encoding: "utf8",
+    }).stdout.trim();
+    const outer = spawnSync("git", ["hash-object", "-t", "tag", "-w", "--literally", "--stdin"], {
+      cwd: repoPath, input: tagObject(inner, "tag", "outer"), encoding: "utf8",
+    }).stdout.trim();
+    git(repoPath, "update-ref", "refs/tags/outer", outer);
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 1024 });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+
+    const refs = await service.listRefs(repo);
+    assert.equal(refs.find((ref) => ref.name === "refs/heads/main")?.hash, head);
+    // The chain cannot be peeled further; the tag keeps its one-level peel.
+    assert.equal(refs.find((ref) => ref.name === "refs/tags/outer")?.hash, inner);
+    await service.getRefSnapshot(repo);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("retargeting refs/remotes/origin/HEAD is a plain ref_updated, not a rewrite", async () => {
+  const upstreamPath = createTempPath("rtgv-symref-up-");
+  const clonePath = createTempPath("rtgv-symref-clone-");
+  try {
+    initTestRepo(upstreamPath);
+    commitFile(upstreamPath, "README.md", "hi\n", "base");
+    git(upstreamPath, "checkout", "-b", "dev");
+    commitFile(upstreamPath, "dev.txt", "d\n", "dev");
+    git(upstreamPath, "checkout", "main");
+    commitFile(upstreamPath, "main.txt", "m\n", "main");
+    fs.rmSync(clonePath, { recursive: true, force: true });
+    git(os.tmpdir(), "clone", "--quiet", upstreamPath, clonePath);
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 1024 });
+    const repo = { id: "demo", name: "demo", path: clonePath };
+
+    const snapshot = await service.getRefSnapshot(repo);
+    git(clonePath, "remote", "set-head", "origin", "dev");
+    const { events } = await service.collectRefEvents(repo, snapshot);
+
+    assert.deepEqual(
+      events.map((event) => `${event.type} ${event.ref.name}`),
+      ["ref_updated refs/remotes/origin/HEAD"],
+    );
+    const flight = await service.listRefFlightEvents(repo, new URLSearchParams());
+    assert.deepEqual(
+      flight.body.events.map((event) => [event.type, event.dangerous]),
+      [["ref_updated", false]],
+    );
+    // The internal marker stays out of the public ref payload.
+    const listed = (await service.listRefs(repo)).find((ref) => ref.name === "refs/remotes/origin/HEAD");
+    assert.equal(Object.keys(listed).includes("symref"), false);
+  } finally {
+    fs.rmSync(upstreamPath, { recursive: true, force: true, maxRetries: 10 });
+    fs.rmSync(clonePath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("ref flight recorder logs repeated moves once each, across several streams", async () => {
+  const repoPath = createTempPath("rtgv-flight-streams-");
+  try {
+    initTestRepo(repoPath);
+    const a = commitFile(repoPath, "a.txt", "a\n", "a");
+    const b = commitFile(repoPath, "b.txt", "b\n", "b");
+    const c = commitFile(repoPath, "c.txt", "c\n", "c");
+    git(repoPath, "update-ref", "refs/heads/main", a);
+
+    const service = createGitService({ repositories: new Map(), gitTimeoutMs: 5000, diffMaxBytes: 1024 * 1024 });
+    const repo = { id: "demo", name: "demo", path: repoPath };
+    const short = (hash) => hash.slice(0, 7);
+    const flight = async () =>
+      (await service.listRefFlightEvents(repo, new URLSearchParams())).body.events
+        .map((event) => `${event.type} ${short(event.previousHash)}->${short(event.currentHash)}`)
+        .reverse();
+
+    // Two streams opened at A; the second polls only after both moves.
+    let first = await service.getRefSnapshot(repo);
+    let second = await service.getRefSnapshot(repo);
+    git(repoPath, "update-ref", "refs/heads/main", b);
+    first = (await service.collectRefEvents(repo, first)).snapshot;
+    git(repoPath, "update-ref", "refs/heads/main", c);
+    first = (await service.collectRefEvents(repo, first)).snapshot;
+    const late = await service.collectRefEvents(repo, second);
+    second = late.snapshot;
+    // The late stream still gets its own events; the log is not duplicated.
+    assert.equal(late.events.filter((event) => event.type === "commit_added").length, 2);
+    assert.deepEqual(await flight(), [
+      `ref_fast_forward ${short(a)}->${short(b)}`,
+      `ref_fast_forward ${short(b)}->${short(c)}`,
+    ]);
+
+    // The same rewind and fast-forward twice are four incidents.
+    for (const target of [b, c, b, c]) {
+      git(repoPath, "update-ref", "refs/heads/main", target);
+      first = (await service.collectRefEvents(repo, first)).snapshot;
+      second = (await service.collectRefEvents(repo, second)).snapshot;
+    }
+    assert.deepEqual((await flight()).slice(2), [
+      `history_rewritten ${short(c)}->${short(b)}`,
+      `ref_fast_forward ${short(b)}->${short(c)}`,
+      `history_rewritten ${short(c)}->${short(b)}`,
+      `ref_fast_forward ${short(b)}->${short(c)}`,
+    ]);
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }

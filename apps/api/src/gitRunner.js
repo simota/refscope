@@ -31,6 +31,7 @@ const ALLOWED_GIT_SUBCOMMANDS = new Map([
 ]);
 const MAX_TIMEOUT_MS = 2_147_483_647;
 export const MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024;
+export const MAX_GIT_STDERR_BYTES = 64 * 1024;
 // Endpoints such as ref drift fan out several git reads per ref. Each child
 // holds three pipes, so an unbounded burst exhausts file descriptors; extra
 // calls wait for a slot instead. The timeout starts when the child spawns.
@@ -132,7 +133,6 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncat
     let stderrBytes = 0;
     let timedOut = false;
     let stdoutTruncated = false;
-    let stderrTruncated = false;
 
     timer = setTimeout(() => {
       timedOut = true;
@@ -154,14 +154,17 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncat
       stdoutChunks.push(chunk);
     });
 
+    // stderr is diagnostic only: keep a bounded prefix and let the exit code
+    // decide the outcome. Tying it to the caller's stdout cap failed small
+    // reads (a batched `rev-parse` capped at 64 bytes per hash) whenever Git
+    // printed one ordinary error message, turning a handled failure into a
+    // truncation the caller has to propagate.
     child.stderr.on("data", (chunk) => {
-      stderrBytes += chunk.length;
-      if (stderrBytes > maxBytes) {
-        stderrTruncated = true;
-        child.kill("SIGTERM");
-        return;
-      }
-      stderrChunks.push(chunk);
+      const room = MAX_GIT_STDERR_BYTES - stderrBytes;
+      if (room <= 0) return;
+      const kept = chunk.length > room ? chunk.subarray(0, room) : chunk;
+      stderrBytes += kept.length;
+      stderrChunks.push(kept);
     });
 
     child.on("close", (exitCode) => {
@@ -169,11 +172,11 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncat
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
       // The kill after an stdout overflow makes the exit code meaningless.
-      if (stdoutTruncated && allowTruncatedStdout && !timedOut && !stderrTruncated) {
+      if (stdoutTruncated && allowTruncatedStdout && !timedOut) {
         resolve({ stdout, stderr, truncated: true });
         return;
       }
-      const truncated = stdoutTruncated || stderrTruncated;
+      const truncated = stdoutTruncated;
       if (timedOut || truncated || exitCode !== 0) {
         reject(
           new GitCommandError("Git command failed", {

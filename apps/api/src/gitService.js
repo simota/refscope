@@ -223,6 +223,13 @@ export function createGitService(config) {
   const _hotspotCache = new Map();
   /** @type {Map<string, Array<object>>} */
   const _refFlightLogs = new Map();
+  // Per repo, the state (hash, or null once deleted) each ref was last logged
+  // at. Every SSE stream diffs against its own snapshot, so one move reaches
+  // collectRefEvents once per open stream, and a stream that polls late folds
+  // several moves into one. The recorder logs a change only when it moves a
+  // ref away from the state already logged for it.
+  /** @type {Map<string, Map<string, string | null>>} */
+  const _refFlightStates = new Map();
 
   // Bumped when a repository id is removed or re-registered, so a hotspot
   // refresh that started before that cannot store churn for the old path.
@@ -234,6 +241,7 @@ export function createGitService(config) {
   function forgetRepositoryCaches(id) {
     _hotspotCache.delete(id);
     _refFlightLogs.delete(id);
+    _refFlightStates.delete(id);
     _hotspotRefreshes.delete(id);
     _cacheGenerations.set(id, (_cacheGenerations.get(id) ?? 0) + 1);
   }
@@ -311,6 +319,7 @@ export function createGitService(config) {
         ...PUBLIC_DECORATION_ARGS,
         "--no-show-signature",
         "--numstat",
+        MERGE_STATS_DIFF_ARG,
         "-z",
         "--no-ext-diff",
         "--no-textconv",
@@ -494,11 +503,22 @@ export function createGitService(config) {
       const currentSnapshot = new Map(refs.map((ref) => [ref.name, ref]));
       const changes = compareRefSnapshots(previousSnapshot, currentSnapshot);
       const events = [];
+      let flightStates = _refFlightStates.get(repo.id);
+      if (!flightStates) {
+        flightStates = new Map();
+        _refFlightStates.set(repo.id, flightStates);
+      }
+      const recordFlight = (event) => {
+        const name = event.ref.name;
+        if (flightStates.has(name) && flightStates.get(name) === event.currentHash) return;
+        flightStates.set(name, event.currentHash);
+        appendRefFlightEvent(_refFlightLogs, repo.id, event);
+      };
 
       for (const change of changes) {
         const observedAt = new Date().toISOString();
         if (change.type === "ref_created") {
-          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+          recordFlight(createRefFlightEvent({
             repoId: repo.id,
             change,
             observedAt,
@@ -515,7 +535,7 @@ export function createGitService(config) {
         }
 
         if (change.type === "ref_deleted") {
-          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+          recordFlight(createRefFlightEvent({
             repoId: repo.id,
             change,
             observedAt,
@@ -531,8 +551,30 @@ export function createGitService(config) {
           continue;
         }
 
+        // A symref (refs/remotes/origin/HEAD) is an alias: retargeting it
+        // rewrites no history, and a move of its target is reported on the
+        // target ref itself, so classifying it would raise a false
+        // history_rewritten or emit every new commit twice.
+        if (change.ref.symref) {
+          recordFlight(createRefFlightEvent({
+            repoId: repo.id,
+            change,
+            observedAt,
+            eventType: "ref_updated",
+            dangerous: false,
+            explanation: "A symbolic ref now resolves to another commit.",
+          }));
+          events.push({
+            type: "ref_updated",
+            repoId: repo.id,
+            ref: change.ref,
+            previousHash: change.previousHash,
+          });
+          continue;
+        }
+
         if (change.ref.type !== "branch" && change.ref.type !== "remote") {
-          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+          recordFlight(createRefFlightEvent({
             repoId: repo.id,
             change,
             observedAt,
@@ -562,7 +604,7 @@ export function createGitService(config) {
           }
         } catch (error) {
           if (!(error instanceof GitCommandError)) throw error;
-          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+          recordFlight(createRefFlightEvent({
             repoId: repo.id,
             change,
             observedAt,
@@ -580,7 +622,7 @@ export function createGitService(config) {
         }
 
         if (!ancestor) {
-          appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+          recordFlight(createRefFlightEvent({
             repoId: repo.id,
             change,
             observedAt,
@@ -603,7 +645,7 @@ export function createGitService(config) {
           continue;
         }
 
-        appendRefFlightEvent(_refFlightLogs, repo.id, createRefFlightEvent({
+        recordFlight(createRefFlightEvent({
           repoId: repo.id,
           change,
           observedAt,
@@ -781,15 +823,18 @@ export function createGitService(config) {
           commitMetadataShowArgs(hash),
           { timeoutMs: config.gitTimeoutMs },
         ),
+        // File lists, not patch text: RTGV_DIFF_MAX_BYTES bounds the patch in
+        // getDiff, and a commit the list already showed (read under this same
+        // cap) must not fail its detail view.
         runGit(
           repo,
           commitNumstatShowArgs(hash),
-          { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+          { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
         ),
         runGit(
           repo,
           commitNameStatusShowArgs(hash),
-          { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+          { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
         ),
       ]);
       const [fullHash, parents, author, authorEmail, authorDate, subject, body, refs, signatureCode] =
@@ -885,7 +930,7 @@ export function createGitService(config) {
       const { stdout: numstatOut } = await runGit(
         repo,
         commitNumstatShowArgs(hash),
-        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+        { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
       );
 
       const fileDiffs = parseNumstatRecords(numstatOut);
@@ -1717,7 +1762,7 @@ export function createGitService(config) {
         }),
         runGit(repo, compareNumstatArgs(baseRevision.hash, targetRevision.hash), {
           timeoutMs: config.gitTimeoutMs,
-          maxBytes: config.diffMaxBytes,
+          maxBytes: MAX_GIT_OUTPUT_BYTES,
         }),
         readMergeBase(repo, baseRevision.hash, targetRevision.hash, config.gitTimeoutMs),
       ]);
@@ -2439,6 +2484,12 @@ export const PUBLIC_DECORATION_ARGS = [
   "--decorate-refs=refs/remotes/",
 ];
 
+// `log --numstat` prints no file list for a merge, so merges were listed as
+// empty (0 files, +0/-0, risk 0) while their detail showed the merged files.
+// Diff each merge against its first parent, as the detail view (`show -m
+// --first-parent`) does. Unlike `--first-parent`, this keeps the commit walk.
+const MERGE_STATS_DIFF_ARG = "--diff-merges=first-parent";
+
 export function commitRangeLogArgs(fromRevision, toRevision) {
   return ["--not", fromRevision, "--not", "--end-of-options", toRevision];
 }
@@ -2454,6 +2505,7 @@ export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathA
     ...PUBLIC_DECORATION_ARGS,
     "--no-show-signature",
     "--numstat",
+    MERGE_STATS_DIFF_ARG,
     "-z",
     // A path filter selects commits; stats and risk scores still describe
     // the whole commit, as in the unfiltered list.
@@ -2868,18 +2920,9 @@ export function createRefFlightEvent({
 
 export function appendRefFlightEvent(logs, repoId, event) {
   const current = logs.get(repoId) ?? [];
-  const next = [
-    event,
-    ...current.filter(
-      (item) =>
-        !(
-          item.ref?.name === event.ref?.name &&
-          item.previousHash === event.previousHash &&
-          item.currentHash === event.currentHash &&
-          item.type === event.type
-        ),
-    ),
-  ].slice(0, REF_FLIGHT_LOG_CAP);
+  // No de-duplication here: the service gates repeats per ref state, and an
+  // identical movement seen again later (A→B, B→A, A→B) is a new incident.
+  const next = [event, ...current].slice(0, REF_FLIGHT_LOG_CAP);
   logs.set(repoId, next);
   return next;
 }
@@ -3217,6 +3260,11 @@ export function parsePublicRefLines(stdout) {
       };
       if (peeledType === "tag") {
         Object.defineProperty(ref, "nestedTag", { value: true, enumerable: false });
+      }
+      // Internal only, like nestedTag: lets the live poller tell an alias
+      // from a branch without changing the public ref payload.
+      if (symref) {
+        Object.defineProperty(ref, "symref", { value: symref, enumerable: false });
       }
       return [ref];
     });
