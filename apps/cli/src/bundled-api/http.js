@@ -607,13 +607,21 @@ function readRequestBody(req, maxBytes) {
     const chunks = [];
     let totalSize = 0;
     let aborted = false;
+    const tooLarge = () => Object.assign(new Error("Request body too large"), { tooLarge: true });
+
+    // A declared length over the cap is refused before any byte is read.
+    const declaredLength = req.headers?.["content-length"];
+    if (typeof declaredLength === "string" && /^[0-9]+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
+      reject(tooLarge());
+      return;
+    }
 
     req.on("data", (chunk) => {
       if (aborted) return;
       totalSize += chunk.length;
       if (totalSize > maxBytes) {
         aborted = true;
-        reject(new Error("Request body too large"));
+        reject(tooLarge());
         return;
       }
       chunks.push(chunk);
@@ -684,8 +692,15 @@ async function handlePostRepos(req, res, config, gitService) {
     let bodyBuffer;
     try {
       bodyBuffer = await readRequestBody(req, 4096);
-    } catch {
-      sendJson(res, 400, { error: "Request body too large" });
+    } catch (error) {
+      if (error?.tooLarge) {
+        // The rest of the body is never read; closing the connection stops
+        // the client from streaming it into a kept-alive socket.
+        res.setHeader("connection", "close");
+        sendJson(res, 400, { error: "Request body too large" });
+      } else {
+        sendJson(res, 400, { error: "Invalid request body" });
+      }
       return;
     }
 

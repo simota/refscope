@@ -80,6 +80,28 @@ test(
 );
 
 test(
+  "commit decorations list only public refs even when the repo asks for all",
+  withRepo("rtgv-decorations-", async (repoPath, repo) => {
+    const head = commitFile(repoPath, "a.txt", "a\n", "base");
+    git(repoPath, "config", "log.initialDecorationSet", "all");
+    git(repoPath, "update-ref", "refs/pull/7/head", head);
+    git(repoPath, "update-ref", "refs/notes/secret-name", head);
+    git(repoPath, "update-ref", "refs/internal/hidden-ref", head);
+    git(repoPath, "tag", "v1");
+    git(repoPath, "update-ref", "refs/remotes/origin/main", head);
+
+    const service = createService();
+    const expected = ["HEAD -> main", "tag: v1", "origin/main"];
+    const list = await service.listCommits(repo, new URLSearchParams({ ref: "main" }));
+    assert.equal(list.status, 200);
+    assert.deepEqual(list.body[0].refs, expected);
+    const detail = await service.getCommit(repo, head);
+    assert.equal(detail.status, 200);
+    assert.deepEqual(detail.body.refs, expected);
+  }),
+);
+
+test(
   "listRefs reports the commit behind a tag of a tag",
   withRepo("rtgv-nested-tag-", async (repoPath, repo) => {
     const head = commitFile(repoPath, "a.txt", "a\n", "base");
@@ -120,6 +142,44 @@ test(
     );
     assert.equal(qualified.status, 200);
     assert.deepEqual(qualified.body.map((commit) => commit.subject), ["base"]);
+  }),
+);
+
+test(
+  "rejects an ambiguous short name when a candidate is a symref into a hidden namespace",
+  withRepo("rtgv-ambiguous-symref-", async (repoPath, repo) => {
+    const base = commitFile(repoPath, "a.txt", "a\n", "base");
+    git(repoPath, "checkout", "-q", "--orphan", "private-work");
+    const secret = commitFile(repoPath, "secret.txt", "s\n", "private secret commit");
+    git(repoPath, "update-ref", "refs/notes/secret", secret);
+    git(repoPath, "checkout", "-q", "main");
+    git(repoPath, "branch", "-D", "private-work");
+    // Tag `foo` points into refs/notes; branch `foo` makes the name ambiguous,
+    // so --symbolic-full-name prints nothing while Git still picks the tag.
+    git(repoPath, "symbolic-ref", "refs/tags/foo", "refs/notes/secret");
+    git(repoPath, "branch", "foo", base);
+
+    const service = createService();
+    const ambiguous = await service.listCommits(repo, new URLSearchParams({ ref: "foo" }));
+    assert.equal(ambiguous.status, 404);
+
+    const qualified = await service.listCommits(repo, new URLSearchParams({ ref: "refs/heads/foo" }));
+    assert.equal(qualified.status, 200);
+    assert.deepEqual(qualified.body.map((commit) => commit.subject), ["base"]);
+  }),
+);
+
+test(
+  "keeps an ambiguous short name usable when its symref candidates stay public",
+  withRepo("rtgv-ambiguous-public-symref-", async (repoPath, repo) => {
+    commitFile(repoPath, "a.txt", "a\n", "base");
+    git(repoPath, "symbolic-ref", "refs/tags/bar", "refs/heads/main");
+    git(repoPath, "branch", "bar");
+
+    const service = createService();
+    const result = await service.listCommits(repo, new URLSearchParams({ ref: "bar" }));
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.map((commit) => commit.subject), ["base"]);
   }),
 );
 

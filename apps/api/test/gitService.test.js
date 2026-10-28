@@ -301,6 +301,66 @@ test("rejects non-commit object ids for commit detail and diff endpoints", async
   }
 });
 
+test("returns a partial diff flagged as truncated when the patch exceeds diffMaxBytes", async () => {
+  const repoPath = createTempPath("rtgv-diff-truncated-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    // 3-byte characters make the byte cap land inside a character.
+    fs.writeFileSync(path.join(repoPath, "big.txt"), "あいう\n".repeat(20_000));
+    git(repoPath, "add", "big.txt");
+    git(repoPath, "commit", "-m", "big commit");
+    const commitHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    const diffMaxBytes = 4096;
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes,
+    });
+    const result = await service.getDiff({ id: "demo", name: "demo", path: repoPath }, commitHash);
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.hash, commitHash);
+    assert.equal(result.body.truncated, true);
+    assert.equal(result.body.maxBytes, diffMaxBytes);
+    assert.ok(result.body.diff.includes("diff --git a/big.txt b/big.txt\n"));
+    assert.ok(Buffer.byteLength(result.body.diff) <= diffMaxBytes);
+    // Cut at a line boundary: no half line, no broken UTF-8 sequence.
+    assert.ok(result.body.diff.endsWith("\n"));
+    assert.equal(result.body.diff.includes("�"), false);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("reports truncated: false for a diff within diffMaxBytes", async () => {
+  const repoPath = createTempPath("rtgv-diff-complete-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "small.txt"), "hello\n");
+    git(repoPath, "add", "small.txt");
+    git(repoPath, "commit", "-m", "small commit");
+    const commitHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 4096,
+    });
+    const result = await service.getDiff({ id: "demo", name: "demo", path: repoPath }, commitHash);
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.truncated, false);
+    assert.ok(result.body.diff.endsWith("+hello\n"));
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
 test("does not execute repository textconv filters for API diff reads", async () => {
   const repoPath = createTempPath("rtgv-textconv-");
   try {
@@ -590,6 +650,10 @@ test("builds commit list git log arguments with option parsing ended before reso
       "--extended-regexp",
       "--author=Alice",
       "--format=%x00%H%x00%P%x00%an%x00%aI%x00%s%x00%D",
+      "--decorate-refs=HEAD",
+      "--decorate-refs=refs/heads/",
+      "--decorate-refs=refs/tags/",
+      "--decorate-refs=refs/remotes/",
       "--no-show-signature",
       "--numstat",
       "-z",
@@ -624,6 +688,10 @@ test("builds commit show arguments with option parsing ended before hashes", () 
     "-s",
     "--date=iso-strict",
     "--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00%D",
+    "--decorate-refs=HEAD",
+    "--decorate-refs=refs/heads/",
+    "--decorate-refs=refs/tags/",
+    "--decorate-refs=refs/remotes/",
     "--no-show-signature",
     "--end-of-options",
     hash,
@@ -1567,6 +1635,52 @@ test("getCompareCherry separates patch-id equivalent commits from missing ones",
     // round-trip per row.
     const fixEntry = result.body.equivalent.find((c) => c.hash === fixHash);
     assert.equal(fixEntry?.subject, "fix: critical bug");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("getCompareCherry pairs same-subject cherry-picks with their own counterparts", async () => {
+  const repoPath = createTempPath("rtgv-cherry-order-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    fs.writeFileSync(path.join(repoPath, "a.txt"), lines);
+    git(repoPath, "add", "a.txt");
+    git(repoPath, "commit", "-m", "base");
+    git(repoPath, "branch", "release");
+
+    fs.writeFileSync(path.join(repoPath, "a.txt"), lines.replace("line 5\n", "line 5 changed\nextra 1\nextra 2\n"));
+    git(repoPath, "commit", "-am", "fix");
+    const first = git(repoPath, "rev-parse", "HEAD").trim();
+    fs.writeFileSync(path.join(repoPath, "b.txt"), Array.from({ length: 30 }, (_, i) => `b ${i}`).join("\n") + "\n");
+    git(repoPath, "add", "b.txt");
+    git(repoPath, "commit", "-m", "fix");
+    const second = git(repoPath, "rev-parse", "HEAD").trim();
+
+    git(repoPath, "checkout", "release");
+    // -x changes the message body, so the picks never reuse main's hashes.
+    git(repoPath, "cherry-pick", "-x", first);
+    git(repoPath, "cherry-pick", "-x", second);
+    git(repoPath, "checkout", "main");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 1024 * 1024,
+    });
+    const result = await service.getCompareCherry(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams({ base: "main", target: "release" }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.equivalent.map((entry) => entry.hash).sort(), [first, second].sort());
+    for (const entry of result.body.equivalent) {
+      assert.equal(entry.grade, "identical", `${entry.hash} graded ${entry.grade}`);
+    }
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }

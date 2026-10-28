@@ -194,6 +194,34 @@ test("getCommitRisk: returns higher score when hotspot file has large diff", asy
   assert.ok(result.body.riskScore > 0, `expected score > 0 for hotspot file, got ${result.body.riskScore}`);
 });
 
+test("getCommitRisk: churn ignores history behind a HEAD that points into a hidden namespace", async () => {
+  const repoPath = createTempPath("riskscorer-hidden-head-");
+  try {
+    initRepo(repoPath);
+    writeAndCommit(repoPath, "src/hot.js", "// public\n", "chore: public");
+    const publicHash = git(repoPath, "rev-parse", "HEAD").trim();
+    git(repoPath, "checkout", "-q", "--orphan", "hidden-work");
+    for (let i = 1; i <= 5; i++) {
+      writeAndCommit(repoPath, "src/hot.js", `// hidden v${i}\n`, `chore: hidden v${i}`);
+    }
+    git(repoPath, "update-ref", "refs/notes/hidden", "HEAD");
+    git(repoPath, "symbolic-ref", "HEAD", "refs/notes/hidden");
+    git(repoPath, "update-ref", "-d", "refs/heads/hidden-work");
+
+    const service = makeService();
+    const result = await service.getCommitRisk(
+      { id: "hidden-head", name: "hidden-head", path: repoPath },
+      publicHash,
+    );
+    assert.equal(result.status, 200);
+    for (const entry of result.body.breakdown) {
+      assert.equal(entry.churn, 0, `${entry.path} churn leaked from hidden history`);
+    }
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
 test("getCommitRisk: returns 400 for invalid hash", async () => {
   const service = makeService();
   const repo = { id: "test", name: "test", path: "/tmp/nonexistent" };

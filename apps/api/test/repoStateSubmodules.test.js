@@ -48,6 +48,77 @@ test("getRepoState detects MERGE_HEAD with target hash and message", async () =>
   }
 });
 
+test(
+  "getRepoState does not follow a symlinked marker file out of the git dir",
+  { skip: process.platform === "win32" && "symlinks need privileges on Windows" },
+  async () => {
+    const repoPath = createTempPath("rtgv-state-symlink-");
+    const outside = createTempPath("rtgv-state-outside-");
+    try {
+      initRepo(repoPath);
+      writeAndCommit(repoPath, "README.md", "v1\n", "chore: seed");
+      const secretPath = path.join(outside, "secret.txt");
+      fs.writeFileSync(secretPath, "TOP SECRET OUTSIDE REPO\n");
+      fs.writeFileSync(path.join(repoPath, ".git/MERGE_HEAD"), `${"0".repeat(40)}\n`);
+      fs.symlinkSync(secretPath, path.join(repoPath, ".git/MERGE_MSG"));
+
+      const service = createGitService(makeConfig());
+      const result = await service.getRepoState(makeRepo(repoPath));
+
+      assert.equal(result.status, 200);
+      const [op] = result.body.operations;
+      assert.equal(op.kind, "merge");
+      assert.equal(op.message, null);
+      assert.equal(JSON.stringify(result.body).includes("TOP SECRET"), false);
+    } finally {
+      fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+      fs.rmSync(outside, { recursive: true, force: true, maxRetries: 10 });
+    }
+  },
+);
+
+test(
+  "getRepoState ignores a symlinked rebase directory",
+  { skip: process.platform === "win32" && "symlinks need privileges on Windows" },
+  async () => {
+    const repoPath = createTempPath("rtgv-state-symlink-dir-");
+    const outside = createTempPath("rtgv-state-outside-dir-");
+    try {
+      initRepo(repoPath);
+      writeAndCommit(repoPath, "README.md", "v1\n", "chore: seed");
+      fs.writeFileSync(path.join(outside, "head-name"), "TOP SECRET OUTSIDE REPO\n");
+      fs.symlinkSync(outside, path.join(repoPath, ".git/rebase-merge"));
+
+      const service = createGitService(makeConfig());
+      const result = await service.getRepoState(makeRepo(repoPath));
+
+      assert.equal(result.status, 200);
+      assert.equal(JSON.stringify(result.body).includes("TOP SECRET"), false);
+    } finally {
+      fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+      fs.rmSync(outside, { recursive: true, force: true, maxRetries: 10 });
+    }
+  },
+);
+
+test("getRepoState caps how much of a marker file it reads", async () => {
+  const repoPath = createTempPath("rtgv-state-huge-");
+  try {
+    initRepo(repoPath);
+    writeAndCommit(repoPath, "README.md", "v1\n", "chore: seed");
+    fs.writeFileSync(path.join(repoPath, ".git/MERGE_HEAD"), `${"0".repeat(40)}\n`);
+    fs.writeFileSync(path.join(repoPath, ".git/MERGE_MSG"), "m".repeat(1024 * 1024));
+
+    const service = createGitService(makeConfig());
+    const result = await service.getRepoState(makeRepo(repoPath));
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.operations[0].message.length, 64 * 1024);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
 test("getRepoState detects rebase via rebase-merge directory", async () => {
   const repoPath = createTempPath("rtgv-state-rebase-");
   try {
