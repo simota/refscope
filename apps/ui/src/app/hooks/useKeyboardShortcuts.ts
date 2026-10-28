@@ -80,6 +80,29 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
+// Widgets whose own keyboard model uses unmodified keys (arrows, letters for
+// type-ahead). A focused radio group, menu or tab list must receive ArrowDown
+// itself instead of having it moved to the selected commit.
+const COMPOSITE_WIDGET_SELECTOR = [
+  "radiogroup",
+  "menu",
+  "menubar",
+  "listbox",
+  "tablist",
+  "tree",
+  "treegrid",
+  "grid",
+  "slider",
+  "spinbutton",
+  "combobox",
+]
+  .map((role) => `[role="${role}"]`)
+  .join(",");
+
+function isCompositeWidgetTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(COMPOSITE_WIDGET_SELECTOR) !== null;
+}
+
 /**
  * Register a set of keyboard shortcuts on `window`. The bindings list may
  * change between renders without re-attaching the listener — handlers are
@@ -119,7 +142,13 @@ export function useKeyboardShortcuts(
       // Ignore IME composition — treating partial Kana/Pinyin keystrokes as
       // shortcut activations would corrupt user input in any text field.
       if (event.isComposing) return;
-      const editable = isEditableTarget(event.target);
+      // A key the focused widget already handled (Radix menus, sliders) or
+      // one aimed at a composite widget belongs to that widget, like typing
+      // in an input does.
+      const editable =
+        event.defaultPrevented ||
+        isEditableTarget(event.target) ||
+        isCompositeWidgetTarget(event.target);
       const isSuppressed = suppressedRef.current;
       for (const { binding, parsed } of bindingsRef.current) {
         if (!eventMatches(parsed, event)) continue;
@@ -129,7 +158,8 @@ export function useKeyboardShortcuts(
           if (isSuppressed) continue;
           // Shortcuts without a Cmd/Ctrl/Alt modifier would otherwise eat
           // every keystroke the user types into a search field. Single-key
-          // bindings are silently skipped while the focus is in an input.
+          // bindings are silently skipped while the focus is in an input or
+          // a composite widget.
           if (editable && !hasModifier) continue;
         }
         event.preventDefault();
