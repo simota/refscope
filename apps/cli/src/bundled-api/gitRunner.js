@@ -70,15 +70,19 @@ export class GitCommandError extends Error {
 /**
  * @param {{ path: string }} repo
  * @param {string[]} args
- * @param {{ timeoutMs?: number, maxBytes?: number, disableFilterDrivers?: string[] }} [options]
+ * @param {{ timeoutMs?: number, maxBytes?: number, disableFilterDrivers?: string[], allowTruncatedStdout?: boolean }} [options]
  *   `disableFilterDrivers` names `filter.<driver>` entries to neutralize for
  *   this call. Pass the names from `listFilterDriverNames` to any command that
  *   reads working-tree file content (index-vs-worktree `diff`).
+ *   `allowTruncatedStdout` resolves with the first `maxBytes` bytes of stdout
+ *   and `truncated: true` instead of rejecting when stdout overflows. Timeouts
+ *   and stderr overflow still reject.
  */
 export function runGit(repo, args, options = {}) {
   const timeoutMs = options.timeoutMs ?? 5000;
   const maxBytes = options.maxBytes ?? 256_000;
   const disableFilterDrivers = options.disableFilterDrivers ?? [];
+  const allowTruncatedStdout = options.allowTruncatedStdout === true;
 
   validateGitLimits({ timeoutMs, maxBytes });
   validateGitRepo(repo);
@@ -86,13 +90,20 @@ export function runGit(repo, args, options = {}) {
   validateFilterDriverNames(disableFilterDrivers);
 
   return acquireGitSlot().then(() => {
-    const run = spawnGit(repo, args, timeoutMs, maxBytes, filterDriverOverrides(disableFilterDrivers));
+    const run = spawnGit(
+      repo,
+      args,
+      timeoutMs,
+      maxBytes,
+      filterDriverOverrides(disableFilterDrivers),
+      allowTruncatedStdout,
+    );
     run.then(releaseGitSlot, releaseGitSlot);
     return run;
   });
 }
 
-function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides) {
+function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncatedStdout) {
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["--no-pager", ...args], {
       cwd: repo.path,
@@ -120,7 +131,8 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides) {
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let timedOut = false;
-    let truncated = false;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
 
     timer = setTimeout(() => {
       timedOut = true;
@@ -128,9 +140,14 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides) {
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
+      if (stdoutTruncated) return;
+      const room = maxBytes - stdoutBytes;
       stdoutBytes += chunk.length;
-      if (stdoutBytes > maxBytes) {
-        truncated = true;
+      if (chunk.length > room) {
+        stdoutTruncated = true;
+        // Keep the bytes that still fit so a caller that accepts partial
+        // output gets exactly `maxBytes` of it.
+        if (room > 0) stdoutChunks.push(chunk.subarray(0, room));
         child.kill("SIGTERM");
         return;
       }
@@ -140,7 +157,7 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides) {
     child.stderr.on("data", (chunk) => {
       stderrBytes += chunk.length;
       if (stderrBytes > maxBytes) {
-        truncated = true;
+        stderrTruncated = true;
         child.kill("SIGTERM");
         return;
       }
@@ -151,6 +168,12 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides) {
       clearTimeout(timer);
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
+      // The kill after an stdout overflow makes the exit code meaningless.
+      if (stdoutTruncated && allowTruncatedStdout && !timedOut && !stderrTruncated) {
+        resolve({ stdout, stderr, truncated: true });
+        return;
+      }
+      const truncated = stdoutTruncated || stderrTruncated;
       if (timedOut || truncated || exitCode !== 0) {
         reject(
           new GitCommandError("Git command failed", {
@@ -162,7 +185,7 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides) {
         );
         return;
       }
-      resolve({ stdout, stderr });
+      resolve({ stdout, stderr, truncated: false });
     });
   });
 }

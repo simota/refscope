@@ -345,6 +345,46 @@ test("bounds git stderr output with the same maxBytes limit", async () => {
   }
 });
 
+test("returns the first maxBytes of stdout when allowTruncatedStdout is set", async () => {
+  const repoPath = createTempPath("rtgv-runner-partial-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "big.txt"), "0123456789\n".repeat(50_000));
+    git(repoPath, "add", "big.txt");
+    git(repoPath, "commit", "-m", "big");
+    const repo = { id: "demo", name: "demo", path: repoPath };
+    const args = ["show", "--format=", "--no-ext-diff", "--no-textconv", "--patch", "HEAD"];
+    const full = git(repoPath, ...args);
+
+    const partial = await runGit(repo, args, {
+      timeoutMs: 5000,
+      maxBytes: 70_000,
+      allowTruncatedStdout: true,
+    });
+    assert.equal(partial.truncated, true);
+    assert.equal(partial.stdout, full.slice(0, 70_000));
+
+    const complete = await runGit(repo, args, {
+      timeoutMs: 5000,
+      maxBytes: full.length,
+      allowTruncatedStdout: true,
+    });
+    assert.equal(complete.truncated, false);
+    assert.equal(complete.stdout, full);
+
+    // Without the opt-in, overflow still rejects.
+    await assert.rejects(runGit(repo, args, { timeoutMs: 5000, maxBytes: 70_000 }), (error) => {
+      assert.equal(error instanceof GitCommandError, true);
+      assert.equal(error.truncated, true);
+      return true;
+    });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
 test("decodes multi-byte UTF-8 output split across pipe chunks", async () => {
   const repoPath = createTempPath("rtgv-runner-utf8-");
   try {

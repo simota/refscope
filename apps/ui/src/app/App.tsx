@@ -821,20 +821,26 @@ export default function App() {
           // valid render state for the panel.
           setContainingRefs([]);
         });
-      Promise.all([
+      // Settle detail and diff independently: a diff that fails (e.g. a git
+      // timeout on a huge commit) must not discard metadata that loaded.
+      Promise.allSettled([
         getCommit(selectedRepo, selected, controller.signal),
         getDiff(selectedRepo, selected, controller.signal),
       ])
-        .then(([nextDetail, nextDiff]) => {
+        .then(([detailResult, diffResult]) => {
           if (controller.signal.aborted) return;
-          setDetail(nextDetail);
-          setDiff(nextDiff);
-          // A successful load clears any error left by a previous failed
-          // detail/diff fetch — otherwise the banner sticks forever.
-          clearForegroundError();
-        })
-        .catch((err) => {
-          if (controller.signal.aborted) return;
+          if (detailResult.status === "fulfilled") setDetail(detailResult.value);
+          if (diffResult.status === "fulfilled") setDiff(diffResult.value);
+          const failure = [detailResult, diffResult].find(
+            (result): result is PromiseRejectedResult => result.status === "rejected",
+          );
+          if (!failure) {
+            // A successful load clears any error left by a previous failed
+            // detail/diff fetch — otherwise the banner sticks forever.
+            clearForegroundError();
+            return;
+          }
+          const err = failure.reason;
           if (err instanceof DOMException && err.name === "AbortError") return;
           setError(errorMessage(err));
         })

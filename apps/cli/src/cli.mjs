@@ -197,7 +197,7 @@ function parsePositiveInt(flag, value, max) {
  * `fromCwd` flag tailors the hint so cwd-derived failures point users at
  * `--repo` instead of asking them to re-run from a different shell.
  */
-function validateRepoPath(repoPath, { fromCwd } = { fromCwd: false }) {
+export function validateRepoPath(repoPath, { fromCwd } = { fromCwd: false }) {
   const notWorkingTree = (resolvedPath) =>
     fromCwd
       ? `${resolvedPath} is not a Git working tree. Run \`npx -y github:simota/refscope\` from inside a repository, or pass \`--repo <absolute-path>\`.`
@@ -228,6 +228,16 @@ function validateRepoPath(repoPath, { fromCwd } = { fromCwd: false }) {
   }
   if (!gitEntry.isDirectory() && !gitEntry.isFile()) {
     return { ok: false, error: notWorkingTree(canonicalPath) };
+  }
+
+  // The path reaches the API through RTGV_REPOS, which splits entries on
+  // `,` and trims each path. Such a path would fail to load or, worse,
+  // resolve to a different repository, so refuse it up front.
+  if (canonicalPath.includes(",") || canonicalPath !== canonicalPath.trim()) {
+    return {
+      ok: false,
+      error: `${canonicalPath} cannot be served: Refscope does not support repository paths that contain a comma or end with whitespace.`,
+    };
   }
 
   return { ok: true, canonicalPath };

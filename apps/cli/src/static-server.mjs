@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pipeline } from "node:stream";
 
 const CONTENT_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -122,13 +123,13 @@ function serveFile(filePath, req, res, onMissing) {
     }
 
     res.writeHead(200, headers);
-    const stream = fs.createReadStream(filePath);
-    stream.on("error", () => {
+    // pipeline() destroys the file stream when the client disconnects;
+    // pipe() would leave it paused with its descriptor open.
+    pipeline(fs.createReadStream(filePath), res, (error) => {
       // Headers are already on the wire; the only safe option is to abort
       // the connection so the client surfaces a network error.
-      res.destroy();
+      if (error) res.destroy();
     });
-    stream.pipe(res);
   });
 }
 

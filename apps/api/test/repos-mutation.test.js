@@ -14,6 +14,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -335,6 +337,44 @@ test("POST /api/repos returns 400 when body exceeds 4 KB", async () => {
     parsed.error.includes("too large") || parsed.error.includes("Invalid"),
     `expected too-large error: ${parsed.error}`,
   );
+});
+
+test("POST /api/repos closes the connection instead of reading an oversized body", async () => {
+  const handler = createRequestHandler(
+    { allowedOrigins: new Set([ALLOWED_ORIGIN]), refPollMs: 2000 },
+    { addRepository() { throw new Error("should not reach"); } },
+  );
+  const server = http.createServer((req, res) => handler(req, res));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const socket = net.connect(port, "127.0.0.1");
+    await new Promise((resolve) => socket.on("connect", resolve));
+    let received = "";
+    socket.on("data", (chunk) => (received += chunk));
+    socket.on("error", () => {});
+    const closed = new Promise((resolve) => socket.on("close", resolve));
+    socket.write(
+      `POST /api/repos HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: ${ALLOWED_ORIGIN}\r\n` +
+        "Content-Type: application/json\r\nContent-Length: 50000000\r\n\r\n",
+    );
+    // Keep streaming body bytes; the server must hang up rather than drain them.
+    const pump = setInterval(() => {
+      if (!socket.destroyed) socket.write(Buffer.alloc(64 * 1024, 32));
+    }, 5);
+    const outcome = await Promise.race([
+      closed.then(() => "closed"),
+      new Promise((resolve) => setTimeout(() => resolve("still open"), 2000)),
+    ]);
+    clearInterval(pump);
+    socket.destroy();
+    assert.equal(outcome, "closed");
+    assert.match(received, /^HTTP\/1\.1 400 /);
+    assert.match(received, /Request body too large/);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 // ─── POST /api/repos — unknown field in body (400) ───────────────────────────

@@ -301,6 +301,66 @@ test("rejects non-commit object ids for commit detail and diff endpoints", async
   }
 });
 
+test("returns a partial diff flagged as truncated when the patch exceeds diffMaxBytes", async () => {
+  const repoPath = createTempPath("rtgv-diff-truncated-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    // 3-byte characters make the byte cap land inside a character.
+    fs.writeFileSync(path.join(repoPath, "big.txt"), "あいう\n".repeat(20_000));
+    git(repoPath, "add", "big.txt");
+    git(repoPath, "commit", "-m", "big commit");
+    const commitHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    const diffMaxBytes = 4096;
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes,
+    });
+    const result = await service.getDiff({ id: "demo", name: "demo", path: repoPath }, commitHash);
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.hash, commitHash);
+    assert.equal(result.body.truncated, true);
+    assert.equal(result.body.maxBytes, diffMaxBytes);
+    assert.ok(result.body.diff.includes("diff --git a/big.txt b/big.txt\n"));
+    assert.ok(Buffer.byteLength(result.body.diff) <= diffMaxBytes);
+    // Cut at a line boundary: no half line, no broken UTF-8 sequence.
+    assert.ok(result.body.diff.endsWith("\n"));
+    assert.equal(result.body.diff.includes("�"), false);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("reports truncated: false for a diff within diffMaxBytes", async () => {
+  const repoPath = createTempPath("rtgv-diff-complete-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    git(repoPath, "config", "user.name", "Realtime Test");
+    git(repoPath, "config", "user.email", "realtime@example.test");
+    fs.writeFileSync(path.join(repoPath, "small.txt"), "hello\n");
+    git(repoPath, "add", "small.txt");
+    git(repoPath, "commit", "-m", "small commit");
+    const commitHash = git(repoPath, "rev-parse", "HEAD").trim();
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 4096,
+    });
+    const result = await service.getDiff({ id: "demo", name: "demo", path: repoPath }, commitHash);
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.truncated, false);
+    assert.ok(result.body.diff.endsWith("+hello\n"));
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
 test("does not execute repository textconv filters for API diff reads", async () => {
   const repoPath = createTempPath("rtgv-textconv-");
   try {

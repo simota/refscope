@@ -837,17 +837,24 @@ export function createGitService(config) {
         return commitObject.result;
       }
 
-      const { stdout } = await runGit(
+      const { stdout, truncated } = await runGit(
         repo,
         commitDiffShowArgs(hash),
-        { timeoutMs: config.gitTimeoutMs, maxBytes: config.diffMaxBytes },
+        {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: config.diffMaxBytes,
+          allowTruncatedStdout: true,
+        },
       );
 
       return {
         status: 200,
         body: {
           hash,
-          diff: stdout,
+          // The byte cap can cut a line or a UTF-8 character in half; drop
+          // the incomplete tail so the viewer only sees whole lines.
+          diff: truncated ? stdout.slice(0, stdout.lastIndexOf("\n") + 1) : stdout,
+          truncated,
           maxBytes: config.diffMaxBytes,
         },
       };
