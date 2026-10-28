@@ -201,7 +201,7 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
-type BackgroundErrorSource = "drift" | "worktree" | "timeline" | "stream";
+type BackgroundErrorSource = "drift" | "worktree" | "timeline" | "stream" | "compare";
 
 // Backoff for reopening a live stream the server refused (non-200).
 const STREAM_RETRY_MIN_MS = 2_000;
@@ -468,6 +468,8 @@ export default function App() {
   const [compareTarget, setCompareTarget] = useState("");
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
   const [compareLoading, setCompareLoading] = useState(false);
+  // Bumped by live refreshes so an open compare is recomputed.
+  const [compareRefreshKey, setCompareRefreshKey] = useState(0);
   // Branch Drift Halo: drift fetch is independent of the timeline fetch and
   // is a dedicated batched endpoint, so we keep it in its own state. The
   // value is a Map keyed by full ref name (`refs/heads/foo`) so BranchSidebar
@@ -557,11 +559,24 @@ export default function App() {
   const streamRepoRef = useRef("");
   const streamResyncOnConnectRef = useRef(false);
   const streamRetryDelayRef = useRef(STREAM_RETRY_MIN_MS);
-  const searchRef = useRef(search);
-  const authorRef = useRef(author);
-  const pathRef = useRef(path);
+  // Filters as the timeline last applied them (debounced), for live
+  // refreshes that run outside React's render cycle. Reading the raw input
+  // instead would apply a half-typed filter (or a regex such as `(foo` on
+  // its way to `(foo|bar)`) and leave its error behind.
+  const searchRef = useRef(debouncedSearch);
+  const authorRef = useRef(debouncedAuthor);
+  const pathRef = useRef(debouncedPath);
   const searchModeRef = useRef(searchMode);
-  const searchPatternRef = useRef(searchPattern);
+  const searchPatternRef = useRef(debouncedSearchPattern);
+  const selectedWorkTreeRef = useRef(selectedWorkTree);
+  // The list a live refresh replaces: tells a timeline row that left the
+  // list apart from a lens selection that was never in it.
+  const commitsRef = useRef(commits);
+  // repo/base/target of the compare result on screen; a run with the same
+  // key is a live refresh of it. Set only once a result is applied, so a
+  // refresh that replaces a still-pending first request is treated as the
+  // first request (loading shown, errors in the foreground).
+  const compareKeyRef = useRef("");
   const livePausedRef = useRef(livePaused);
   // Generation guard for refreshTimeline: bumped whenever the active repo
   // changes so an SSE-triggered refresh that resolves after a repo switch is
@@ -659,24 +674,32 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    searchRef.current = search;
-  }, [search]);
+    searchRef.current = debouncedSearch;
+  }, [debouncedSearch]);
 
   useEffect(() => {
-    authorRef.current = author;
-  }, [author]);
+    authorRef.current = debouncedAuthor;
+  }, [debouncedAuthor]);
 
   useEffect(() => {
-    pathRef.current = path;
-  }, [path]);
+    pathRef.current = debouncedPath;
+  }, [debouncedPath]);
 
   useEffect(() => {
     searchModeRef.current = searchMode;
   }, [searchMode]);
 
   useEffect(() => {
-    searchPatternRef.current = searchPattern;
-  }, [searchPattern]);
+    searchPatternRef.current = debouncedSearchPattern;
+  }, [debouncedSearchPattern]);
+
+  useEffect(() => {
+    selectedWorkTreeRef.current = selectedWorkTree;
+  }, [selectedWorkTree]);
+
+  useEffect(() => {
+    commitsRef.current = commits;
+  }, [commits]);
 
   useEffect(() => {
     let cancelled = false;
@@ -727,6 +750,9 @@ export default function App() {
         setSelectedRef(nextRef);
         setCommits(markedCommits);
         setSelected((current) => {
+          // The working tree is shown instead of a commit; picking one here
+          // would only fetch a detail nobody sees.
+          if (selectedWorkTreeRef.current) return current;
           if (!current) {
             setSelectionNotice("");
             return markedCommits[0]?.hash || "";
@@ -738,6 +764,9 @@ export default function App() {
           setSelectionNotice("Previous selection is not on this ref; selected the latest visible commit.");
           return markedCommits[0]?.hash || "";
         });
+        // This load reflects the current filters, so an earlier live refresh's
+        // failure (e.g. a since-corrected regex) no longer applies.
+        clearBackgroundError("timeline");
         clearForegroundError();
       })
       .catch((err) => {
@@ -761,30 +790,45 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedRepo || !compareBase || !compareTarget) {
+      compareKeyRef.current = "";
+      clearBackgroundError("compare");
       setCompareResult(null);
       return;
     }
     let cancelled = false;
-    setCompareLoading(true);
+    const key = `${selectedRepo}\0${compareBase}\0${compareTarget}`;
+    // A live refresh updates the result in place: no loading flash, and a
+    // failure keeps the last result and reports like other background work
+    // instead of replacing an unrelated foreground error.
+    const refresh = compareKeyRef.current === key;
+    if (!refresh) setCompareLoading(true);
     compareRefs(selectedRepo, compareBase, compareTarget)
       .then((result) => {
         if (cancelled) return;
+        compareKeyRef.current = key;
         setCompareResult(result);
-        clearForegroundError();
+        clearBackgroundError("compare");
+        if (!refresh) clearForegroundError();
       })
       .catch((err) => {
-        if (!cancelled) {
-          setCompareResult(null);
-          setError(errorMessage(err));
+        if (cancelled) return;
+        if (refresh) {
+          reportBackgroundError("compare", errorMessage(err));
+          return;
         }
+        compareKeyRef.current = "";
+        setCompareResult(null);
+        setError(errorMessage(err));
       })
       .finally(() => {
+        // Whichever request is current settles loading, including one that
+        // replaced the request that set it.
         if (!cancelled) setCompareLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedRepo, compareBase, compareTarget]);
+  }, [selectedRepo, compareBase, compareTarget, compareRefreshKey]);
 
   useEffect(() => {
     setDiffFullscreen(false);
@@ -1383,7 +1427,11 @@ export default function App() {
     setSelectedRef(nextRef);
     const markedCommits = markRealtimeNewCommits(nextCommits, realtimeNewCommitHashesRef.current);
     setCommits(markedCommits);
+    // A live event must not move the user's selection: a commit picked in a
+    // lens (another ref, older than the list, hidden by a filter) is shown
+    // from its own detail, and the working tree has no row at all.
     setSelected((current) => {
+      if (selectedWorkTreeRef.current) return current;
       if (!current) {
         setSelectionNotice("");
         return markedCommits[0]?.hash || "";
@@ -1392,9 +1440,16 @@ export default function App() {
         setSelectionNotice("");
         return current;
       }
-      setSelectionNotice("Previous selection is not on this ref; selected the latest visible commit.");
-      return markedCommits[0]?.hash || "";
+      // A timeline row that left the list (force-push, filter) falls back
+      // with a notice; a lens selection was never a row and stays.
+      if (commitsRef.current.some((commit) => commit.hash === current)) {
+        setSelectionNotice("Previous selection is not on this ref; selected the latest visible commit.");
+        return markedCommits[0]?.hash || "";
+      }
+      return current;
     });
+    // The compared refs may be the ones that just moved.
+    setCompareRefreshKey((key) => key + 1);
   }
 
   // SSE バースト時に setLiveAnnouncement が秒間多数回呼ばれると SR が
@@ -1771,7 +1826,7 @@ export default function App() {
             repoId={selectedRepo || null}
             commits={commits}
             selectedCommitHash={selected || null}
-            onSelectCommit={(hash) => { setSelected(hash); }}
+            onSelectCommit={handleSelectCommit}
             onOpenFileHistory={submitFileHistoryPath}
             workTree={workTreeHasChanges ? workTree : null}
             eventStatus={eventStatus}
@@ -1788,7 +1843,7 @@ export default function App() {
             repoId={selectedRepo || null}
             commits={commits}
             selectedCommitHash={selected || null}
-            onSelectCommit={(hash) => { setSelected(hash); }}
+            onSelectCommit={handleSelectCommit}
             onOpenFileHistory={submitFileHistoryPath}
             workTree={workTreeHasChanges ? workTree : null}
             onChangeLens={setActiveLens}
@@ -1808,7 +1863,7 @@ export default function App() {
         <div className="flex-1 overflow-hidden" id="lens-panel-risk-trend" role="tabpanel" aria-labelledby="lens-tab-risk-trend">
           <RiskTrendLens
             commits={commits}
-            onSelectCommit={(hash) => { setSelected(hash); }}
+            onSelectCommit={handleSelectCommit}
             onChangeLens={setActiveLens}
             onSelectRange={(from, to) => setDateRangeFilter({ from, to })}
           />
@@ -1818,7 +1873,7 @@ export default function App() {
         <div className="flex-1 overflow-hidden" id="lens-panel-risk-heatmap" role="tabpanel" aria-labelledby="lens-tab-risk-heatmap">
           <RiskHeatmapLens
             commits={commits}
-            onSelectCommit={(hash) => { setSelected(hash); }}
+            onSelectCommit={handleSelectCommit}
             onChangeLens={setActiveLens}
             onSelectRange={(from, to) => setDateRangeFilter({ from, to })}
           />
@@ -1868,7 +1923,7 @@ export default function App() {
           <DigestLens
             repoId={selectedRepo}
             onSelectCommit={(hash) => {
-              setSelected(hash);
+              handleSelectCommit(hash);
               setActiveLens('live');
             }}
             onOpenFileHistory={submitFileHistoryPath}
