@@ -304,7 +304,7 @@ export function createGitService(config) {
     return files;
   }
 
-  async function listRefs(repo) {
+  async function listRefs(repo, objectHashes) {
     const { stdout } = await runGit(
       repo,
       ["for-each-ref", PUBLIC_REF_FORMAT, "refs/heads", "refs/tags", "refs/remotes"],
@@ -313,7 +313,7 @@ export function createGitService(config) {
       { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
     );
 
-    return peelNestedTags(repo, parsePublicRefLines(stdout), config.gitTimeoutMs);
+    return peelNestedTags(repo, parsePublicRefLines(stdout, objectHashes), config.gitTimeoutMs);
   }
 
   /**
@@ -336,9 +336,11 @@ export function createGitService(config) {
   async function readPolledRefs(repo) {
     const generation = _cacheGenerations.get(repo.id) ?? 0;
     const cache = _refPollCaches.get(repo.id);
+    /** @type {Map<object, string>} ref -> object it names, for the cache */
+    const objectHashes = new Map();
     if (!cache || cache.generation !== generation || cache.refCount < REF_POLL_PRECHECK_MIN_REFS) {
-      const refs = await listRefs(repo);
-      storeRefPollCache(repo.id, generation, refs);
+      const refs = await listRefs(repo, objectHashes);
+      storeRefPollCache(repo.id, generation, refs, objectHashes);
       return refs;
     }
 
@@ -364,8 +366,8 @@ export function createGitService(config) {
         unknownNames.length > entries.length / 4 ||
         unknownNameBytes > REF_POLL_TARGETED_MAX_ARG_BYTES
       ) {
-        const refs = await listRefs(repo);
-        storeRefPollCache(repo.id, generation, refs);
+        const refs = await listRefs(repo, objectHashes);
+        storeRefPollCache(repo.id, generation, refs, objectHashes);
         return refs;
       }
       // An exact ref name is also a prefix pattern (refs/heads/a matches
@@ -375,7 +377,11 @@ export function createGitService(config) {
         ["for-each-ref", PUBLIC_REF_FORMAT, ...unknownNames],
         { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
       );
-      const read = await peelNestedTags(repo, parsePublicRefLines(targeted), config.gitTimeoutMs);
+      const read = await peelNestedTags(
+        repo,
+        parsePublicRefLines(targeted, objectHashes),
+        config.gitTimeoutMs,
+      );
       readByName = new Map(read.map((ref) => [ref.name, ref]));
     }
 
@@ -390,7 +396,7 @@ export function createGitService(config) {
           entry.symref,
           details.nestedTag,
         );
-        Object.defineProperty(ref, "objectHash", { value: entry.objectHash, enumerable: false });
+        objectHashes.set(ref, entry.objectHash);
         if (details.nestedTag) fullyPeeledRefs.add(ref);
         refs.push(ref);
         continue;
@@ -400,11 +406,11 @@ export function createGitService(config) {
       const ref = readByName.get(entry.name);
       if (ref) refs.push(ref);
     }
-    storeRefPollCache(repo.id, generation, refs);
+    storeRefPollCache(repo.id, generation, refs, objectHashes);
     return refs;
   }
 
-  function storeRefPollCache(repoId, generation, refs) {
+  function storeRefPollCache(repoId, generation, refs, objectHashes) {
     // Only a read made under the current registration may fill the cache.
     if ((_cacheGenerations.get(repoId) ?? 0) !== generation) return;
     /** @type {Map<string, { hash: string, updatedAt: string | null, nestedTag: boolean }>} */
@@ -413,7 +419,7 @@ export function createGitService(config) {
     for (const ref of refs.length >= REF_POLL_PRECHECK_MIN_REFS ? refs : []) {
       // A tag chain that failed to peel is retried by the next read.
       if (ref.nestedTag && !fullyPeeledRefs.has(ref)) continue;
-      details.set(ref.objectHash, {
+      details.set(objectHashes.get(ref), {
         hash: ref.hash,
         updatedAt: ref.updatedAt,
         nestedTag: Boolean(ref.nestedTag),
@@ -3444,7 +3450,13 @@ function parseCount(value) {
 const PUBLIC_REF_FORMAT =
   "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(committerdate:iso-strict)%00%(*committerdate:iso-strict)%00%(symref)%00%(*objecttype)";
 
-export function parsePublicRefLines(stdout) {
+/**
+ * @param {string} stdout
+ * @param {Map<object, string>} [objectHashes] receives, per returned ref, the
+ *   object the ref names before any peeling. Only the live poller asks for it
+ *   (see readPolledRefs); other callers get plain ref objects.
+ */
+export function parsePublicRefLines(stdout, objectHashes) {
   return stdout
     .trim()
     .split("\n")
@@ -3465,9 +3477,7 @@ export function parsePublicRefLines(stdout) {
         symref,
         peeledType === "tag",
       );
-      // Internal only: the object the ref names, before any peeling. The
-      // live poller keys its per-object cache on it (see readPolledRefs).
-      Object.defineProperty(ref, "objectHash", { value: objectHash, enumerable: false });
+      objectHashes?.set(ref, objectHash);
       return [ref];
     });
 }
