@@ -23,7 +23,8 @@ Run from the repository root unless noted. The `Makefile` is the canonical entry
 - `make dev-app RTGV_REPOS=viewer=/absolute/path` — start both against another allowlisted repo. `RTGV_REPOS` must be a comma list of `id=/absolute/git/root` entries; the helper `scripts/dev/validate-repos.sh` rejects relative paths, missing paths, or non-Git roots before anything starts.
 - `make dev-api RTGV_REPOS=...` / `make dev-ui` — start one side only.
 - `make build` — `pnpm build:api && pnpm build:ui && pnpm build:web`. The API "build" is just `node --check` against each source file (there is no transpile step). `pnpm build:ui` runs `vite build`.
-- `make test` — runs `pnpm test`: `node --test` against `apps/api/test/`, then `apps/cli/test/` (CLI static server and launcher helpers). The UI has no test suite.
+- `make test` — runs `pnpm test`: `node --test` against `apps/api/test/`, then `apps/cli/test/` (CLI static server and launcher helpers), then `apps/ui/test/` (pure UI helpers, run as TypeScript via Node 22's built-in type stripping — only modules whose imports are type-only can be loaded this way). There are no component/DOM tests.
+- `make typecheck` — `tsc` (strict, no emit) over `apps/ui/src`. Vite only transpiles, so this is the only UI type check.
 - Single API test: `node --test apps/api/test/gitRunner.test.js` (or filter with `--test-name-pattern`).
 - `make verify` — full Orbit verification gate (`scripts/orbit/full-implementation/verify.sh`). Use this before claiming a non-trivial change is done.
 - `make audit` — `pnpm audit --audit-level high`.
@@ -61,6 +62,7 @@ Cryptographic signature verification is intentionally **not** performed — `sig
 - `apps/ui/src/app/App.tsx` is the single state owner: active repo, selected ref, commit list, selected commit, filters, pause state, SSE subscription. Children in `apps/ui/src/app/components/refscope/` (`TopBar`, `BranchSidebar`, `CommitTimeline`, `DetailPanel`, `CommandPalette`) receive props and emit callbacks — they don't fetch.
 - `apps/ui/src/app/api.ts` is the only place that calls the backend; SSE handling is colocated.
 - `apps/ui/src/app/components/ui/` holds shadcn-style primitives over Radix; reuse these for new UI rather than introducing another component library.
+- Design tokens (`--rs-*`) and shared classes (`rs-btn`, `rs-chip`, focus ring, quiet / CVD-safe / reduced-motion / forced-colors rules) live in `apps/ui/src/styles/refscope.css`, which also maps the shadcn primitive tokens onto the dark product palette. Only reference declared tokens — `apps/api/test/uiTokens.test.js` fails on an undeclared `var(--rs-*)`.
 - The command palette (`Cmd/Ctrl+K`) operates on the same live state as the rest of the UI — it must not maintain a parallel ref/commit list.
 
 ## Conventions
