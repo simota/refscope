@@ -1222,8 +1222,8 @@ export function createGitService(config) {
         : driftEligibleRefs;
 
       // Drift per ref runs in parallel; the outer Promise.all unions all
-      // refs, and `computeRefDrift` itself runs ahead/behind/merge-base in
-      // parallel internally. Total fanout is 3 * processedRefs git calls.
+      // refs, and `computeRefDrift` itself runs ahead/behind and merge-base in
+      // parallel internally. Total fanout is 2 * processedRefs git calls.
       const driftEntries = (
         await Promise.all(
           refsToProcess.map((ref) =>
@@ -1754,11 +1754,8 @@ export function createGitService(config) {
         return targetRevision.result;
       }
 
-      const [ahead, behind, numstat, mergeBase] = await Promise.all([
-        runGit(repo, compareRevListArgs(targetRevision.hash, baseRevision.hash), {
-          timeoutMs: config.gitTimeoutMs,
-        }),
-        runGit(repo, compareRevListArgs(baseRevision.hash, targetRevision.hash), {
+      const [counts, numstat, mergeBase] = await Promise.all([
+        runGit(repo, aheadBehindRevListArgs(baseRevision.hash, targetRevision.hash), {
           timeoutMs: config.gitTimeoutMs,
         }),
         runGit(repo, compareNumstatArgs(baseRevision.hash, targetRevision.hash), {
@@ -1768,6 +1765,7 @@ export function createGitService(config) {
         readMergeBase(repo, baseRevision.hash, targetRevision.hash, config.gitTimeoutMs),
       ]);
       const stats = parseNumstatSummary(numstat.stdout);
+      const { ahead, behind } = parseAheadBehindCounts(counts.stdout);
 
       return {
         status: 200,
@@ -1775,8 +1773,8 @@ export function createGitService(config) {
           base,
           target,
           mergeBase,
-          ahead: parseCount(ahead.stdout),
-          behind: parseCount(behind.stdout),
+          ahead,
+          behind,
           files: stats.fileCount,
           added: stats.added,
           deleted: stats.deleted,
@@ -2473,6 +2471,22 @@ function isValidCompareRevision(value) {
 
 export function compareRevListArgs(fromRevision, notRevision) {
   return ["rev-list", "--count", "--not", notRevision, "--not", "--end-of-options", fromRevision];
+}
+
+/**
+ * One commit walk for both sides of a comparison. `--left-right --count`
+ * over the symmetric difference prints `<left>\t<right>`: commits reachable
+ * only from `base` (behind) and only from `target` (ahead) — the same numbers
+ * as two `compareRevListArgs` walks, at roughly the cost of one. Both sides
+ * must be resolved object IDs; the `...` form needs them in a single token.
+ */
+export function aheadBehindRevListArgs(baseHash, targetHash) {
+  return ["rev-list", "--left-right", "--count", "--end-of-options", `${baseHash}...${targetHash}`];
+}
+
+export function parseAheadBehindCounts(stdout) {
+  const [behind = "", ahead = ""] = stdout.trim().split("\t");
+  return { ahead: parseCount(ahead), behind: parseCount(behind) };
 }
 
 // `%D` lists whatever the repository's decoration config selects (e.g.
@@ -3955,8 +3969,9 @@ function readRefDriftQuery(query) {
  * behind are trivially zero and the merge-base is the base hash itself. We
  * skip the three git calls in that case to keep large branch lists cheap.
  *
- * Internally we run ahead, behind, and merge-base in parallel — they share
- * no state and the Git invocation is cheap individually.
+ * Internally we run the ahead/behind count and merge-base in parallel — they
+ * share no state. Ahead and behind come from one `--left-right --count` walk
+ * (see `aheadBehindRevListArgs`).
  *
  * @param {{ id: string, name: string, path: string }} repo
  * @param {string} baseHash  Already resolved object id for the base ref.
@@ -3974,11 +3989,10 @@ async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
       hash: ref.hash,
     };
   }
-  let ahead, behind, mergeBase;
+  let counts, mergeBase;
   try {
-    [ahead, behind, mergeBase] = await Promise.all([
-      runGit(repo, compareRevListArgs(ref.hash, baseHash), { timeoutMs }),
-      runGit(repo, compareRevListArgs(baseHash, ref.hash), { timeoutMs }),
+    [counts, mergeBase] = await Promise.all([
+      runGit(repo, aheadBehindRevListArgs(baseHash, ref.hash), { timeoutMs }),
       readMergeBase(repo, baseHash, ref.hash, timeoutMs),
     ]);
   } catch (error) {
@@ -3995,11 +4009,12 @@ async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
     }
     throw error;
   }
+  const { ahead, behind } = parseAheadBehindCounts(counts.stdout);
   return {
     name: ref.name,
     type: ref.type,
-    ahead: parseCount(ahead.stdout),
-    behind: parseCount(behind.stdout),
+    ahead,
+    behind,
     mergeBase,
     hash: ref.hash,
   };
