@@ -228,7 +228,7 @@ function validateGitRepo(repo) {
   }
 }
 
-function isGitWorkingTreeRoot(repoPath) {
+export function isGitWorkingTreeRoot(repoPath) {
   try {
     const gitDir = fs.statSync(path.join(repoPath, ".git"));
     return gitDir.isDirectory() || gitDir.isFile();

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isValidRepoId, parseHost } from "./validation.js";
-import { MAX_GIT_OUTPUT_BYTES } from "./gitRunner.js";
+import { MAX_GIT_OUTPUT_BYTES, isGitWorkingTreeRoot } from "./gitRunner.js";
 import { loadPersistedRepos, appendRepo, removeRepo } from "./reposStore.js";
 
 export const DEFAULT_PORT = 4175;
@@ -15,6 +15,14 @@ const REPO_ALLOWLIST_MAX_SIZE = 32;
  * @type {{ repositories: Map<string, { id: string, name: string, path: string, origin: "env" | "ui" }> } | null}
  */
 let _currentConfig = null;
+
+/**
+ * The env loadConfig read the persisted repo store from. addRepository /
+ * removeRepository write through the same env so reads and writes always
+ * target one store file (tests pass an isolated XDG_CONFIG_HOME).
+ * @type {NodeJS.ProcessEnv}
+ */
+let _currentEnv = process.env;
 
 export function loadConfig(env = process.env) {
   const envEntries = parseRepositoryAllowlist(env.RTGV_REPOS ?? "", env);
@@ -64,6 +72,7 @@ export function loadConfig(env = process.env) {
     enforceLoopbackHost: !hostResult.escapeHatchUsed,
   };
   _currentConfig = config;
+  _currentEnv = env;
   return config;
 }
 
@@ -267,7 +276,7 @@ export function addRepository(id, repoPath) {
   }
 
   const addedAt = new Date().toISOString();
-  appendRepo({ id, path: realPath, addedAt });
+  appendRepo({ id, path: realPath, addedAt }, _currentEnv);
 
   /** @type {{ id: string, name: string, path: string, origin: "ui" }} */
   const entry = {
@@ -307,18 +316,9 @@ export function removeRepository(id) {
     throw new Error(`Cannot remove env-origin repository: ${id}`);
   }
 
-  removeRepo(id, process.env, entry.path);
+  removeRepo(id, _currentEnv, entry.path);
   repositories.delete(id);
   return entry;
-}
-
-function isGitWorkingTreeRoot(repoPath) {
-  try {
-    const gitDir = fs.statSync(path.join(repoPath, ".git"));
-    return gitDir.isDirectory() || gitDir.isFile();
-  } catch {
-    return false;
-  }
 }
 
 function parseAllowedOrigins(value) {
