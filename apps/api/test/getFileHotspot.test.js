@@ -453,3 +453,72 @@ test("counts files whose names contain the header separator", async () => {
     fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
+
+// Line counts are read in batches (`cat-file --batch-check` + `--batch`);
+// each path must still get exactly what a per-path `cat-file blob` read under
+// the hotspotMaxBytes cap reported: LF-split line count, or omission.
+test("batched line counts match per-path blob reads for edge-case contents and names", async () => {
+  const repoPath = createTempPath("rtgv-hotspot-batch-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    const files = new Map([
+      ["empty.txt", Buffer.alloc(0)],
+      ["no-final-newline.txt", Buffer.from("a\nb\nc")],
+      ["crlf.txt", Buffer.from("a\r\nb\r\n")],
+      ["only-cr.txt", Buffer.from("a\rb\r")],
+      ["newlines-only.txt", Buffer.from("\n\n\n")],
+      ["binary.bin", Buffer.from([0, 0xff, 0x0a, 0xc3, 0x0a, 0x80, 0xfe])],
+      ["utf8-ü.txt", Buffer.from("ü\n日本語\n")],
+      [" leading-space.txt", Buffer.from("x\n")],
+      ["trailing-space.txt ", Buffer.from("x\ny\n")],
+      ["tab\tname.txt", Buffer.from("t\n")],
+      ["-dash.txt", Buffer.from("d\n")],
+      ["name missing", Buffer.from("m\nm\n")],
+      ["same-a.txt", Buffer.from("dup\ndup\n")],
+      ["same-b.txt", Buffer.from("dup\ndup\n")],
+      ["new\nline.txt", Buffer.from("n\nn\nn\n")],
+      ["at-cap.txt", Buffer.from("y".repeat(4095) + "\n")],
+      ["over-cap.txt", Buffer.from("z\n".repeat(2049))],
+      ["dir/nested.txt", Buffer.from("1\n2\n")],
+      ["deleted.txt", Buffer.from("gone\n")],
+    ]);
+    for (const [relPath, content] of files) {
+      fs.mkdirSync(path.dirname(path.join(repoPath, relPath)), { recursive: true });
+      fs.writeFileSync(path.join(repoPath, relPath), content);
+    }
+    fs.symlinkSync("dir/nested.txt", path.join(repoPath, "link"));
+    git(repoPath, "add", "-A");
+    git(repoPath, "commit", "-m", "feat: seed");
+    git(repoPath, "rm", "-q", "deleted.txt");
+    git(repoPath, "commit", "-m", "chore: delete");
+    const head = git(repoPath, "rev-parse", "HEAD").trim();
+
+    const result = await makeService({ hotspotMaxBytes: 4096 }).getFileHotspot(
+      { id: "demo", name: "demo", path: repoPath },
+      { ref: "HEAD", limit: 500, commitCap: 500, since: null },
+    );
+    assert.equal(result.status, 200);
+
+    const expected = new Map();
+    for (const relPath of [...files.keys(), "link"]) {
+      const read = spawnSync("git", ["cat-file", "blob", `${head}:${relPath}`], {
+        cwd: repoPath,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (read.status !== 0 || read.stdout.length > 4096) continue;
+      const parts = read.stdout.toString("utf8").split("\n");
+      expected.set(relPath, parts[parts.length - 1] === "" ? parts.length - 1 : parts.length);
+    }
+    // Sanity: the fixture exercises both omission paths.
+    assert.equal(expected.has("deleted.txt"), false);
+    assert.equal(expected.has("over-cap.txt"), false);
+    assert.equal(expected.get("at-cap.txt"), 1);
+
+    assert.deepEqual(
+      new Map(result.body.files.map((file) => [file.path, file.lines])),
+      expected,
+    );
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});

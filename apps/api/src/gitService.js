@@ -2182,16 +2182,40 @@ export function createGitService(config) {
       }
 
       /** @type {Map<string, { lines: number } | null>} */
-      const sizeMap = new Map();
+      let sizeMap;
+      try {
+        sizeMap = await readHotspotLineCounts(
+          repo,
+          resolvedOid,
+          allPaths,
+          { timeoutMs: hotspotTimeoutMs, maxBlobBytes: hotspotMaxBytes, deadline },
+        );
+      } catch (err) {
+        // A timeout is the request's budget running out, as for a per-path
+        // read. Any other batch failure falls back to the per-path reads.
+        if (err instanceof GitCommandError && err.timedOut) throw err;
+        if (!(err instanceof GitCommandError) && !(err instanceof HotspotBatchError)) throw err;
+        sizeMap = undefined;
+      }
+      if (sizeMap === null) {
+        return {
+          status: 504,
+          body: { error: "timeout", truncated: true, truncationReason: "timeout" },
+        };
+      }
+      const pendingPaths = sizeMap
+        ? allPaths.filter((p) => !sizeMap.has(p))
+        : allPaths;
+      sizeMap ??= new Map();
 
-      for (let i = 0; i < allPaths.length; i += concurrency) {
+      for (let i = 0; i < pendingPaths.length; i += concurrency) {
         if (Date.now() > deadline) {
           return {
             status: 504,
             body: { error: "timeout", truncated: true, truncationReason: "timeout" },
           };
         }
-        const chunk = allPaths.slice(i, i + concurrency);
+        const chunk = pendingPaths.slice(i, i + concurrency);
         const results = await Promise.all(chunk.map(fetchFileStat));
         for (let j = 0; j < chunk.length; j++) {
           sizeMap.set(chunk[j], results[j]);
@@ -4750,6 +4774,128 @@ export async function getWorktreeDirtyBoolean(repoPath) {
  *
  * @type {number}
  */
+class HotspotBatchError extends Error {}
+
+// Header line of `cat-file --batch-check` for an object that resolved; an
+// unresolved name is echoed back followed by ` missing` (or similar), and an
+// echoed name always starts with the commit OID, never with a type word.
+const BATCH_CHECK_LINE_PATTERN = /^([0-9a-f]{40}|[0-9a-f]{64}) (blob|tree|commit|tag) (\d+)$/;
+// Per-object overhead of `cat-file --batch=%(objectsize)`: the size line
+// (at most 16 digits under the runner's output bound) and the trailing LF.
+const BATCH_OBJECT_OVERHEAD_BYTES = 18;
+
+/**
+ * Line counts for `<oid>:<path>` blobs in two `cat-file` processes instead of
+ * one per path. Matches `cat-file blob <oid>:<path>` read under a
+ * `maxBlobBytes` stdout cap, path by path:
+ *   - a path that does not resolve, or resolves to a tree or gitlink → null
+ *   - a blob larger than `maxBlobBytes` (the per-path read overflowed) → null
+ *   - otherwise `{ lines }`: LF count, plus one for an unterminated last line.
+ * Paths containing LF cannot be framed on stdin; they are left out of the
+ * map so the caller reads them one by one.
+ *
+ * Returns null when `deadline` passed between reads (the caller reports the
+ * request timeout), and throws HotspotBatchError on output it cannot frame.
+ *
+ * @param {{ path: string }} repo
+ * @param {string} commitOid
+ * @param {string[]} paths
+ * @param {{ timeoutMs: number, maxBlobBytes: number, deadline: number }} options
+ * @returns {Promise<Map<string, { lines: number } | null> | null>}
+ */
+async function readHotspotLineCounts(repo, commitOid, paths, { timeoutMs, maxBlobBytes, deadline }) {
+  /** @type {Map<string, { lines: number } | null>} */
+  const result = new Map();
+  const batchPaths = paths.filter((p) => !p.includes("\n"));
+  if (batchPaths.length === 0) return result;
+
+  const { stdout: checkOut } = await runGit(
+    repo,
+    ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+    {
+      timeoutMs,
+      maxBytes: MAX_GIT_OUTPUT_BYTES,
+      input: batchPaths.map((p) => `${commitOid}:${p}\n`).join(""),
+    },
+  );
+  const checkLines = checkOut.split("\n");
+  // One line per input line, plus the empty string after the final LF.
+  if (checkLines.length !== batchPaths.length + 1 || checkLines[batchPaths.length] !== "") {
+    throw new HotspotBatchError("Unexpected cat-file --batch-check output");
+  }
+
+  /** @type {Map<string, number>} blob OID -> size, for blobs within the cap */
+  const blobSizes = new Map();
+  /** @type {Array<[string, string]>} [path, blob OID] */
+  const pathBlobs = [];
+  batchPaths.forEach((filePath, index) => {
+    const match = BATCH_CHECK_LINE_PATTERN.exec(checkLines[index]);
+    if (!match || match[2] !== "blob") {
+      result.set(filePath, null);
+      return;
+    }
+    const size = Number(match[3]);
+    if (size > maxBlobBytes) {
+      result.set(filePath, null);
+      return;
+    }
+    blobSizes.set(match[1], size);
+    pathBlobs.push([filePath, match[1]]);
+  });
+
+  /** @type {Map<string, number>} blob OID -> line count */
+  const blobLines = new Map();
+  const blobs = [...blobSizes.keys()];
+  let start = 0;
+  while (start < blobs.length) {
+    if (Date.now() > deadline) return null;
+    // Keep each read under the runner's output bound; a single blob is at
+    // most maxBlobBytes, which the runner already caps at that bound.
+    let end = start;
+    let expectedBytes = 0;
+    while (end < blobs.length) {
+      const next = blobSizes.get(blobs[end]) + BATCH_OBJECT_OVERHEAD_BYTES;
+      if (end > start && expectedBytes + next > MAX_GIT_OUTPUT_BYTES) break;
+      expectedBytes += next;
+      end += 1;
+    }
+    const chunk = blobs.slice(start, end);
+    const { stdout } = await runGit(repo, ["cat-file", "--batch=%(objectsize)"], {
+      timeoutMs,
+      maxBytes: MAX_GIT_OUTPUT_BYTES,
+      input: chunk.map((oid) => `${oid}\n`).join(""),
+      rawStdout: true,
+    });
+    let offset = 0;
+    for (const oid of chunk) {
+      const headerEnd = stdout.indexOf(0x0a, offset);
+      const size = headerEnd === -1 ? Number.NaN : Number(stdout.toString("latin1", offset, headerEnd));
+      if (size !== blobSizes.get(oid) || headerEnd + 1 + size >= stdout.length) {
+        throw new HotspotBatchError("Unexpected cat-file --batch output");
+      }
+      const contentStart = headerEnd + 1;
+      const contentEnd = contentStart + size;
+      let lines = 0;
+      for (let at = stdout.indexOf(0x0a, contentStart); at !== -1 && at < contentEnd; at = stdout.indexOf(0x0a, at + 1)) {
+        lines += 1;
+      }
+      if (size > 0 && stdout[contentEnd - 1] !== 0x0a) lines += 1;
+      blobLines.set(oid, lines);
+      // Skip the LF that terminates each object's content.
+      offset = contentEnd + 1;
+    }
+    if (offset !== stdout.length) {
+      throw new HotspotBatchError("Unexpected cat-file --batch output");
+    }
+    start = end;
+  }
+
+  for (const [filePath, oid] of pathBlobs) {
+    result.set(filePath, { lines: blobLines.get(oid) });
+  }
+  return result;
+}
+
 const FLEET_GIT_TIMEOUT_MS = 4000;
 const FLEET_CONFIG_LOOKUP_TIMEOUT_MS = 1000;
 
