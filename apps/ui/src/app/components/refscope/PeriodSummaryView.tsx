@@ -367,7 +367,7 @@ function DerivedZone({
       </div>
 
       {loading ? (
-        <p style={{ fontSize: 12, color: "var(--rs-text-muted)" }}>Loading summary…</p>
+        <p role="status" style={{ fontSize: 12, color: "var(--rs-text-muted)" }}>Loading summary…</p>
       ) : empty ? (
         <p style={{ fontSize: 12, color: "var(--rs-text-muted)" }}>No commits in this period.</p>
       ) : visibleGroups.length === 0 ? (

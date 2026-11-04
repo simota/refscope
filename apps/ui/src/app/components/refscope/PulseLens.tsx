@@ -208,7 +208,7 @@ function kindTooltip(k: FileKind): string {
 function PulseHelpContent() {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)' }}>
         Pulse Lens とは
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -216,7 +216,7 @@ function PulseHelpContent() {
         1 カード = 1 ファイル。ログ的な「Activity」ではなく、リポジトリが今動いている感覚を映します。
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         カードの読み方
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
@@ -228,7 +228,7 @@ function PulseHelpContent() {
         ・カードのアクセント帯（左縦線）= ファイル種別 (kind)
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         対象データ
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -236,7 +236,7 @@ function PulseHelpContent() {
         累計 +N / -N も同じ範囲の合計です。
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         live indicator
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
@@ -245,7 +245,7 @@ function PulseHelpContent() {
         ・<span style={{ color: 'var(--rs-warning)' }}>赤</span>: 切断 (新しい変更は記録されません)
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         操作
       </div>
       <div style={{ color: 'var(--rs-text-secondary)' }}>
@@ -257,7 +257,7 @@ function PulseHelpContent() {
         ・右側の "Recent changes" リスト → コミット選択
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, marginTop: 8, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, marginTop: 8, color: 'var(--rs-text-primary)' }}>
         凡例 (kind アクセント帯)
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', fontSize: 11 }}>

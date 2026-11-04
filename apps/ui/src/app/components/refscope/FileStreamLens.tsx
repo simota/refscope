@@ -169,7 +169,7 @@ const STREAM_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>>
 function StreamHelpContent() {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)' }}>
         Stream Lens の見方
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -178,7 +178,7 @@ function StreamHelpContent() {
         コミットの変更ファイルを 1 行 1 件で表示します。新着は薄く強調され、
         数秒で落ち着きます。
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         左バッジ (status)
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -187,14 +187,14 @@ function StreamHelpContent() {
         <span style={{ fontFamily: 'var(--rs-mono)' }}>D</span> 削除 ·{' '}
         <span style={{ fontFamily: 'var(--rs-mono)' }}>R</span> 名前変更
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         小さな丸 (kind)
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
         ファイル種別を Pulse と共通の色語彙で示します
         (Code / Test / Doc / Config / Build / Asset / Other)。
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         ヘッダ
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -776,7 +776,7 @@ export function FileStreamLens({
                   height: 40,
                   borderRadius: 6,
                   background: sColor,
-                  color: 'white',
+                  color: 'oklch(15% 0.02 255)', // dark ink: white on status tints was < 3:1
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -857,7 +857,7 @@ export function FileStreamLens({
                         padding: '2px 7px',
                         borderRadius: 999,
                         background: 'var(--rs-accent)',
-                        color: 'white',
+                        color: 'oklch(15% 0.02 255)', // dark ink: white on accent was 2.42:1
                         fontFamily: 'var(--rs-sans)',
                         textTransform: 'uppercase',
                       }}
@@ -963,10 +963,9 @@ export function FileStreamLens({
 
       {/* Screen-reader live region — 視覚的非表示 ul に直近 5 件を流す。
           Pulse Lens と同じ規格で SR ユーザにも新着が伝わるようにする。 */}
-      <ul
+      <div
         role="status"
         aria-live="polite"
-        aria-label="直近の変更"
         style={{
           position: 'absolute',
           width: 1,
@@ -979,13 +978,15 @@ export function FileStreamLens({
           border: 0,
         }}
       >
-        {allEntries.slice(0, 5).map((entry) => (
-          <li key={entry.id}>
-            {statusLabelJa(entry.status)}: {entry.path} (
-            {entry.isWorkingTree ? '作業ツリー' : entry.commitShortHash})
-          </li>
-        ))}
-      </ul>
+        <ul aria-label="直近の変更">
+          {allEntries.slice(0, 5).map((entry) => (
+            <li key={entry.id}>
+              {statusLabelJa(entry.status)}: {entry.path} (
+              {entry.isWorkingTree ? '作業ツリー' : entry.commitShortHash})
+            </li>
+          ))}
+        </ul>
+      </div>
 
       {/* Right-click context menu */}
       <FileContextMenu
@@ -1211,6 +1212,7 @@ function SummaryStat({
 function EmptyState({ message }: { message: string }) {
   return (
     <div
+      role="status"
       style={{
         display: 'flex',
         alignItems: 'center',

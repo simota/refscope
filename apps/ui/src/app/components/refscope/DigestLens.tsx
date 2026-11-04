@@ -183,7 +183,7 @@ const DIGEST_EMPTY_MESSAGES: Partial<Record<LensEmptyReason, EmptyStateMessage>>
 function DigestHelpContent(): ReactNode {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)' }}>
         Digest Lens とは
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -191,7 +191,7 @@ function DigestHelpContent(): ReactNode {
         毎朝最初に開いて<strong>今日レビューすべきコミット・ファイル・ブランチ</strong>を一望する用途を想定しています。
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         4 ペインの意味
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
@@ -201,7 +201,7 @@ function DigestHelpContent(): ReactNode {
         ・<strong>Ref Activity</strong>: 期間内に更新された ref の件数
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         用語 glossary
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
@@ -213,7 +213,7 @@ function DigestHelpContent(): ReactNode {
         <span style={{ color: ROT_SCORE_COLORS.critical }}>critical</span>: ≥{RISK_HIGH_THRESHOLD}
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         Ref Activity の API 制限
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -223,7 +223,7 @@ function DigestHelpContent(): ReactNode {
         Phase 2 で SSE 連動の積算を予定しています。
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         操作
       </div>
       <div style={{ color: 'var(--rs-text-secondary)' }}>
@@ -273,11 +273,10 @@ const ROW_STYLE: CSSProperties = {
   padding: '5px 0',
   fontSize: 12,
   fontFamily: 'var(--rs-sans)',
-  color: 'var(--rs-text)',
+  color: 'var(--rs-text-primary)',
   borderBottom: '1px solid color-mix(in oklab, var(--rs-border), transparent 50%)',
   cursor: 'pointer',
   minWidth: 0,
-  outline: 'none',
 };
 
 const RANK_STYLE: CSSProperties = {
@@ -507,7 +506,7 @@ function RefActivityPane({
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
             <span style={{ color: 'var(--rs-text-secondary)' }}>Updated refs</span>
-            <strong style={{ color: 'var(--rs-text)' }}>{activity.updated}</strong>
+            <strong style={{ color: 'var(--rs-text-primary)' }}>{activity.updated}</strong>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
             <span style={{ color: 'var(--rs-text-secondary)' }}>New refs</span>
@@ -586,7 +585,7 @@ export function DigestLens({
         const sinceMs = Date.parse(since);
         const riskyCommits = allCommits
           .filter((c) => {
-            const ts = Date.parse(c.authorDate);
+            const ts = Date.parse(c.authorDate ?? "");
             return Number.isFinite(ts) && ts >= sinceMs && (c.riskScore ?? 0) > 0;
           })
           .sort((a, b) => (b.riskScore ?? 0) - (a.riskScore ?? 0))
@@ -667,7 +666,7 @@ export function DigestLens({
     flexDirection: 'column',
     height: '100%',
     background: 'var(--rs-bg-panel)',
-    color: 'var(--rs-text)',
+    color: 'var(--rs-text-primary)',
     fontFamily: 'var(--rs-sans)',
     overflow: 'hidden',
   };
@@ -812,6 +811,7 @@ export function DigestLens({
           }}
         >
           <div
+            role="alert"
             style={{
               maxWidth: 440,
               padding: '20px 24px',

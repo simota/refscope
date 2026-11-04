@@ -905,6 +905,7 @@ function RelatedFilesPanel({
         <div className="px-2 pb-3" style={{ paddingTop: 2 }}>
           {loading ? (
             <div
+              role="status"
               className="px-2 py-2"
               style={{ fontSize: 11, color: "var(--rs-text-muted)" }}
             >
@@ -1403,7 +1404,7 @@ function backgroundForLine(line: DiffLine): string {
 
 function Empty({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-4 py-6" style={{ fontSize: 12, color: "var(--rs-text-muted)" }}>
+    <div role="status" className="px-4 py-6" style={{ fontSize: 12, color: "var(--rs-text-muted)" }}>
       {children}
     </div>
   );

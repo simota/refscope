@@ -172,7 +172,7 @@ function recencyToColor(recency: number): string {
 function CoChangeHelpContent() {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)' }}>
         Co-change グラフとは
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -182,7 +182,7 @@ function CoChangeHelpContent() {
         エッジの色は <strong>最後に共変化した時刻の新しさ</strong> を表します
         (赤=新しい、グレー=古い)。
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         操作
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -494,7 +494,7 @@ export function CoChangeLens({
                   border: '1px solid var(--rs-border)',
                   borderRadius: 'var(--rs-radius-sm)',
                   background: active ? 'var(--rs-accent)' : 'transparent',
-                  color: active ? 'var(--rs-bg-panel)' : 'var(--rs-text)',
+                  color: active ? 'var(--rs-bg-panel)' : 'var(--rs-text-primary)',
                   fontFamily: 'var(--rs-mono)',
                   fontSize: 11,
                   cursor: 'pointer',
@@ -596,7 +596,7 @@ export function CoChangeLens({
                 border: '1px solid var(--rs-border)',
                 borderRadius: 'var(--rs-radius-sm)',
                 background: 'transparent',
-                color: 'var(--rs-text)',
+                color: 'var(--rs-text-primary)',
                 fontFamily: 'var(--rs-sans)',
                 fontSize: 10,
                 cursor: 'pointer',
@@ -645,6 +645,7 @@ export function CoChangeLens({
           }}
         >
           <div
+            role="alert"
             style={{
               maxWidth: 440,
               padding: '20px 24px',
@@ -896,7 +897,7 @@ export function CoChangeLens({
                 : 'var(--rs-border)';
               const textColor = node.isCenter
                 ? 'var(--rs-bg-panel)'
-                : 'var(--rs-text)';
+                : 'var(--rs-text-primary)';
               const label = shortPath(node.path);
 
               return (

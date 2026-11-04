@@ -494,6 +494,7 @@ function MessageWindow({
             anchorX="left"
             anchorY="top"
             renderOrder={ro + 3}
+            // @ts-expect-error drei's Text typings omit toneMapped; kept as-is so runtime output is unchanged.
             toneMapped={false}
           >
             {statusGlyph(point.meta.status)}
@@ -519,6 +520,7 @@ function MessageWindow({
             maxWidth={CARD_W - MAXW_REDUCE_BODY - FONT_BASENAME * 1.1}
             overflowWrap="break-word"
             renderOrder={ro + 3}
+            // @ts-expect-error drei's Text typings omit toneMapped; kept as-is so runtime output is unchanged.
             toneMapped={false}
           >
             {point.basename}
@@ -535,6 +537,7 @@ function MessageWindow({
             anchorY="top"
             maxWidth={CARD_W - MAXW_REDUCE_SUBJECT - SUBJECT_RIGHT_RESERVE}
             renderOrder={ro + 3}
+            // @ts-expect-error drei's Text typings omit toneMapped; kept as-is so runtime output is unchanged.
             toneMapped={false}
             overflowWrap="break-word"
           >
@@ -555,6 +558,7 @@ function MessageWindow({
             anchorX="right"
             anchorY="bottom"
             renderOrder={ro + 3}
+            // @ts-expect-error drei's Text typings omit toneMapped; kept as-is so runtime output is unchanged.
             toneMapped={false}
           >
             {`+${point.meta.added}`}
@@ -574,6 +578,7 @@ function MessageWindow({
             anchorX="right"
             anchorY="bottom"
             renderOrder={ro + 3}
+            // @ts-expect-error drei's Text typings omit toneMapped; kept as-is so runtime output is unchanged.
             toneMapped={false}
           >
             {`−${point.meta.deleted}`}
@@ -588,6 +593,7 @@ function MessageWindow({
             anchorX="left"
             anchorY="bottom"
             renderOrder={ro + 3}
+            // @ts-expect-error drei's Text typings omit toneMapped; kept as-is so runtime output is unchanged.
             toneMapped={false}
           >
             {`${point.meta.shortHash} · ${relativeTimeFromTs(point.ts)}`}
@@ -609,6 +615,7 @@ function MessageWindow({
             anchorY="middle"
             maxWidth={CARD_W * 0.7}
             renderOrder={ro + 3}
+            // @ts-expect-error drei's Text typings omit toneMapped; kept as-is so runtime output is unchanged.
             toneMapped={false}
           >
             {point.basename}
@@ -627,6 +634,7 @@ function MessageWindow({
               anchorX="right"
               anchorY="middle"
               renderOrder={ro + 3}
+              // @ts-expect-error drei's Text typings omit toneMapped; kept as-is so runtime output is unchanged.
               toneMapped={false}
             >
               {'✦ NEW'}
@@ -642,6 +650,7 @@ function MessageWindow({
                 anchorY="middle"
                 maxWidth={CARD_W * 0.5}
                 renderOrder={ro + 3}
+                // @ts-expect-error drei's Text typings omit toneMapped; kept as-is so runtime output is unchanged.
                 toneMapped={false}
               >
                 {point.parentDir.length > 22

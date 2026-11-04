@@ -56,7 +56,7 @@ const FLEET_WINDOWS: FleetWindow[] = ["1h", "6h", "24h", "7d"];
 function FleetGlyphLegend({ isCvdSafe }: { isCvdSafe: boolean }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, fontFamily: "var(--rs-sans)" }}>
-      <div style={{ fontWeight: 600, color: "var(--rs-text)" }}>Glyph legend</div>
+      <div style={{ fontWeight: 600, color: "var(--rs-text-primary)" }}>Glyph legend</div>
       <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: 12, lineHeight: 1.5 }}>
         <li>
           <span style={{ display: "inline-block", width: 16, fontFamily: "var(--rs-mono)", color: "var(--rs-git-added)" }}>
@@ -748,7 +748,7 @@ export function FleetSurface({
               fontFamily: "var(--rs-sans)",
               fontSize: 13,
               fontWeight: 600,
-              color: "var(--rs-text)",
+              color: "var(--rs-text-primary)",
             }}
           >
             Fleet
@@ -796,7 +796,7 @@ export function FleetSurface({
                     border: "none",
                     borderRight: w === "7d" ? undefined : "1px solid var(--rs-border)",
                     background: active ? "var(--rs-accent)" : "transparent",
-                    color: active ? "var(--rs-bg)" : "var(--rs-text-secondary)",
+                    color: active ? "var(--rs-bg-canvas)" : "var(--rs-text-secondary)",
                     cursor: "pointer",
                     fontWeight: active ? 600 : 400,
                   }}
@@ -857,6 +857,7 @@ export function FleetSurface({
       {/* Loading state */}
       {!snapshot && !error && (
         <div
+          role="status"
           style={{
             padding: "12px",
             fontSize: 12,

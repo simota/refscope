@@ -601,7 +601,7 @@ function CompareBar({
                   fontSize: 11,
                   borderRadius: "var(--rs-radius-sm)",
                   border: "1px solid var(--rs-border)",
-                  background: "var(--rs-bg-input, var(--rs-bg-elevated))",
+                  background: "var(--rs-bg-elevated)",
                   color: "var(--rs-text-primary)",
                 }}
               />
@@ -609,7 +609,7 @@ function CompareBar({
             </label>
           </div>
           {cherryError ? (
-            <CompareSummary>Cherry-pick check failed: {cherryError}</CompareSummary>
+            <CompareSummary role="alert">Cherry-pick check failed: {cherryError}</CompareSummary>
           ) : null}
           {cherry ? <CherryStatus cherry={cherry} threshold={threshold} /> : null}
         </>
@@ -773,7 +773,7 @@ function CherryDiffHunks({ hunks, truncated }: { hunks: string; truncated?: bool
         marginTop: 4,
         padding: "4px 6px",
         borderRadius: "var(--rs-radius-sm)",
-        background: "var(--rs-bg-input, var(--rs-bg-panel))",
+        background: "var(--rs-bg-panel)",
         border: "1px solid var(--rs-border)",
         overflow: "auto",
         maxHeight: 200,
@@ -1138,9 +1138,9 @@ function CompareSelect({
   );
 }
 
-function CompareSummary({ children }: { children: ReactNode }) {
+function CompareSummary({ children, role }: { children: ReactNode; role?: "alert" | "status" }) {
   return (
-    <div className="mt-2" style={{ color: "var(--rs-text-secondary)", fontSize: 12 }}>
+    <div role={role} className="mt-2" style={{ color: "var(--rs-text-secondary)", fontSize: 12 }}>
       {children}
     </div>
   );
@@ -1245,6 +1245,7 @@ function MessageBanner({
 function StateMessage({ title, message }: { title: string; message: string }) {
   return (
     <div
+      role="status"
       className="m-4 rounded-md px-4 py-5"
       style={{
         background: "var(--rs-bg-panel)",
@@ -1364,7 +1365,7 @@ function CommitRow({
           >
             {commit.hash.slice(0, 7)}
           </span>
-          <ConventionalSubject subject={commit.subject} bold={commit.isMerge} />
+          <ConventionalSubject subject={commit.subject} bold={commit.isMerge === true} />
           {commit.isNew ? <Badge tone="accent" ariaLabel="New commit from live update">New</Badge> : null}
           {commit.isMerge ? (
             <Badge tone="merge" ariaLabel="Merge commit">
@@ -1488,7 +1489,7 @@ function CommitRow({
  *   treatment is intentionally distinct from a committed `CommitRow` so
  *   users never confuse uncommitted state for history.
  * - The row is keyboard-accessible (Enter/Space) and exposes
- *   `aria-pressed` so assistive tech reads selection state correctly.
+ *   `aria-current` (same as CommitRow) so assistive tech reads selection state.
  */
 function WorkTreeRow({
   workTree,
@@ -1511,10 +1512,12 @@ function WorkTreeRow({
   const unstagedFiles = workTree.unstaged.summary.fileCount;
 
   return (
+    // Same row pattern as CommitRow (listitem + aria-current): a role="button"
+    // row broke the parent list and nested the Refresh button in a button.
     <li
-      role="button"
+      role="listitem"
       tabIndex={0}
-      aria-pressed={selected}
+      aria-current={selected ? "true" : undefined}
       aria-label={`Working tree: ${totalFiles} files changed (staged ${stagedFiles}, unstaged ${unstagedFiles}). Not yet committed.`}
       onClick={onSelect}
       onKeyDown={(e) => {
@@ -1654,7 +1657,7 @@ function WorkTreeRow({
               e.stopPropagation();
             }
           }}
-          style={{ width: 22, height: 22 }}
+          style={{ width: 24, height: 24 }}
         >
           <RefreshCw size={12} aria-hidden />
         </button>
@@ -1762,10 +1765,10 @@ const CONVENTIONAL_TYPE_COLORS: Record<string, string> = {
   refactor: "var(--rs-git-modified)",
   docs: "var(--rs-accent)",
   test: "var(--rs-git-merge)",
-  build: "var(--rs-text-muted)",
-  ci: "var(--rs-text-muted)",
-  chore: "var(--rs-text-muted)",
-  style: "var(--rs-text-muted)",
+  build: "var(--rs-text-secondary)",
+  ci: "var(--rs-text-secondary)",
+  chore: "var(--rs-text-secondary)",
+  style: "var(--rs-text-secondary)",
   revert: "var(--rs-git-deleted)",
 };
 
@@ -1804,7 +1807,8 @@ function ConventionalSubject({
           fontFamily: "var(--rs-mono)",
           height: 18,
           color: tint,
-          background: `color-mix(in oklab, var(--rs-bg-elevated), ${tint} 18%)`,
+          // 12% fill keeps 10px tinted text >= 4.5:1 (fix: 4.87:1).
+          background: `color-mix(in oklab, var(--rs-bg-elevated), ${tint} 12%)`,
           border: `1px solid color-mix(in oklab, var(--rs-border), ${tint} 45%)`,
           flexShrink: 0,
         }}
@@ -1980,6 +1984,11 @@ function CommitKindFilterBar({
           background: "transparent",
           border: "none",
           padding: 0,
+          // WCAG 2.5.8: a 24x24 hit area around the small "?" glyph.
+          minWidth: 24,
+          minHeight: 24,
+          display: "inline-grid",
+          placeItems: "center",
         }}
         aria-label="Classification criteria"
       >

@@ -28,7 +28,9 @@ export function lazyWithPreload<P extends object>(
     );
     return pending;
   };
-  const Lazy = lazy(() => preload().then((component) => ({ default: component })));
+  // React's lazy() typings widen props to PropsWithRef<P>; the wrapper only
+  // ever forwards P, so narrow it back to the component type it renders.
+  const Lazy = lazy(() => preload().then((component) => ({ default: component }))) as unknown as ComponentType<P>;
 
   function LazyWithPreload(props: P) {
     const [Direct] = useState(() => loaded);

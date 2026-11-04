@@ -38,7 +38,8 @@ export function riskBadgeStyle(score: number): CSSProperties | null {
     fontSize: 9,
     fontFamily: 'var(--rs-mono)',
     fontWeight: 600,
-    background: `color-mix(in oklab, var(--rs-bg-elevated), ${color} 25%)`,
+    // 12% fill keeps the 9px score >= 4.5:1 (critical 4.87:1, warning 6.54:1).
+    background: `color-mix(in oklab, var(--rs-bg-elevated), ${color} 12%)`,
     color,
     border: `1px solid ${color}`,
   };

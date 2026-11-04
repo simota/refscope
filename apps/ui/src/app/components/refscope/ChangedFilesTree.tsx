@@ -100,8 +100,21 @@ function TreeRow({
               role="treeitem"
               aria-expanded={isOpen}
               aria-level={depth + 1}
+              tabIndex={0}
               className="flex items-center gap-2 cursor-pointer"
               onClick={() => onToggle(node.fullPath)}
+              onKeyDown={(event) => {
+                // WAI-ARIA tree: Enter/Space toggle, Right opens, Left closes.
+                const toggleKey = event.key === "Enter" || event.key === " ";
+                if (
+                  toggleKey ||
+                  (event.key === "ArrowRight" && !isOpen) ||
+                  (event.key === "ArrowLeft" && isOpen)
+                ) {
+                  event.preventDefault();
+                  onToggle(node.fullPath);
+                }
+              }}
               style={{
                 height: ROW_HEIGHT,
                 fontSize: 12,

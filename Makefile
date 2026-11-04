@@ -10,7 +10,7 @@ MAX_ITERATIONS ?= 30
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install dev dev-self dev-app dev-api dev-ui validate-repos build build-api build-ui test test-api verify audit orbit recover clean status
+.PHONY: help install dev dev-self dev-app dev-api dev-ui validate-repos build build-api build-ui test test-api typecheck verify audit orbit recover clean status
 
 help:
 	@printf "Realtime Git Viewer commands\n\n"
@@ -27,6 +27,7 @@ help:
 	@printf "  make build-api                       Syntax-check API\n"
 	@printf "  make build-ui                        Build UI\n"
 	@printf "  make test                            Run configured tests\n"
+	@printf "  make typecheck                       Type-check the UI (tsc --noEmit, strict)\n"
 	@printf "  make verify                          Run full Orbit verification gate\n"
 	@printf "  make audit                           Run high-severity dependency audit\n"
 	@printf "\nAutomation:\n"
@@ -86,6 +87,9 @@ build-ui:
 
 test:
 	$(PNPM) test
+
+typecheck:
+	$(PNPM) typecheck
 
 test-api:
 	$(PNPM) --filter @realtime-git-viewer/api test

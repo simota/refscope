@@ -86,7 +86,7 @@ function shortHash(hash: string): string {
 function RescueHelpContent(): ReactNode {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--rs-text)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--rs-text-primary)" }}>
         Rewrite Rescue とは
       </div>
       <div style={{ color: "var(--rs-text-secondary)", marginBottom: 8 }}>
@@ -97,7 +97,7 @@ function RescueHelpContent(): ReactNode {
         <strong> Ref Incident Flight Recorder</strong> が担当します。
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text-primary)" }}>
         用語
       </div>
       <div style={{ color: "var(--rs-text-secondary)", marginBottom: 8, lineHeight: 1.7 }}>
@@ -109,7 +109,7 @@ function RescueHelpContent(): ReactNode {
         現在の作業を壊さずに過去の状態を確認できる
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text-primary)" }}>
         制約
       </div>
       <div style={{ color: "var(--rs-text-secondary)", marginBottom: 8, lineHeight: 1.7 }}>
@@ -120,7 +120,7 @@ function RescueHelpContent(): ReactNode {
         ・最大 <strong>{MAX_SNAPSHOTS}</strong> 件まで保持。新しい順に並び、上限超過時は古いものから自動で破棄されます
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text-primary)" }}>
         操作
       </div>
       <div style={{ color: "var(--rs-text-secondary)" }}>
@@ -269,7 +269,6 @@ function RescueEntryCard({
             cursor: "pointer",
             textAlign: "left",
             color: "var(--rs-text-primary)",
-            outline: "none",
           }}
           aria-expanded={expanded}
           aria-label={`${entry.branch}: rewrite ${shortHash(entry.previousHash)} → ${shortHash(entry.currentHash)} at ${formatTimestamp(entry.observedAt)}. Enter to ${expanded ? "collapse" : "expand"} commands`}
@@ -338,7 +337,6 @@ function RescueEntryCard({
               borderLeft: "1px solid var(--rs-border)",
               color: "var(--rs-text-muted)",
               cursor: "pointer",
-              outline: "none",
             }}
           >
             <Trash2 size={12} aria-hidden="true" />

@@ -1892,6 +1892,7 @@ function GroupPrefixBar({
           <input
             autoFocus
             type="text"
+            aria-label="Branch group prefix"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {

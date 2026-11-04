@@ -29,7 +29,7 @@ type LoadState =
 function helpContent(): ReactNode {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--rs-text)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--rs-text-primary)" }}>
         Ref Incident Flight Recorder とは
       </div>
       <div style={{ color: "var(--rs-text-secondary)", lineHeight: 1.6, marginBottom: 8 }}>
@@ -269,7 +269,7 @@ function EventRow({ event }: { event: RefFlightEvent }) {
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <strong style={{ color: "var(--rs-text)", fontSize: 13 }}>{eventLabel(event.type)}</strong>
+            <strong style={{ color: "var(--rs-text-primary)", fontSize: 13 }}>{eventLabel(event.type)}</strong>
             <code style={{ color: "var(--rs-accent)", fontSize: 12 }}>
               {shortRefName(event.ref.name)}
             </code>
@@ -309,7 +309,7 @@ function EventRow({ event }: { event: RefFlightEvent }) {
             >
               <div
                 style={{
-                  color: "var(--rs-text)",
+                  color: "var(--rs-text-primary)",
                   fontSize: 11,
                   fontWeight: 700,
                   marginBottom: 7,
@@ -338,7 +338,7 @@ function EventRow({ event }: { event: RefFlightEvent }) {
             >
               <div
                 style={{
-                  color: "var(--rs-text)",
+                  color: "var(--rs-text-primary)",
                   fontSize: 11,
                   fontWeight: 700,
                   marginBottom: 7,

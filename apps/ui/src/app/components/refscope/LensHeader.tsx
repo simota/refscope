@@ -41,7 +41,7 @@ export function LensHeader({
             fontFamily: 'var(--rs-sans)',
             fontSize: 13,
             fontWeight: 600,
-            color: 'var(--rs-text)',
+            color: 'var(--rs-text-primary)',
           }}
         >
           {title}
@@ -96,7 +96,7 @@ export function LensHeader({
 export function RiskScoreLegend() {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)' }}>
         riskScore とは
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>

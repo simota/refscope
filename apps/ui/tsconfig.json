@@ -1,0 +1,22 @@
+{
+  // Type-check only: Vite (esbuild) transpiles; `pnpm typecheck` runs tsc.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src"],
+  // Figma Code Connect files are validated by the Figma CLI (figma.config.json),
+  // not bundled into the app.
+  "exclude": ["src/**/*.figma.tsx"]
+}
