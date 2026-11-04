@@ -549,14 +549,22 @@ export function CommandPalette({
   }, [active, filtered, open, onClose]);
 
   // Return focus to whatever opened the palette, unless the command that ran
-  // already moved focus somewhere meaningful (anything but <body>).
+  // already moved focus somewhere meaningful (anything but <body>). The opener
+  // is captured during the render that opens the palette: by the time an
+  // effect runs, the input's autoFocus has already moved focus into it.
+  const openerRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+  if (open && !wasOpenRef.current) {
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+  wasOpenRef.current = open;
   useEffect(() => {
     if (!open) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const opener = openerRef.current;
     return () => {
       const current = document.activeElement;
-      if (previous && previous.isConnected && (!current || current === document.body)) {
-        previous.focus();
+      if (opener && opener.isConnected && (!current || current === document.body)) {
+        opener.focus();
       }
     };
   }, [open]);

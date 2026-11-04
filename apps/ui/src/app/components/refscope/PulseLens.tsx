@@ -996,7 +996,7 @@ export function PulseLens({
           {/* React.lazy でロードされる 3D ステージ */}
           <Suspense
             fallback={
-              <div className="rs-pulse-stage__empty">
+              <div role="status" className="rs-pulse-stage__empty">
                 Loading 3D field…
               </div>
             }

@@ -13,7 +13,7 @@
  *   左下 "Aligned" / 左上 "Hot" / 右下 "Stale" / 右上 "Diverged"
  * - 点クリック または Enter / Space → onSelectRef(refName) + onChangeLens('risk-trend')
  *
- * a11y: SVG 全体に role="img" + aria-label、視覚非表示の <ul> で SR 用テキスト経路を提供。
+ * a11y: チャート全体に role="group" + aria-label、視覚非表示の <ul> で SR 用テキスト経路を提供。
  * 各点に tabIndex + onKeyDown を設定し、キーボードで点間移動 (Tab) + 選択 (Enter/Space) 可能。
  *
  * 仕様変更 (PR-B): API を fetchRefDrift → fetchBranchGroupHealth に切替。
@@ -664,7 +664,8 @@ export function DriftLens({
 
       <div
         style={{ flex: 1, minHeight: 0, padding: '12px 8px 8px' }}
-        role="img"
+        // "group", not "img": the branch dots inside are focusable buttons.
+        role="group"
         aria-label={
           `Drift scatter chart: ${points.length} local branches plotted by ahead and behind ` +
           `commits against base ${base}.`

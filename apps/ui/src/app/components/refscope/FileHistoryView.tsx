@@ -214,7 +214,10 @@ export function FileHistoryView({
     const el = articleRefs.current.get(hash);
     if (!el) return;
     setActiveHash(hash);
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    // A JS-requested smooth scroll is not overridden by the CSS
+    // `scroll-behavior` reduced-motion floor, so honour the setting here.
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
   }, []);
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {

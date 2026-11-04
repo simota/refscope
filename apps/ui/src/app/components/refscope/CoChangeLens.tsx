@@ -10,7 +10,7 @@
  * - Enter キー → シングルクリック相当 (中心入れ替え)
  * - d3-force: manyBody + link + center の minimal セットアップ
  *
- * a11y: 各ノードに tabIndex + onKeyDown を設定。SVG 全体に role="img" と
+ * a11y: 各ノードに tabIndex + onKeyDown を設定。SVG 全体に role="group" と
  * aria-describedby、視覚非表示の <ul> で SR 用テキスト経路を提供する。
  */
 
@@ -817,7 +817,9 @@ export function CoChangeLens({
             opacity: loading ? 0.4 : 1,
             transition: 'opacity 150ms ease-out',
           }}
-          role="img"
+          // "group", not "img": an img's children are presentational, which
+          // hid the focusable role="button" nodes from assistive tech.
+          role="group"
           aria-label={
             centerPath
               ? `Co-change グラフ。中心 ${shortPath(centerPath)}、関連 ${nodes.length - 1} 件。`
