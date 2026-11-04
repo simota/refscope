@@ -239,12 +239,18 @@ export function createGitService(config) {
   const _cacheGenerations = new Map();
   /** @type {Map<string, Promise<void>>} */
   const _hotspotRefreshes = new Map();
+  // Per repo, what the live poller learned about each object its refs name
+  // (see readPolledRefs). Replaced on every poll, so it never holds more
+  // entries than the repository has refs.
+  /** @type {Map<string, { generation: number, refCount: number, details: Map<string, { hash: string, updatedAt: string | null, nestedTag: boolean }> }>} */
+  const _refPollCaches = new Map();
 
   function forgetRepositoryCaches(id) {
     _hotspotCache.delete(id);
     _refFlightLogs.delete(id);
     _refFlightStates.delete(id);
     _hotspotRefreshes.delete(id);
+    _refPollCaches.delete(id);
     _cacheGenerations.set(id, (_cacheGenerations.get(id) ?? 0) + 1);
   }
 
@@ -308,6 +314,112 @@ export function createGitService(config) {
     );
 
     return peelNestedTags(repo, parsePublicRefLines(stdout), config.gitTimeoutMs);
+  }
+
+  /**
+   * The ref list for the live poller. Identical to `listRefs`, but for large
+   * ref sets it avoids the per-object reads that dominate `listRefs`
+   * (`%(committerdate)` and `%(*...)` parse every commit and tag object):
+   *
+   * 1. Read only what the ref store holds: name, object, symref target.
+   * 2. A ref's hash and date depend only on the object it names, so refs
+   *    naming an object seen by the previous read are rebuilt from a
+   *    per-object cache.
+   * 3. Refs naming other objects get one full-format read by exact name.
+   *    When many refs changed at once, one plain `listRefs` is cheaper.
+   *
+   * Small ref sets skip this: there, one `listRefs` costs no more than the
+   * extra Git process step 3 would add.
+   *
+   * @param {{ id: string, path: string }} repo
+   */
+  async function readPolledRefs(repo) {
+    const generation = _cacheGenerations.get(repo.id) ?? 0;
+    const cache = _refPollCaches.get(repo.id);
+    if (!cache || cache.generation !== generation || cache.refCount < REF_POLL_PRECHECK_MIN_REFS) {
+      const refs = await listRefs(repo);
+      storeRefPollCache(repo.id, generation, refs);
+      return refs;
+    }
+
+    const { stdout } = await runGit(
+      repo,
+      ["for-each-ref", REF_STORE_FORMAT, "refs/heads", "refs/tags", "refs/remotes"],
+      { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
+    );
+    const entries = parseRefStoreLines(stdout);
+    const unknownNames = [];
+    let unknownNameBytes = 0;
+    for (const entry of entries) {
+      if (!cache.details.has(entry.objectHash)) {
+        unknownNames.push(entry.name);
+        unknownNameBytes += entry.name.length;
+      }
+    }
+
+    /** @type {Map<string, any>} */
+    let readByName = new Map();
+    if (unknownNames.length > 0) {
+      if (
+        unknownNames.length > entries.length / 4 ||
+        unknownNameBytes > REF_POLL_TARGETED_MAX_ARG_BYTES
+      ) {
+        const refs = await listRefs(repo);
+        storeRefPollCache(repo.id, generation, refs);
+        return refs;
+      }
+      // An exact ref name is also a prefix pattern (refs/heads/a matches
+      // refs/heads/a/b); only exact matches are kept below.
+      const { stdout: targeted } = await runGit(
+        repo,
+        ["for-each-ref", PUBLIC_REF_FORMAT, ...unknownNames],
+        { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
+      );
+      const read = await peelNestedTags(repo, parsePublicRefLines(targeted), config.gitTimeoutMs);
+      readByName = new Map(read.map((ref) => [ref.name, ref]));
+    }
+
+    const refs = [];
+    for (const entry of entries) {
+      const details = cache.details.get(entry.objectHash);
+      if (details) {
+        const ref = buildPublicRef(
+          entry.name,
+          details.hash,
+          details.updatedAt,
+          entry.symref,
+          details.nestedTag,
+        );
+        Object.defineProperty(ref, "objectHash", { value: entry.objectHash, enumerable: false });
+        if (details.nestedTag) fullyPeeledRefs.add(ref);
+        refs.push(ref);
+        continue;
+      }
+      // Missing here means the ref was deleted (or became a hidden symref)
+      // between the two reads; the full read would not list it either.
+      const ref = readByName.get(entry.name);
+      if (ref) refs.push(ref);
+    }
+    storeRefPollCache(repo.id, generation, refs);
+    return refs;
+  }
+
+  function storeRefPollCache(repoId, generation, refs) {
+    // Only a read made under the current registration may fill the cache.
+    if ((_cacheGenerations.get(repoId) ?? 0) !== generation) return;
+    /** @type {Map<string, { hash: string, updatedAt: string | null, nestedTag: boolean }>} */
+    const details = new Map();
+    // Small ref sets always take the full read; nothing would use the map.
+    for (const ref of refs.length >= REF_POLL_PRECHECK_MIN_REFS ? refs : []) {
+      // A tag chain that failed to peel is retried by the next read.
+      if (ref.nestedTag && !fullyPeeledRefs.has(ref)) continue;
+      details.set(ref.objectHash, {
+        hash: ref.hash,
+        updatedAt: ref.updatedAt,
+        nestedTag: Boolean(ref.nestedTag),
+      });
+    }
+    _refPollCaches.set(repoId, { generation, refCount: refs.length, details });
   }
 
   async function listCommitRange(repo, fromHash, toHash) {
@@ -496,13 +608,13 @@ export function createGitService(config) {
     },
 
     async getRefSnapshot(repo) {
-      const refs = await listRefs(repo);
+      const refs = await readPolledRefs(repo);
       return new Map(refs.map((ref) => [ref.name, ref]));
     },
 
     async collectRefEvents(repo, previousSnapshot) {
       const observationSeq = ++_refObservationSeq;
-      const refs = await listRefs(repo);
+      const refs = await readPolledRefs(repo);
       const currentSnapshot = new Map(refs.map((ref) => [ref.name, ref]));
       const changes = compareRefSnapshots(previousSnapshot, currentSnapshot);
       const events = [];
@@ -3346,24 +3458,42 @@ export function parsePublicRefLines(stdout) {
       if (symref && !isPublicFullRefName(symref)) {
         return [];
       }
-      const ref = {
+      const ref = buildPublicRef(
         name,
-        shortName: shortRefName(name),
-        hash: peeledHash || objectHash,
-        type: refType(name),
-        updatedAt: updatedAt || peeledUpdatedAt || null,
-      };
-      if (peeledType === "tag") {
-        Object.defineProperty(ref, "nestedTag", { value: true, enumerable: false });
-      }
-      // Internal only, like nestedTag: lets the live poller tell an alias
-      // from a branch without changing the public ref payload.
-      if (symref) {
-        Object.defineProperty(ref, "symref", { value: symref, enumerable: false });
-      }
+        peeledHash || objectHash,
+        updatedAt || peeledUpdatedAt || null,
+        symref,
+        peeledType === "tag",
+      );
+      // Internal only: the object the ref names, before any peeling. The
+      // live poller keys its per-object cache on it (see readPolledRefs).
+      Object.defineProperty(ref, "objectHash", { value: objectHash, enumerable: false });
       return [ref];
     });
 }
+
+function buildPublicRef(name, hash, updatedAt, symref, nestedTag) {
+  const ref = {
+    name,
+    shortName: shortRefName(name),
+    hash,
+    type: refType(name),
+    updatedAt,
+  };
+  if (nestedTag) {
+    Object.defineProperty(ref, "nestedTag", { value: true, enumerable: false });
+  }
+  // Internal only, like nestedTag: lets the live poller tell an alias
+  // from a branch without changing the public ref payload.
+  if (symref) {
+    Object.defineProperty(ref, "symref", { value: symref, enumerable: false });
+  }
+  return ref;
+}
+
+// Refs whose tag chain `peelNestedTags` fully resolved. A failed batch
+// leaves its refs one level peeled; the poller must not cache that.
+const fullyPeeledRefs = new WeakSet();
 
 /**
  * Replace the hash of each tag-of-a-tag (flagged by `parsePublicRefLines`)
@@ -3387,7 +3517,10 @@ async function peelNestedTags(repo, refs, timeoutMs) {
       );
       const peeled = stdout.split("\n");
       batch.forEach((ref, index) => {
-        if (isValidObjectId(peeled[index] ?? "")) ref.hash = peeled[index];
+        if (isValidObjectId(peeled[index] ?? "")) {
+          ref.hash = peeled[index];
+          fullyPeeledRefs.add(ref);
+        }
       });
     } catch (error) {
       if (error instanceof GitCommandError && (error.timedOut || error.truncated)) throw error;
@@ -3398,6 +3531,31 @@ async function peelNestedTags(repo, refs, timeoutMs) {
 }
 
 const NESTED_TAG_PEEL_BATCH = 512;
+
+// What `readPolledRefs` reads on every poll: ref store data only, no object
+// parsing. Same namespaces and symref rule as PUBLIC_REF_FORMAT.
+const REF_STORE_FORMAT = "--format=%(refname)%00%(objectname)%00%(symref)";
+// Measured crossover: below this many refs a full `listRefs` costs about
+// as much as the ref-store read, so a change would cost an extra process.
+export const REF_POLL_PRECHECK_MIN_REFS = 500;
+// Bound on the ref names one targeted read passes as arguments.
+const REF_POLL_TARGETED_MAX_ARG_BYTES = 64 * 1024;
+
+function parseRefStoreLines(stdout) {
+  return stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      const [name, objectHash, symref] = line.split(COMMIT_FIELD_SEPARATOR);
+      // Same rule as parsePublicRefLines: never list a symref into a
+      // hidden namespace.
+      if (symref && !isPublicFullRefName(symref)) {
+        return [];
+      }
+      return [{ name, objectHash, symref }];
+    });
+}
 
 function refDateMs(value) {
   const ms = value ? Date.parse(value) : Number.NaN;
