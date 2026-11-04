@@ -71,20 +71,29 @@ export class GitCommandError extends Error {
 /**
  * @param {{ path: string }} repo
  * @param {string[]} args
- * @param {{ timeoutMs?: number, maxBytes?: number, disableFilterDrivers?: string[], allowTruncatedStdout?: boolean }} [options]
+ * @param {{ timeoutMs?: number, maxBytes?: number, disableFilterDrivers?: string[], allowTruncatedStdout?: boolean, input?: string, rawStdout?: boolean }} [options]
  *   `disableFilterDrivers` names `filter.<driver>` entries to neutralize for
  *   this call. Pass the names from `listFilterDriverNames` to any command that
  *   reads working-tree file content (index-vs-worktree `diff`).
  *   `allowTruncatedStdout` resolves with the first `maxBytes` bytes of stdout
  *   and `truncated: true` instead of rejecting when stdout overflows. Timeouts
  *   and stderr overflow still reject.
+ *   `input` is written to the child's stdin, which is otherwise closed. It is
+ *   data for batch readers such as `cat-file --batch-check`, never arguments.
+ *   `rawStdout` resolves `stdout` as the undecoded Buffer, for output framed
+ *   by byte counts (`cat-file --batch`).
  */
 export function runGit(repo, args, options = {}) {
   const timeoutMs = options.timeoutMs ?? 5000;
   const maxBytes = options.maxBytes ?? 256_000;
   const disableFilterDrivers = options.disableFilterDrivers ?? [];
   const allowTruncatedStdout = options.allowTruncatedStdout === true;
+  const input = options.input;
+  const rawStdout = options.rawStdout === true;
 
+  if (input !== undefined && typeof input !== "string") {
+    throw new Error("Git input must be a string");
+  }
   validateGitLimits({ timeoutMs, maxBytes });
   validateGitRepo(repo);
   validateGitArgs(args);
@@ -98,19 +107,21 @@ export function runGit(repo, args, options = {}) {
       maxBytes,
       filterDriverOverrides(disableFilterDrivers),
       allowTruncatedStdout,
+      input,
+      rawStdout,
     );
     run.then(releaseGitSlot, releaseGitSlot);
     return run;
   });
 }
 
-function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncatedStdout) {
+function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncatedStdout, input, rawStdout) {
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["--no-pager", ...args], {
       cwd: repo.path,
       env: buildGitEnv(process.env, configOverrides),
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
 
     // A failed spawn (EMFILE, ENOENT, ...) is reported as an 'error' event,
@@ -123,6 +134,12 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncat
     });
     if (!child.stdout || !child.stderr) {
       return;
+    }
+    if (input !== undefined && child.stdin) {
+      // A child that exits (or is killed) before reading all of its input
+      // makes the write fail with EPIPE; the exit code reports the outcome.
+      child.stdin.on("error", () => {});
+      child.stdin.end(input);
     }
 
     // Buffer raw bytes and decode once on close: decoding each chunk on its
@@ -174,7 +191,8 @@ function spawnGit(repo, args, timeoutMs, maxBytes, configOverrides, allowTruncat
 
     child.on("close", (exitCode) => {
       clearTimeout(timer);
-      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const stdoutBuffer = Buffer.concat(stdoutChunks);
+      const stdout = rawStdout ? stdoutBuffer : stdoutBuffer.toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
       // The kill after an stdout overflow makes the exit code meaningless.
       if (stdoutTruncated && allowTruncatedStdout && !timedOut && !stderrOverflow) {

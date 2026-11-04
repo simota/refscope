@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ImperativePanelHandle } from "react-resizable-panels";
 import { TopBar } from "./components/refscope/TopBar";
 import { BranchSidebar } from "./components/refscope/BranchSidebar";
@@ -11,11 +11,8 @@ import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
 import { RewriteRescuePanel } from "./components/refscope/RewriteRescuePanel";
 import { PulseLens } from "./components/refscope/PulseLens";
 import { FileStreamLens } from "./components/refscope/FileStreamLens";
-import { HotspotLens } from "./components/refscope/HotspotLens";
-import { RiskTrendLens } from "./components/refscope/RiskTrendLens";
 import { RiskHeatmapLens } from "./components/refscope/RiskHeatmapLens";
 import { CoChangeLens } from "./components/refscope/CoChangeLens";
-import { DriftLens } from "./components/refscope/DriftLens";
 import { OutboxLens } from "./components/refscope/OutboxLens";
 import { DigestLens } from "./components/refscope/DigestLens";
 import { RefFlightRecorderLens } from "./components/refscope/RefFlightRecorderLens";
@@ -33,6 +30,7 @@ import {
   ResizablePanelGroup,
 } from "./components/ui/resizable";
 import { useQuietMode } from "./hooks/useQuietMode";
+import { lazyWithPreload, whenIdle } from "./lib/lazyWithPreload";
 import { useLayoutPrefs } from "./hooks/useLayoutPrefs";
 import { useTimelinePrefs } from "./hooks/useTimelinePrefs";
 import { useColorVisionTheme } from "./hooks/useColorVisionTheme";
@@ -94,6 +92,38 @@ import {
 } from "./rewriteStore";
 
 const EMPTY_DIFF: DiffPayload = { diff: "", truncated: false, maxBytes: 0 };
+
+// Lenses built on recharts are split out of the startup bundle (recharts and
+// its dependencies are most of it) and fetched once the app is idle, so they
+// are usually ready before anyone opens them.
+const HotspotLens = lazyWithPreload(() =>
+  import("./components/refscope/HotspotLens").then((m) => m.HotspotLens),
+);
+const RiskTrendLens = lazyWithPreload(() =>
+  import("./components/refscope/RiskTrendLens").then((m) => m.RiskTrendLens),
+);
+const DriftLens = lazyWithPreload(() =>
+  import("./components/refscope/DriftLens").then((m) => m.DriftLens),
+);
+
+function LensLoading() {
+  return (
+    <div
+      role="status"
+      style={{
+        height: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 13,
+        color: "var(--rs-text-secondary)",
+        fontFamily: "var(--rs-sans)",
+      }}
+    >
+      Loading…
+    </div>
+  );
+}
 
 const RECENT_FILE_HISTORY_PATHS_STORAGE_KEY = "refscope.fileHistory.recentPaths.v1";
 const RECENT_FILE_HISTORY_PATHS_MAX = 10;
@@ -377,6 +407,16 @@ export default function App() {
 
   // Lens switcher state — 'live' is the default; other lenses are placeholders.
   const [activeLens, setActiveLens] = useState<LensId>('live');
+  useEffect(
+    () =>
+      whenIdle(() => {
+        // A failed prefetch is retried when the lens is opened.
+        for (const lens of [HotspotLens, RiskTrendLens, DriftLens]) {
+          lens.preload().catch(() => {});
+        }
+      }),
+    [],
+  );
   useEffect(() => {
     if (!availableLenses.includes(activeLens)) {
       setActiveLens("live");
@@ -1852,21 +1892,25 @@ export default function App() {
       )}
       {activeLens === 'hotspot' && mode === "detail" && selectedRepo && (
         <div className="flex-1 overflow-hidden" id="lens-panel-hotspot" role="tabpanel" aria-labelledby="lens-tab-hotspot">
-          <HotspotLens
-            repoId={selectedRepo}
-            selectedRef={selectedRef}
-            onOpenFileHistory={submitFileHistoryPath}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <HotspotLens
+              repoId={selectedRepo}
+              selectedRef={selectedRef}
+              onOpenFileHistory={submitFileHistoryPath}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'risk-trend' && mode === "detail" && (
         <div className="flex-1 overflow-hidden" id="lens-panel-risk-trend" role="tabpanel" aria-labelledby="lens-tab-risk-trend">
-          <RiskTrendLens
-            commits={commits}
-            onSelectCommit={handleSelectCommit}
-            onChangeLens={setActiveLens}
-            onSelectRange={(from, to) => setDateRangeFilter({ from, to })}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <RiskTrendLens
+              commits={commits}
+              onSelectCommit={handleSelectCommit}
+              onChangeLens={setActiveLens}
+              onSelectRange={(from, to) => setDateRangeFilter({ from, to })}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'risk-heatmap' && mode === "detail" && (
@@ -1892,13 +1936,15 @@ export default function App() {
       )}
       {activeLens === 'drift' && mode === "detail" && selectedRepo && (
         <div className="flex-1 overflow-hidden" id="lens-panel-drift" role="tabpanel" aria-labelledby="lens-tab-drift">
-          <DriftLens
-            repoId={selectedRepo}
-            refs={refs}
-            selectedRef={selectedRef}
-            onSelectRef={(ref) => { setSelectedRef(ref); }}
-            onChangeLens={setActiveLens}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <DriftLens
+              repoId={selectedRepo}
+              refs={refs}
+              selectedRef={selectedRef}
+              onSelectRef={(ref) => { setSelectedRef(ref); }}
+              onChangeLens={setActiveLens}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'outbox' && mode === "detail" && selectedRepo && (

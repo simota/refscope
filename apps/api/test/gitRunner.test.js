@@ -560,3 +560,33 @@ test("survives a burst of concurrent git reads under a low open-file limit", { s
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout.trim()), { failed: 0 });
 });
+
+test("writes input to stdin and can return stdout as raw bytes", async () => {
+  const repoPath = createTempPath("rtgv-runner-input-");
+  try {
+    git(repoPath, "init", "-b", "main");
+    const blobPath = path.join(repoPath, "bytes.bin");
+    fs.writeFileSync(blobPath, Buffer.from([0xff, 0x0a, 0x00, 0xc3]));
+    const oid = git(repoPath, "hash-object", "-w", "bytes.bin").trim();
+    const repo = { path: repoPath };
+
+    const check = await runGit(repo, ["cat-file", "--batch-check=%(objecttype) %(objectsize)"], {
+      input: `${oid}\n${"0".repeat(40)}\n`,
+    });
+    assert.equal(check.stdout, `blob 4\n${"0".repeat(40)} missing\n`);
+
+    const raw = await runGit(repo, ["cat-file", "--batch=%(objectsize)"], {
+      input: `${oid}\n`,
+      rawStdout: true,
+    });
+    assert.ok(Buffer.isBuffer(raw.stdout));
+    assert.deepEqual(raw.stdout, Buffer.from([0x34, 0x0a, 0xff, 0x0a, 0x00, 0xc3, 0x0a]));
+
+    assert.throws(() => runGit(repo, ["cat-file", "--batch-check"], { input: 1 }), /input must be a string/);
+    // Without input, stdin stays closed: a batch reader sees EOF at once.
+    const empty = await runGit(repo, ["cat-file", "--batch-check"]);
+    assert.equal(empty.stdout, "");
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
