@@ -239,12 +239,18 @@ export function createGitService(config) {
   const _cacheGenerations = new Map();
   /** @type {Map<string, Promise<void>>} */
   const _hotspotRefreshes = new Map();
+  // Per repo, what the live poller learned about each object its refs name
+  // (see readPolledRefs). Replaced on every poll, so it never holds more
+  // entries than the repository has refs.
+  /** @type {Map<string, { generation: number, refCount: number, details: Map<string, { hash: string, updatedAt: string | null, nestedTag: boolean }> }>} */
+  const _refPollCaches = new Map();
 
   function forgetRepositoryCaches(id) {
     _hotspotCache.delete(id);
     _refFlightLogs.delete(id);
     _refFlightStates.delete(id);
     _hotspotRefreshes.delete(id);
+    _refPollCaches.delete(id);
     _cacheGenerations.set(id, (_cacheGenerations.get(id) ?? 0) + 1);
   }
 
@@ -308,6 +314,112 @@ export function createGitService(config) {
     );
 
     return peelNestedTags(repo, parsePublicRefLines(stdout), config.gitTimeoutMs);
+  }
+
+  /**
+   * The ref list for the live poller. Identical to `listRefs`, but for large
+   * ref sets it avoids the per-object reads that dominate `listRefs`
+   * (`%(committerdate)` and `%(*...)` parse every commit and tag object):
+   *
+   * 1. Read only what the ref store holds: name, object, symref target.
+   * 2. A ref's hash and date depend only on the object it names, so refs
+   *    naming an object seen by the previous read are rebuilt from a
+   *    per-object cache.
+   * 3. Refs naming other objects get one full-format read by exact name.
+   *    When many refs changed at once, one plain `listRefs` is cheaper.
+   *
+   * Small ref sets skip this: there, one `listRefs` costs no more than the
+   * extra Git process step 3 would add.
+   *
+   * @param {{ id: string, path: string }} repo
+   */
+  async function readPolledRefs(repo) {
+    const generation = _cacheGenerations.get(repo.id) ?? 0;
+    const cache = _refPollCaches.get(repo.id);
+    if (!cache || cache.generation !== generation || cache.refCount < REF_POLL_PRECHECK_MIN_REFS) {
+      const refs = await listRefs(repo);
+      storeRefPollCache(repo.id, generation, refs);
+      return refs;
+    }
+
+    const { stdout } = await runGit(
+      repo,
+      ["for-each-ref", REF_STORE_FORMAT, "refs/heads", "refs/tags", "refs/remotes"],
+      { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
+    );
+    const entries = parseRefStoreLines(stdout);
+    const unknownNames = [];
+    let unknownNameBytes = 0;
+    for (const entry of entries) {
+      if (!cache.details.has(entry.objectHash)) {
+        unknownNames.push(entry.name);
+        unknownNameBytes += entry.name.length;
+      }
+    }
+
+    /** @type {Map<string, any>} */
+    let readByName = new Map();
+    if (unknownNames.length > 0) {
+      if (
+        unknownNames.length > entries.length / 4 ||
+        unknownNameBytes > REF_POLL_TARGETED_MAX_ARG_BYTES
+      ) {
+        const refs = await listRefs(repo);
+        storeRefPollCache(repo.id, generation, refs);
+        return refs;
+      }
+      // An exact ref name is also a prefix pattern (refs/heads/a matches
+      // refs/heads/a/b); only exact matches are kept below.
+      const { stdout: targeted } = await runGit(
+        repo,
+        ["for-each-ref", PUBLIC_REF_FORMAT, ...unknownNames],
+        { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
+      );
+      const read = await peelNestedTags(repo, parsePublicRefLines(targeted), config.gitTimeoutMs);
+      readByName = new Map(read.map((ref) => [ref.name, ref]));
+    }
+
+    const refs = [];
+    for (const entry of entries) {
+      const details = cache.details.get(entry.objectHash);
+      if (details) {
+        const ref = buildPublicRef(
+          entry.name,
+          details.hash,
+          details.updatedAt,
+          entry.symref,
+          details.nestedTag,
+        );
+        Object.defineProperty(ref, "objectHash", { value: entry.objectHash, enumerable: false });
+        if (details.nestedTag) fullyPeeledRefs.add(ref);
+        refs.push(ref);
+        continue;
+      }
+      // Missing here means the ref was deleted (or became a hidden symref)
+      // between the two reads; the full read would not list it either.
+      const ref = readByName.get(entry.name);
+      if (ref) refs.push(ref);
+    }
+    storeRefPollCache(repo.id, generation, refs);
+    return refs;
+  }
+
+  function storeRefPollCache(repoId, generation, refs) {
+    // Only a read made under the current registration may fill the cache.
+    if ((_cacheGenerations.get(repoId) ?? 0) !== generation) return;
+    /** @type {Map<string, { hash: string, updatedAt: string | null, nestedTag: boolean }>} */
+    const details = new Map();
+    // Small ref sets always take the full read; nothing would use the map.
+    for (const ref of refs.length >= REF_POLL_PRECHECK_MIN_REFS ? refs : []) {
+      // A tag chain that failed to peel is retried by the next read.
+      if (ref.nestedTag && !fullyPeeledRefs.has(ref)) continue;
+      details.set(ref.objectHash, {
+        hash: ref.hash,
+        updatedAt: ref.updatedAt,
+        nestedTag: Boolean(ref.nestedTag),
+      });
+    }
+    _refPollCaches.set(repoId, { generation, refCount: refs.length, details });
   }
 
   async function listCommitRange(repo, fromHash, toHash) {
@@ -496,13 +608,13 @@ export function createGitService(config) {
     },
 
     async getRefSnapshot(repo) {
-      const refs = await listRefs(repo);
+      const refs = await readPolledRefs(repo);
       return new Map(refs.map((ref) => [ref.name, ref]));
     },
 
     async collectRefEvents(repo, previousSnapshot) {
       const observationSeq = ++_refObservationSeq;
-      const refs = await listRefs(repo);
+      const refs = await readPolledRefs(repo);
       const currentSnapshot = new Map(refs.map((ref) => [ref.name, ref]));
       const changes = compareRefSnapshots(previousSnapshot, currentSnapshot);
       const events = [];
@@ -1222,8 +1334,8 @@ export function createGitService(config) {
         : driftEligibleRefs;
 
       // Drift per ref runs in parallel; the outer Promise.all unions all
-      // refs, and `computeRefDrift` itself runs ahead/behind/merge-base in
-      // parallel internally. Total fanout is 3 * processedRefs git calls.
+      // refs, and `computeRefDrift` itself runs ahead/behind and merge-base in
+      // parallel internally. Total fanout is 2 * processedRefs git calls.
       const driftEntries = (
         await Promise.all(
           refsToProcess.map((ref) =>
@@ -1754,11 +1866,8 @@ export function createGitService(config) {
         return targetRevision.result;
       }
 
-      const [ahead, behind, numstat, mergeBase] = await Promise.all([
-        runGit(repo, compareRevListArgs(targetRevision.hash, baseRevision.hash), {
-          timeoutMs: config.gitTimeoutMs,
-        }),
-        runGit(repo, compareRevListArgs(baseRevision.hash, targetRevision.hash), {
+      const [counts, numstat, mergeBase] = await Promise.all([
+        runGit(repo, aheadBehindRevListArgs(baseRevision.hash, targetRevision.hash), {
           timeoutMs: config.gitTimeoutMs,
         }),
         runGit(repo, compareNumstatArgs(baseRevision.hash, targetRevision.hash), {
@@ -1768,6 +1877,7 @@ export function createGitService(config) {
         readMergeBase(repo, baseRevision.hash, targetRevision.hash, config.gitTimeoutMs),
       ]);
       const stats = parseNumstatSummary(numstat.stdout);
+      const { ahead, behind } = parseAheadBehindCounts(counts.stdout);
 
       return {
         status: 200,
@@ -1775,8 +1885,8 @@ export function createGitService(config) {
           base,
           target,
           mergeBase,
-          ahead: parseCount(ahead.stdout),
-          behind: parseCount(behind.stdout),
+          ahead,
+          behind,
           files: stats.fileCount,
           added: stats.added,
           deleted: stats.deleted,
@@ -2184,16 +2294,40 @@ export function createGitService(config) {
       }
 
       /** @type {Map<string, { lines: number } | null>} */
-      const sizeMap = new Map();
+      let sizeMap;
+      try {
+        sizeMap = await readHotspotLineCounts(
+          repo,
+          resolvedOid,
+          allPaths,
+          { timeoutMs: hotspotTimeoutMs, maxBlobBytes: hotspotMaxBytes, deadline },
+        );
+      } catch (err) {
+        // A timeout is the request's budget running out, as for a per-path
+        // read. Any other batch failure falls back to the per-path reads.
+        if (err instanceof GitCommandError && err.timedOut) throw err;
+        if (!(err instanceof GitCommandError) && !(err instanceof HotspotBatchError)) throw err;
+        sizeMap = undefined;
+      }
+      if (sizeMap === null) {
+        return {
+          status: 504,
+          body: { error: "timeout", truncated: true, truncationReason: "timeout" },
+        };
+      }
+      const pendingPaths = sizeMap
+        ? allPaths.filter((p) => !sizeMap.has(p))
+        : allPaths;
+      sizeMap ??= new Map();
 
-      for (let i = 0; i < allPaths.length; i += concurrency) {
+      for (let i = 0; i < pendingPaths.length; i += concurrency) {
         if (Date.now() > deadline) {
           return {
             status: 504,
             body: { error: "timeout", truncated: true, truncationReason: "timeout" },
           };
         }
-        const chunk = allPaths.slice(i, i + concurrency);
+        const chunk = pendingPaths.slice(i, i + concurrency);
         const results = await Promise.all(chunk.map(fetchFileStat));
         for (let j = 0; j < chunk.length; j++) {
           sizeMap.set(chunk[j], results[j]);
@@ -2473,6 +2607,22 @@ function isValidCompareRevision(value) {
 
 export function compareRevListArgs(fromRevision, notRevision) {
   return ["rev-list", "--count", "--not", notRevision, "--not", "--end-of-options", fromRevision];
+}
+
+/**
+ * One commit walk for both sides of a comparison. `--left-right --count`
+ * over the symmetric difference prints `<left>\t<right>`: commits reachable
+ * only from `base` (behind) and only from `target` (ahead) — the same numbers
+ * as two `compareRevListArgs` walks, at roughly the cost of one. Both sides
+ * must be resolved object IDs; the `...` form needs them in a single token.
+ */
+export function aheadBehindRevListArgs(baseHash, targetHash) {
+  return ["rev-list", "--left-right", "--count", "--end-of-options", `${baseHash}...${targetHash}`];
+}
+
+export function parseAheadBehindCounts(stdout) {
+  const [behind = "", ahead = ""] = stdout.trim().split("\t");
+  return { ahead: parseCount(ahead), behind: parseCount(behind) };
 }
 
 // `%D` lists whatever the repository's decoration config selects (e.g.
@@ -3308,24 +3458,42 @@ export function parsePublicRefLines(stdout) {
       if (symref && !isPublicFullRefName(symref)) {
         return [];
       }
-      const ref = {
+      const ref = buildPublicRef(
         name,
-        shortName: shortRefName(name),
-        hash: peeledHash || objectHash,
-        type: refType(name),
-        updatedAt: updatedAt || peeledUpdatedAt || null,
-      };
-      if (peeledType === "tag") {
-        Object.defineProperty(ref, "nestedTag", { value: true, enumerable: false });
-      }
-      // Internal only, like nestedTag: lets the live poller tell an alias
-      // from a branch without changing the public ref payload.
-      if (symref) {
-        Object.defineProperty(ref, "symref", { value: symref, enumerable: false });
-      }
+        peeledHash || objectHash,
+        updatedAt || peeledUpdatedAt || null,
+        symref,
+        peeledType === "tag",
+      );
+      // Internal only: the object the ref names, before any peeling. The
+      // live poller keys its per-object cache on it (see readPolledRefs).
+      Object.defineProperty(ref, "objectHash", { value: objectHash, enumerable: false });
       return [ref];
     });
 }
+
+function buildPublicRef(name, hash, updatedAt, symref, nestedTag) {
+  const ref = {
+    name,
+    shortName: shortRefName(name),
+    hash,
+    type: refType(name),
+    updatedAt,
+  };
+  if (nestedTag) {
+    Object.defineProperty(ref, "nestedTag", { value: true, enumerable: false });
+  }
+  // Internal only, like nestedTag: lets the live poller tell an alias
+  // from a branch without changing the public ref payload.
+  if (symref) {
+    Object.defineProperty(ref, "symref", { value: symref, enumerable: false });
+  }
+  return ref;
+}
+
+// Refs whose tag chain `peelNestedTags` fully resolved. A failed batch
+// leaves its refs one level peeled; the poller must not cache that.
+const fullyPeeledRefs = new WeakSet();
 
 /**
  * Replace the hash of each tag-of-a-tag (flagged by `parsePublicRefLines`)
@@ -3349,7 +3517,10 @@ async function peelNestedTags(repo, refs, timeoutMs) {
       );
       const peeled = stdout.split("\n");
       batch.forEach((ref, index) => {
-        if (isValidObjectId(peeled[index] ?? "")) ref.hash = peeled[index];
+        if (isValidObjectId(peeled[index] ?? "")) {
+          ref.hash = peeled[index];
+          fullyPeeledRefs.add(ref);
+        }
       });
     } catch (error) {
       if (error instanceof GitCommandError && (error.timedOut || error.truncated)) throw error;
@@ -3360,6 +3531,31 @@ async function peelNestedTags(repo, refs, timeoutMs) {
 }
 
 const NESTED_TAG_PEEL_BATCH = 512;
+
+// What `readPolledRefs` reads on every poll: ref store data only, no object
+// parsing. Same namespaces and symref rule as PUBLIC_REF_FORMAT.
+const REF_STORE_FORMAT = "--format=%(refname)%00%(objectname)%00%(symref)";
+// Measured crossover: below this many refs a full `listRefs` costs about
+// as much as the ref-store read, so a change would cost an extra process.
+export const REF_POLL_PRECHECK_MIN_REFS = 500;
+// Bound on the ref names one targeted read passes as arguments.
+const REF_POLL_TARGETED_MAX_ARG_BYTES = 64 * 1024;
+
+function parseRefStoreLines(stdout) {
+  return stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      const [name, objectHash, symref] = line.split(COMMIT_FIELD_SEPARATOR);
+      // Same rule as parsePublicRefLines: never list a symref into a
+      // hidden namespace.
+      if (symref && !isPublicFullRefName(symref)) {
+        return [];
+      }
+      return [{ name, objectHash, symref }];
+    });
+}
 
 function refDateMs(value) {
   const ms = value ? Date.parse(value) : Number.NaN;
@@ -3955,8 +4151,9 @@ function readRefDriftQuery(query) {
  * behind are trivially zero and the merge-base is the base hash itself. We
  * skip the three git calls in that case to keep large branch lists cheap.
  *
- * Internally we run ahead, behind, and merge-base in parallel — they share
- * no state and the Git invocation is cheap individually.
+ * Internally we run the ahead/behind count and merge-base in parallel — they
+ * share no state. Ahead and behind come from one `--left-right --count` walk
+ * (see `aheadBehindRevListArgs`).
  *
  * @param {{ id: string, name: string, path: string }} repo
  * @param {string} baseHash  Already resolved object id for the base ref.
@@ -3974,11 +4171,10 @@ async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
       hash: ref.hash,
     };
   }
-  let ahead, behind, mergeBase;
+  let counts, mergeBase;
   try {
-    [ahead, behind, mergeBase] = await Promise.all([
-      runGit(repo, compareRevListArgs(ref.hash, baseHash), { timeoutMs }),
-      runGit(repo, compareRevListArgs(baseHash, ref.hash), { timeoutMs }),
+    [counts, mergeBase] = await Promise.all([
+      runGit(repo, aheadBehindRevListArgs(baseHash, ref.hash), { timeoutMs }),
       readMergeBase(repo, baseHash, ref.hash, timeoutMs),
     ]);
   } catch (error) {
@@ -3995,11 +4191,12 @@ async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
     }
     throw error;
   }
+  const { ahead, behind } = parseAheadBehindCounts(counts.stdout);
   return {
     name: ref.name,
     type: ref.type,
-    ahead: parseCount(ahead.stdout),
-    behind: parseCount(behind.stdout),
+    ahead,
+    behind,
     mergeBase,
     hash: ref.hash,
   };
@@ -4735,6 +4932,128 @@ export async function getWorktreeDirtyBoolean(repoPath) {
  *
  * @type {number}
  */
+class HotspotBatchError extends Error {}
+
+// Header line of `cat-file --batch-check` for an object that resolved; an
+// unresolved name is echoed back followed by ` missing` (or similar), and an
+// echoed name always starts with the commit OID, never with a type word.
+const BATCH_CHECK_LINE_PATTERN = /^([0-9a-f]{40}|[0-9a-f]{64}) (blob|tree|commit|tag) (\d+)$/;
+// Per-object overhead of `cat-file --batch=%(objectsize)`: the size line
+// (at most 16 digits under the runner's output bound) and the trailing LF.
+const BATCH_OBJECT_OVERHEAD_BYTES = 18;
+
+/**
+ * Line counts for `<oid>:<path>` blobs in two `cat-file` processes instead of
+ * one per path. Matches `cat-file blob <oid>:<path>` read under a
+ * `maxBlobBytes` stdout cap, path by path:
+ *   - a path that does not resolve, or resolves to a tree or gitlink → null
+ *   - a blob larger than `maxBlobBytes` (the per-path read overflowed) → null
+ *   - otherwise `{ lines }`: LF count, plus one for an unterminated last line.
+ * Paths containing LF cannot be framed on stdin; they are left out of the
+ * map so the caller reads them one by one.
+ *
+ * Returns null when `deadline` passed between reads (the caller reports the
+ * request timeout), and throws HotspotBatchError on output it cannot frame.
+ *
+ * @param {{ path: string }} repo
+ * @param {string} commitOid
+ * @param {string[]} paths
+ * @param {{ timeoutMs: number, maxBlobBytes: number, deadline: number }} options
+ * @returns {Promise<Map<string, { lines: number } | null> | null>}
+ */
+async function readHotspotLineCounts(repo, commitOid, paths, { timeoutMs, maxBlobBytes, deadline }) {
+  /** @type {Map<string, { lines: number } | null>} */
+  const result = new Map();
+  const batchPaths = paths.filter((p) => !p.includes("\n"));
+  if (batchPaths.length === 0) return result;
+
+  const { stdout: checkOut } = await runGit(
+    repo,
+    ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+    {
+      timeoutMs,
+      maxBytes: MAX_GIT_OUTPUT_BYTES,
+      input: batchPaths.map((p) => `${commitOid}:${p}\n`).join(""),
+    },
+  );
+  const checkLines = checkOut.split("\n");
+  // One line per input line, plus the empty string after the final LF.
+  if (checkLines.length !== batchPaths.length + 1 || checkLines[batchPaths.length] !== "") {
+    throw new HotspotBatchError("Unexpected cat-file --batch-check output");
+  }
+
+  /** @type {Map<string, number>} blob OID -> size, for blobs within the cap */
+  const blobSizes = new Map();
+  /** @type {Array<[string, string]>} [path, blob OID] */
+  const pathBlobs = [];
+  batchPaths.forEach((filePath, index) => {
+    const match = BATCH_CHECK_LINE_PATTERN.exec(checkLines[index]);
+    if (!match || match[2] !== "blob") {
+      result.set(filePath, null);
+      return;
+    }
+    const size = Number(match[3]);
+    if (size > maxBlobBytes) {
+      result.set(filePath, null);
+      return;
+    }
+    blobSizes.set(match[1], size);
+    pathBlobs.push([filePath, match[1]]);
+  });
+
+  /** @type {Map<string, number>} blob OID -> line count */
+  const blobLines = new Map();
+  const blobs = [...blobSizes.keys()];
+  let start = 0;
+  while (start < blobs.length) {
+    if (Date.now() > deadline) return null;
+    // Keep each read under the runner's output bound; a single blob is at
+    // most maxBlobBytes, which the runner already caps at that bound.
+    let end = start;
+    let expectedBytes = 0;
+    while (end < blobs.length) {
+      const next = blobSizes.get(blobs[end]) + BATCH_OBJECT_OVERHEAD_BYTES;
+      if (end > start && expectedBytes + next > MAX_GIT_OUTPUT_BYTES) break;
+      expectedBytes += next;
+      end += 1;
+    }
+    const chunk = blobs.slice(start, end);
+    const { stdout } = await runGit(repo, ["cat-file", "--batch=%(objectsize)"], {
+      timeoutMs,
+      maxBytes: MAX_GIT_OUTPUT_BYTES,
+      input: chunk.map((oid) => `${oid}\n`).join(""),
+      rawStdout: true,
+    });
+    let offset = 0;
+    for (const oid of chunk) {
+      const headerEnd = stdout.indexOf(0x0a, offset);
+      const size = headerEnd === -1 ? Number.NaN : Number(stdout.toString("latin1", offset, headerEnd));
+      if (size !== blobSizes.get(oid) || headerEnd + 1 + size >= stdout.length) {
+        throw new HotspotBatchError("Unexpected cat-file --batch output");
+      }
+      const contentStart = headerEnd + 1;
+      const contentEnd = contentStart + size;
+      let lines = 0;
+      for (let at = stdout.indexOf(0x0a, contentStart); at !== -1 && at < contentEnd; at = stdout.indexOf(0x0a, at + 1)) {
+        lines += 1;
+      }
+      if (size > 0 && stdout[contentEnd - 1] !== 0x0a) lines += 1;
+      blobLines.set(oid, lines);
+      // Skip the LF that terminates each object's content.
+      offset = contentEnd + 1;
+    }
+    if (offset !== stdout.length) {
+      throw new HotspotBatchError("Unexpected cat-file --batch output");
+    }
+    start = end;
+  }
+
+  for (const [filePath, oid] of pathBlobs) {
+    result.set(filePath, { lines: blobLines.get(oid) });
+  }
+  return result;
+}
+
 const FLEET_GIT_TIMEOUT_MS = 4000;
 const FLEET_CONFIG_LOOKUP_TIMEOUT_MS = 1000;
 
