@@ -1482,7 +1482,7 @@ export function createGitService(config) {
             timeoutMs: config.gitTimeoutMs,
           });
           const headHash = headHashResult.stdout.trim();
-          if (headHash && /^[A-Fa-f0-9]{40}$/.test(headHash)) {
+          if (isValidObjectId(headHash)) {
             head = { name: headName, hash: headHash };
           }
         }
@@ -2438,6 +2438,12 @@ export function createGitService(config) {
         },
       };
     },
+
+    // Fleet probes. fleetService receives this object (server.js), so the
+    // probes must be reachable through it, not only as module exports.
+    getHeadShortSha,
+    getCommits24hCount,
+    getWorktreeDirtyBoolean,
   };
 }
 
@@ -4327,7 +4333,7 @@ export function parseFileHistoryRecords(stdout) {
         patch: rest.replace(/^\n+/, "").replace(/\n+$/, ""),
       };
     })
-    .filter((record) => /^[A-Fa-f0-9]{40}$/.test(record.hash));
+    .filter((record) => isValidObjectId(record.hash));
 }
 
 function readRelatedFilesQuery(query) {
@@ -4558,7 +4564,7 @@ export function parseRangeHistoryRecords(stdout) {
       const body = (parts[4] ?? "").trim();
       return { hash, author, authorDate, subject, body };
     })
-    .filter((record) => /^[A-Fa-f0-9]{40}$/.test(record.hash));
+    .filter((record) => isValidObjectId(record.hash));
 }
 
 /**
@@ -4619,7 +4625,7 @@ export function parseRelatedFilesRecords(stdout, targetPath, targetNamesByHash =
     const hash = tokens[index + 1];
     const authorDate = tokens[index + 2];
     index += 3;
-    if (!/^[A-Fa-f0-9]{40}$/.test(hash ?? "")) continue;
+    if (!isValidObjectId(hash)) continue;
     scannedCommits += 1;
 
     /** @type {Set<string>} */
@@ -5174,7 +5180,7 @@ export function parseSymbolHistoryRecords(stdout) {
       const body = (parts[4] ?? "").trim();
       return { hash, author, authorDate, subject, body, renameInfo: null };
     })
-    .filter((record) => /^[A-Fa-f0-9]{40}$/.test(record.hash));
+    .filter((record) => isValidObjectId(record.hash));
 }
 
 /**

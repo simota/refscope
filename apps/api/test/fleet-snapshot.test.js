@@ -584,3 +584,35 @@ test("a corrupt branch ref reports git_error, not an unborn ok", async () => {
     fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }
 });
+
+// Regression: server.js passes the object returned by createGitService into
+// createFleetService. Every other test here injects the probes directly, which
+// hid a production defect where the real service object lacked them and every
+// repo reported status "git_error". This test uses the production wiring.
+test("production wiring: createGitService object drives a real fleet snapshot", async () => {
+  const repoPath = createTempPath("rtgv-fleet-wiring-");
+  const configHome = createTempPath("rtgv-fleet-wiring-config-");
+  try {
+    initRepo(repoPath);
+    writeAndCommit(repoPath, "README.md", "hello\n", "chore: seed");
+
+    const { loadConfig } = await import("../src/config.js");
+    const { createGitService } = await import("../src/gitService.js");
+    const config = loadConfig({ RTGV_REPOS: `wired=${repoPath}`, XDG_CONFIG_HOME: configHome });
+    const gitService = createGitService(config);
+    for (const probe of ["getHeadShortSha", "getCommits24hCount", "getWorktreeDirtyBoolean"]) {
+      assert.equal(typeof gitService[probe], "function", `gitService.${probe} must be exposed`);
+    }
+
+    const snapshot = await createFleetService(config, gitService).getFleetSnapshot({});
+    const entry = snapshot.repos.find((r) => r.repoId === "wired");
+    assert.ok(entry, "wired repo missing from snapshot");
+    assert.equal(entry.status, "ok");
+    assert.match(entry.headShortSha, /^[a-f0-9]{7,40}$/);
+    assert.equal(entry.commits24h, 1);
+    assert.equal(entry.worktreeDirty, false);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+    fs.rmSync(configHome, { recursive: true, force: true });
+  }
+});

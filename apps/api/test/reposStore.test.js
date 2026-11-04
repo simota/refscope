@@ -323,3 +323,39 @@ test("removeRepo is a no-op when the id does not exist in the store", () => {
     cleanup();
   }
 });
+
+// Regression: loadConfig(env) reads the store from `env`, so add/remove must
+// write through the same env. Previously they used process.env, so a test (or
+// an embedder) passing an isolated XDG_CONFIG_HOME still wrote into the real
+// ~/.config/refscope/repos.json.
+test("config add/remove persist to the store loadConfig read from, not process.env", async () => {
+  const { loadConfig, addRepository, removeRepository } = await import("../src/config.js");
+  const { spawnSync } = await import("node:child_process");
+  const isolated = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rtgv-store-isolated-")));
+  const ambient = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rtgv-store-ambient-")));
+  const repoPath = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rtgv-store-repo-")));
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = ambient;
+  try {
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: repoPath }).status, 0);
+    loadConfig({ RTGV_REPOS: "", XDG_CONFIG_HOME: isolated });
+    addRepository("isolated", repoPath);
+
+    const isolatedStore = path.join(isolated, "refscope", "repos.json");
+    const ambientStore = path.join(ambient, "refscope", "repos.json");
+    assert.ok(fs.existsSync(isolatedStore), "store must be written under the loadConfig env");
+    assert.equal(fs.existsSync(ambientStore), false, "process.env store must not be touched");
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(isolatedStore, "utf8")).repos.map((r) => r.id),
+      ["isolated"],
+    );
+
+    removeRepository("isolated");
+    assert.deepEqual(JSON.parse(fs.readFileSync(isolatedStore, "utf8")).repos, []);
+    assert.equal(fs.existsSync(ambientStore), false);
+  } finally {
+    if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = savedXdg;
+    for (const dir of [isolated, ambient, repoPath]) fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
