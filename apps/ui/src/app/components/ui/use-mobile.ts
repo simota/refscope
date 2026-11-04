@@ -3,8 +3,10 @@ import * as React from "react";
 const MOBILE_BREAKPOINT = 768;
 
 export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(
-    undefined,
+  // Read the viewport synchronously so the first render already uses the
+  // right layout (no horizontal-then-stacked remount on small screens).
+  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(() =>
+    typeof window === "undefined" ? undefined : window.innerWidth < MOBILE_BREAKPOINT,
   );
 
   React.useEffect(() => {

@@ -44,6 +44,7 @@ import { FleetSurface } from "./components/refscope/FleetSurface";
 import { FleetOnboardingOverlay } from "./components/refscope/FleetOnboardingOverlay";
 import { AddRepoDialog } from "./components/refscope/AddRepoDialog";
 import { SymbolHistoryView } from "./components/refscope/SymbolHistoryView";
+import { useIsMobile } from "./components/ui/use-mobile";
 import type {
   Commit,
   CommitDetail,
@@ -454,7 +455,6 @@ export default function App() {
       return { ok: true as const };
     }
     return { ok: false as const, error: result.error };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [evictRepo, selectedRepo, repositories, switchRepo]);
   const [selectedRef, setSelectedRef] = useState("HEAD");
   const [selected, setSelected] = useState("");
@@ -645,6 +645,23 @@ export default function App() {
     toggleActivityGraph,
   } = useTimelinePrefs();
   const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
+  // Below 768px the three panes stack vertically instead of being squeezed
+  // side by side (each pane was ~130px wide at 390px).
+  const isNarrow = useIsMobile();
+  // Mount the sidebar at its collapsed size when the persisted preference says
+  // so. Mounting it expanded made react-resizable-panels fire onExpand, which
+  // overwrote the saved "hidden" preference on every reload.
+  const initialPanelSizes = useMemo(() => {
+    if (!sidebarCollapsed) return panelSizes;
+    const rest = panelSizes.center + panelSizes.detail;
+    return {
+      sidebar: 0,
+      center: (panelSizes.center / rest) * 100,
+      detail: (panelSizes.detail / rest) * 100,
+    };
+    // Only the mount-time value matters (defaultSize); recompute when the
+    // group remounts for a layout-direction change.
+  }, [isNarrow]);
   // Track collapse intent vs. actual panel state so the imperative API is only
   // called when they diverge — react-resizable-panels' collapse() is idempotent
   // but extra calls during drag would fight user input.
@@ -654,9 +671,13 @@ export default function App() {
     if (sidebarCollapsed && !handle.isCollapsed()) {
       handle.collapse();
     } else if (!sidebarCollapsed && handle.isCollapsed()) {
-      handle.expand();
+      // A panel mounted collapsed has no pre-collapse size to restore, so
+      // reopen it at the user's saved ratio rather than at minSize.
+      handle.resize(Math.min(30, Math.max(12, panelSizes.sidebar)));
     }
-  }, [sidebarCollapsed]);
+    // panelSizes is read for the restore size only; re-running on every drag
+    // would fight user input.
+  }, [sidebarCollapsed, isNarrow]);
   // Quiet mode controls motion only; SSE application must not gate on isQuiet,
   // or OS prefers-reduced-motion silently freezes ref/commit updates.
   const effectivePaused = livePaused;
@@ -1220,7 +1241,6 @@ export default function App() {
     // their useCallback closures; the only reactive identifier the EventSource
     // itself depends on is `selectedRepo` (plus `streamRetryKey`, which only
     // reopens it), mirroring existing precedent in this file.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepo, streamRetryKey]);
 
   // Repo-scoped sidebar facts refresh per repo. All four endpoints are
@@ -1573,7 +1593,6 @@ export default function App() {
       searchPatternRef.current,
     ).catch((err) => setError(errorMessage(err)));
     // refreshTimeline is stable through refs; selectedRepo is the only reactive input.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepo]);
 
   // useCallback (not a plain function) so the `shortcutBindings` memo below
@@ -2114,9 +2133,12 @@ export default function App() {
         )}
 
       <ResizablePanelGroup
-        direction="horizontal"
+        key={isNarrow ? "stacked" : "side-by-side"}
+        direction={isNarrow ? "vertical" : "horizontal"}
         className="flex flex-1 overflow-hidden"
         onLayout={(layout) => {
+          // Stacked (narrow) heights must not overwrite the desktop width ratios.
+          if (isNarrow) return;
           // layout reflects the live order of panels; when the sidebar is collapsed
           // it is still present (collapsedSize=0) so the array length stays at 3.
           if (layout.length !== 3) return;
@@ -2134,7 +2156,7 @@ export default function App() {
           ref={sidebarPanelRef}
           collapsible
           collapsedSize={0}
-          defaultSize={panelSizes.sidebar}
+          defaultSize={initialPanelSizes.sidebar}
           minSize={12}
           maxSize={30}
           onCollapse={() => setSidebarCollapsed(true)}
@@ -2163,11 +2185,11 @@ export default function App() {
           />
           </aside>
         </ResizablePanel>
-        <ResizableHandle withHandle aria-label="Resize Refs panel (drag to adjust width)" />
+        <ResizableHandle withHandle aria-label={`Resize Refs panel (drag to adjust ${isNarrow ? "height" : "width"})`} />
         <ResizablePanel
           id="rs-center"
           order={2}
-          defaultSize={panelSizes.center}
+          defaultSize={initialPanelSizes.center}
           minSize={25}
         >
           <div id="main-content" tabIndex={-1} aria-label="Commit timeline" className="flex flex-col overflow-hidden h-full">
@@ -2239,11 +2261,11 @@ export default function App() {
             />
           </div>
         </ResizablePanel>
-        <ResizableHandle withHandle aria-label="Resize Commit details panel (drag to adjust width)" />
+        <ResizableHandle withHandle aria-label={`Resize Commit details panel (drag to adjust ${isNarrow ? "height" : "width"})`} />
         <ResizablePanel
           id="rs-detail"
           order={3}
-          defaultSize={panelSizes.detail}
+          defaultSize={initialPanelSizes.detail}
           minSize={25}
           maxSize={70}
         >

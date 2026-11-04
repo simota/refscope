@@ -38,6 +38,9 @@ export function LensSwitcher({
       className="flex items-center gap-1 px-3"
       style={{
         height: 36,
+        // Narrow viewports scroll the tab strip itself instead of the page.
+        overflowX: 'auto',
+        scrollbarWidth: 'thin',
         borderBottom: '1px solid var(--rs-border)',
         background: 'var(--rs-bg-panel)',
       }}
@@ -61,6 +64,8 @@ export function LensSwitcher({
             }}
             style={{
               height: 26,
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
               padding: '0 10px',
               fontSize: 12,
               fontFamily: 'var(--rs-sans)',
