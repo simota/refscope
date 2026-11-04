@@ -385,6 +385,11 @@ export function createGitService(config) {
       readByName = new Map(read.map((ref) => [ref.name, ref]));
     }
 
+    // Every ref names a cached object and none disappeared: the cache still
+    // describes this ref set exactly, so keep it rather than rebuild it on
+    // every idle poll. (Its entries are per object and never go stale; a
+    // rebuild on the next change drops objects no ref names any more.)
+    const keepCache = unknownNames.length === 0 && entries.length === cache.refCount;
     const refs = [];
     for (const entry of entries) {
       const details = cache.details.get(entry.objectHash);
@@ -396,8 +401,10 @@ export function createGitService(config) {
           entry.symref,
           details.nestedTag,
         );
-        objectHashes.set(ref, entry.objectHash);
-        if (details.nestedTag) fullyPeeledRefs.add(ref);
+        if (!keepCache) {
+          objectHashes.set(ref, entry.objectHash);
+          if (details.nestedTag) fullyPeeledRefs.add(ref);
+        }
         refs.push(ref);
         continue;
       }
@@ -406,7 +413,7 @@ export function createGitService(config) {
       const ref = readByName.get(entry.name);
       if (ref) refs.push(ref);
     }
-    storeRefPollCache(repo.id, generation, refs, objectHashes);
+    if (!keepCache) storeRefPollCache(repo.id, generation, refs, objectHashes);
     return refs;
   }
 
