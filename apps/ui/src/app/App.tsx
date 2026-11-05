@@ -44,6 +44,10 @@ import { FleetSurface } from "./components/refscope/FleetSurface";
 import { FleetOnboardingOverlay } from "./components/refscope/FleetOnboardingOverlay";
 import { AddRepoDialog } from "./components/refscope/AddRepoDialog";
 import { SymbolHistoryView } from "./components/refscope/SymbolHistoryView";
+import {
+  FileViewerDialog,
+  type FileViewerTarget,
+} from "./components/refscope/FileViewerDialog";
 import { useIsMobile } from "./components/ui/use-mobile";
 import type {
   Commit,
@@ -54,6 +58,7 @@ import type {
   Repository,
 } from "./components/refscope/data";
 import {
+  COMMIT_PAGE_SIZE,
   commitFromDetail,
   compareRefs,
   deleteRepo,
@@ -72,6 +77,7 @@ import {
   listSubmodules,
   listWorktrees,
   postRepo,
+  type CommitListWindow,
   type ContainingRef,
   type DiffPayload,
   type FleetSnapshot,
@@ -85,6 +91,14 @@ import {
   type WorktreeEntry,
 } from "./api";
 import type { RefDriftSummary } from "./components/refscope/BranchSidebar";
+import {
+  appendOlderPage,
+  buildDeepLinkSearch,
+  parseDeepLink,
+  localDateToIsoBound,
+  mergeLiveFirstPage,
+  pageMayHaveMore,
+} from "./lib/historyBrowsing";
 import {
   loadRewriteSnapshots,
   saveRewriteSnapshot,
@@ -239,6 +253,19 @@ const STREAM_RETRY_MIN_MS = 2_000;
 const STREAM_RETRY_MAX_MS = 30_000;
 
 export default function App() {
+  // `?repo=&ref=&commit=&path=` captured once at startup; later URL writes
+  // (replaceState below) must not feed back into selection.
+  const initialDeepLink = useMemo(
+    () =>
+      typeof window === "undefined"
+        ? { repo: "", ref: "", commit: "", path: "" }
+        : parseDeepLink(window.location.search),
+    [],
+  );
+  // The linked commit may be older than the first page or off the linked
+  // ref; the first timeline load keeps it selected (shown from its own
+  // detail) instead of replacing it with the newest row.
+  const pendingDeepLinkCommitRef = useRef(initialDeepLink.commit);
   const flightRecorderEnabled = useMemo(() => isFlightRecorderEnabled(), []);
   const availableLenses = useMemo<readonly LensId[]>(
     () => (flightRecorderEnabled ? [...BASE_LENSES, "flight"] : BASE_LENSES),
@@ -381,6 +408,7 @@ export default function App() {
     // Clear the previous repo's commits so the timeline shows the loading
     // placeholder instead of briefly rendering repo A's history as repo B's.
     setCommits([]);
+    setHasMoreCommits(false);
     // Likewise drop repo A's refs and drift so the sidebar and compare
     // pickers never offer A's refs against repo B.
     setRefs([]);
@@ -456,8 +484,8 @@ export default function App() {
     }
     return { ok: false as const, error: result.error };
   }, [evictRepo, selectedRepo, repositories, switchRepo]);
-  const [selectedRef, setSelectedRef] = useState("HEAD");
-  const [selected, setSelected] = useState("");
+  const [selectedRef, setSelectedRef] = useState(() => initialDeepLink.ref || "HEAD");
+  const [selected, setSelected] = useState(() => initialDeepLink.commit);
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [diff, setDiff] = useState<DiffPayload>(EMPTY_DIFF);
   // Reachability ("Contained in") — public refs whose history reaches the
@@ -483,7 +511,7 @@ export default function App() {
   const [diffViewMode, setDiffViewMode] = useState<"all" | "single">("all");
   const [search, setSearch] = useState("");
   const [author, setAuthor] = useState("");
-  const [path, setPath] = useState("");
+  const [path, setPath] = useState(() => initialDeepLink.path);
   // Commit kind filter (D-2): client-side filter applied to coarseKind from API.
   // 'all' = show all, 'refactor' = likely_refactor + empty, 'logic' = likely_logic.
   const [commitKindFilter, setCommitKindFilter] = useState<"all" | "refactor" | "logic">("all");
@@ -495,6 +523,22 @@ export default function App() {
   // (`search` param vs `mode`+`pattern` params).
   const [searchMode, setSearchMode] = useState<SearchMode>("subject");
   const [searchPattern, setSearchPattern] = useState("");
+  // Server-side commit date window (`YYYY-MM-DD` local days from the Filters
+  // popover). Unlike `dateRangeFilter` (a client-side narrowing of the rows
+  // already loaded), this re-queries the whole history.
+  const [sinceDate, setSinceDate] = useState("");
+  const [untilDate, setUntilDate] = useState("");
+  const commitWindow = useMemo<CommitListWindow>(
+    () => ({
+      since: localDateToIsoBound(sinceDate, "start") || undefined,
+      until: localDateToIsoBound(untilDate, "end") || undefined,
+    }),
+    [sinceDate, untilDate],
+  );
+  // History pagination: whether the last page was full (so older commits may
+  // exist) and whether a "Load older" request is in flight.
+  const [hasMoreCommits, setHasMoreCommits] = useState(false);
+  const [loadingOlderCommits, setLoadingOlderCommits] = useState(false);
   // Debounced copies of the typed filter inputs. The timeline load effect
   // listens to these (not the raw values) so a refetch fires ~250ms after the
   // user stops typing instead of on every keystroke. `searchMode` is a
@@ -608,6 +652,8 @@ export default function App() {
   const pathRef = useRef(debouncedPath);
   const searchModeRef = useRef(searchMode);
   const searchPatternRef = useRef(debouncedSearchPattern);
+  const commitWindowRef = useRef(commitWindow);
+  commitWindowRef.current = commitWindow;
   const selectedWorkTreeRef = useRef(selectedWorkTree);
   // The list a live refresh replaces: tells a timeline row that left the
   // list apart from a lens selection that was never in it.
@@ -699,6 +745,7 @@ export default function App() {
     debouncedPath,
     searchMode,
     debouncedSearchPattern,
+    commitWindow,
   ]);
 
   useEffect(() => {
@@ -769,7 +816,17 @@ export default function App() {
       .then((items) => {
         if (cancelled) return;
         setRepositories(items);
-        setSelectedRepo((current) => current || items[0]?.id || "");
+        const linked = initialDeepLink.repo;
+        const linkValid = Boolean(linked) && items.some((item) => item.id === linked);
+        if (linked && !linkValid && !selectedRepoRef.current) {
+          // A link to a repo that is no longer allowlisted must not apply
+          // its ref/commit/path to a different repository.
+          pendingDeepLinkCommitRef.current = "";
+          setSelectedRef("HEAD");
+          setSelected("");
+          setPath("");
+        }
+        setSelectedRepo((current) => current || (linkValid ? linked : items[0]?.id || ""));
         setError(items.length ? "" : "No repositories are allowlisted in RTGV_REPOS.");
       })
       .catch((err) => {
@@ -799,10 +856,12 @@ export default function App() {
       debouncedPath,
       searchMode,
       debouncedSearchPattern,
+      commitWindow,
     )
       .then(({ nextRefs, nextRef, nextCommits }) => {
         if (isStale()) return;
         appliedTimelineTicketRef.current = ticket;
+        setHasMoreCommits(pageMayHaveMore(nextCommits.length, COMMIT_PAGE_SIZE));
         const markedCommits = markRealtimeNewCommits(
           nextCommits,
           realtimeNewCommitHashesRef.current,
@@ -814,6 +873,14 @@ export default function App() {
           // The working tree is shown instead of a commit; picking one here
           // would only fetch a detail nobody sees.
           if (selectedWorkTreeRef.current) return current;
+          const linked = pendingDeepLinkCommitRef.current;
+          // A hand-written `ref=main` resolves to `refs/heads/main` and
+          // reloads once more; keep the link alive until the ref settles.
+          if (nextRef === selectedRef) pendingDeepLinkCommitRef.current = "";
+          if (linked && current === linked) {
+            setSelectionNotice("");
+            return current;
+          }
           if (!current) {
             setSelectionNotice("");
             return markedCommits[0]?.hash || "";
@@ -847,6 +914,7 @@ export default function App() {
     debouncedPath,
     searchMode,
     debouncedSearchPattern,
+    commitWindow,
   ]);
 
   useEffect(() => {
@@ -1361,6 +1429,40 @@ export default function App() {
     setSelectedWorkTree(false);
     setSelectionNotice("");
   }, []);
+  // File-at-revision viewer (whole file at the selected commit / its parent).
+  const [fileViewerTarget, setFileViewerTarget] = useState<FileViewerTarget | null>(null);
+  const handleViewFile = useCallback(
+    (filePath: string, side: "after" | "before", beforePath?: string) => {
+      if (!current) return;
+      setFileViewerTarget({
+        path: filePath,
+        commit: current.hash,
+        parent: (selectedDetail?.parents ?? current.parents ?? [])[0] ?? null,
+        beforePath,
+        side,
+      });
+    },
+    [current, selectedDetail],
+  );
+  // Deep-link sync: mirror repo / ref / selected commit / path filter into
+  // the URL (replaceState — no history entry per click), so a reload or a
+  // copied link reopens the same view. Unrelated params (fleet, flight) stay.
+  useEffect(() => {
+    if (typeof window === "undefined" || !selectedRepo) return;
+    const search = buildDeepLinkSearch(window.location.search, {
+      repo: selectedRepo,
+      ref: selectedRef,
+      commit: selectedWorkTree ? "" : selected,
+      path: debouncedPath.trim(),
+    });
+    if (search === window.location.search) return;
+    const url = `${window.location.pathname}${search}${window.location.hash}`;
+    window.history.replaceState(window.history.state, "", url);
+  }, [selectedRepo, selectedRef, selected, selectedWorkTree, debouncedPath]);
+  // The viewer reads from one repository; a repo switch closes it.
+  useEffect(() => {
+    setFileViewerTarget(null);
+  }, [selectedRepo]);
   const handleSelectWorkTree = useCallback(() => {
     setSelectedWorkTree(true);
     setSelected("");
@@ -1443,6 +1545,53 @@ export default function App() {
     [],
   );
 
+  // "Load older commits": fetch the page after the rows already loaded with
+  // the same ref, filters and date window. The timeline generation guards
+  // against a repo/ref/filter switch landing mid-request.
+  const loadOlderInFlightRef = useRef(false);
+  const loadOlderCommits = useCallback(async () => {
+    if (loadOlderInFlightRef.current) return;
+    const repoId = selectedRepoRef.current;
+    if (!repoId) return;
+    const generation = timelineGenerationRef.current;
+    const skip = commitsRef.current.length;
+    loadOlderInFlightRef.current = true;
+    setLoadingOlderCommits(true);
+    try {
+      const page = await listCommits(
+        repoId,
+        selectedRefRef.current,
+        searchRef.current,
+        authorRef.current,
+        pathRef.current,
+        searchModeRef.current,
+        searchPatternRef.current,
+        COMMIT_PAGE_SIZE,
+        { ...commitWindowRef.current, skip },
+      );
+      if (generation !== timelineGenerationRef.current) return;
+      const next = appendOlderPage(commitsRef.current, page);
+      commitsRef.current = next;
+      setCommits(next);
+      setHasMoreCommits(pageMayHaveMore(page.length, COMMIT_PAGE_SIZE));
+      const added = next.length - skip;
+      setLiveAnnouncement(
+        added > 0
+          ? `Loaded ${added} older commit${added === 1 ? "" : "s"}; ${next.length} shown.`
+          : "No older commits.",
+      );
+    } catch (err) {
+      if (generation === timelineGenerationRef.current) {
+        reportBackgroundError("timeline", errorMessage(err));
+      }
+    } finally {
+      loadOlderInFlightRef.current = false;
+      setLoadingOlderCommits(false);
+    }
+    // Every input is read through refs; reportBackgroundError is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function refreshTimeline(
     repoId: string,
     ref: string,
@@ -1470,6 +1619,7 @@ export default function App() {
         pathTerm,
         mode,
         pattern,
+        commitWindowRef.current,
       );
     } catch (err) {
       // A stale request's failure must not surface over the current view.
@@ -1482,8 +1632,16 @@ export default function App() {
     // A server-side poll failure arrives as a stream `error` event with no
     // matching success event; a successful refs read stands in for one.
     clearBackgroundError("timeline", "stream");
-    const { nextRefs, nextRef, nextCommits } = state;
+    const { nextRefs, nextRef, nextCommits: firstPage } = state;
     setRefs(nextRefs);
+    // A live refresh re-reads only the first page; keep older pages the user
+    // loaded when the new first page still connects to them.
+    const merged =
+      nextRef === selectedRefRef.current
+        ? mergeLiveFirstPage(firstPage, commitsRef.current, COMMIT_PAGE_SIZE)
+        : { commits: firstPage, reset: true };
+    if (merged.reset) setHasMoreCommits(pageMayHaveMore(firstPage.length, COMMIT_PAGE_SIZE));
+    const nextCommits = merged.commits;
     setSelectedRef(nextRef);
     const markedCommits = markRealtimeNewCommits(nextCommits, realtimeNewCommitHashesRef.current);
     setCommits(markedCommits);
@@ -1810,6 +1968,16 @@ export default function App() {
         path={path}
         onPathChange={(value) => {
           setPath(value);
+          setSelected("");
+        }}
+        since={sinceDate}
+        until={untilDate}
+        onSinceChange={(value) => {
+          setSinceDate(value);
+          setSelected("");
+        }}
+        onUntilChange={(value) => {
+          setUntilDate(value);
           setSelected("");
         }}
         searchMode={searchMode}
@@ -2217,7 +2385,10 @@ export default function App() {
               livePaused={livePaused}
               pendingUpdates={pendingUpdates}
               liveAnnouncement={liveAnnouncement}
-              activeFilters={activeFilters(search, author, path, searchMode, searchPattern)}
+              activeFilters={activeFilters(search, author, path, searchMode, searchPattern, sinceDate, untilDate)}
+              hasMoreCommits={hasMoreCommits}
+              loadingOlderCommits={loadingOlderCommits}
+              onLoadOlderCommits={loadOlderCommits}
               refs={refs}
               repoId={selectedRepo}
               selectedRef={selectedRef}
@@ -2291,11 +2462,19 @@ export default function App() {
               }}
               whyPanelQuery={whyPanelQuery}
               onWhyPanelQueryChange={setWhyPanelQuery}
+              onViewFile={handleViewFile}
             />
           </section>
         </ResizablePanel>
       </ResizablePanelGroup>
       </div>
+      <FileViewerDialog
+        repoId={selectedRepo}
+        target={fileViewerTarget}
+        onClose={() => setFileViewerTarget(null)}
+        onOpenHistory={submitFileHistoryPath}
+        onSelectCommit={handleSelectCommit}
+      />
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -2483,6 +2662,8 @@ function activeFilters(
   path: string,
   searchMode: SearchMode,
   searchPattern: string,
+  sinceDate = "",
+  untilDate = "",
 ) {
   const modeLabels: Record<SearchMode, string> = {
     subject: "Subject",
@@ -2498,6 +2679,9 @@ function activeFilters(
     searchFilter,
     author.trim() ? `author "${author.trim()}"` : "",
     path.trim() ? `path "${path.trim()}"` : "",
+    sinceDate || untilDate
+      ? `date ${sinceDate || "…"} → ${untilDate || "…"}`
+      : "",
   ].filter(Boolean);
 }
 
@@ -2509,6 +2693,7 @@ async function loadRepositoryState(
   pathTerm: string,
   searchMode: SearchMode = "subject",
   searchPattern = "",
+  window: CommitListWindow = {},
 ) {
   const nextRefs = await listRefs(repoId);
   const nextRef = resolveSelectableRef(requestedRef, nextRefs);
@@ -2520,6 +2705,8 @@ async function loadRepositoryState(
     pathTerm,
     searchMode,
     searchPattern,
+    COMMIT_PAGE_SIZE,
+    window,
   );
   return { nextRefs, nextRef, nextCommits };
 }

@@ -74,6 +74,9 @@ export function CommitTimeline({
   onFilterByAuthor,
   commitKindFilter = "all",
   onCommitKindFilterChange,
+  hasMoreCommits = false,
+  loadingOlderCommits = false,
+  onLoadOlderCommits,
 }: {
   commits: Commit[];
   selected: string;
@@ -122,7 +125,16 @@ export function CommitTimeline({
   // only the toggle UI — filtering is done upstream (filteredCommits).
   commitKindFilter?: "all" | "refactor" | "logic";
   onCommitKindFilterChange?: (value: "all" | "refactor" | "logic") => void;
+  // History pagination. `hasMoreCommits` is true while the last page was
+  // full; the footer button fetches the next page with the same filters.
+  hasMoreCommits?: boolean;
+  loadingOlderCommits?: boolean;
+  onLoadOlderCommits?: () => void;
 }) {
+  const loadOlder =
+    hasMoreCommits && onLoadOlderCommits ? (
+      <LoadOlderCommitsFooter loading={loadingOlderCommits} onLoad={onLoadOlderCommits} />
+    ) : null;
   const emptyState = activeFilters?.length
     ? {
         title: "No matching commits",
@@ -218,6 +230,7 @@ export function CommitTimeline({
                 onFilterByAuthor={onFilterByAuthor}
               />
             ))}
+            {loadOlder ? <li>{loadOlder}</li> : null}
           </ul>
         ) : (
           <>
@@ -232,6 +245,7 @@ export function CommitTimeline({
               </ul>
             ) : null}
             <StateMessage title={emptyState.title} message={emptyState.message} />
+            {loadOlder}
           </>
         )}
       </div>
@@ -244,6 +258,29 @@ export function CommitTimeline({
         count={commits.length}
       />
     </main>
+  );
+}
+
+/**
+ * Footer that pages further back in history. Kept as a button (not infinite
+ * scroll) so the user decides when to spend another `git log` read, and so
+ * keyboard and screen-reader users can reach it in the normal tab order.
+ */
+function LoadOlderCommitsFooter({ loading, onLoad }: { loading: boolean; onLoad: () => void }) {
+  return (
+    <div className="flex justify-center" style={{ padding: "12px 16px 4px" }}>
+      <button
+        type="button"
+        className="rs-compact-button"
+        onClick={onLoad}
+        disabled={loading}
+        aria-busy={loading}
+        title="Fetch the next page of history with the current filters"
+        style={{ minWidth: 180, justifyContent: "center", opacity: loading ? 0.7 : 1 }}
+      >
+        {loading ? "Loading older commits…" : "Load older commits"}
+      </button>
+    </div>
   );
 }
 

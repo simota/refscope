@@ -60,6 +60,10 @@ export function TopBar({
   onAuthorChange,
   path,
   onPathChange,
+  since,
+  until,
+  onSinceChange,
+  onUntilChange,
   searchMode,
   onSearchModeChange,
   searchPattern,
@@ -100,6 +104,12 @@ export function TopBar({
   onAuthorChange: (value: string) => void;
   path: string;
   onPathChange: (value: string) => void;
+  // Server-side commit date window (`YYYY-MM-DD`, local time). Optional so
+  // surfaces without a timeline can omit it.
+  since?: string;
+  until?: string;
+  onSinceChange?: (value: string) => void;
+  onUntilChange?: (value: string) => void;
   searchMode: SearchMode;
   onSearchModeChange: (mode: SearchMode) => void;
   searchPattern: string;
@@ -319,6 +329,10 @@ export function TopBar({
           path={path}
           onAuthorChange={onAuthorChange}
           onPathChange={onPathChange}
+          since={since}
+          until={until}
+          onSinceChange={onSinceChange}
+          onUntilChange={onUntilChange}
         />
         {/* Active path-scope chip — only rendered when a scope is active.
             Visible at all viewports (the path input above hides at sub-xl)
@@ -526,6 +540,17 @@ function LivePulse({
   );
 }
 
+const DATE_INPUT_STYLE = {
+  height: 30,
+  padding: "0 6px",
+  fontSize: 12,
+  color: "var(--rs-text-primary)",
+  background: "var(--rs-bg-canvas)",
+  border: "1px solid var(--rs-border)",
+  borderRadius: "var(--rs-radius-sm)",
+  colorScheme: "dark",
+} as const;
+
 /**
  * FiltersMenu — Author / Path filters を 1 つの Popover に集約。
  *
@@ -542,17 +567,29 @@ function FiltersMenu({
   path,
   onAuthorChange,
   onPathChange,
+  since = "",
+  until = "",
+  onSinceChange,
+  onUntilChange,
 }: {
   author: string;
   path: string;
   onAuthorChange: (value: string) => void;
   onPathChange: (value: string) => void;
+  since?: string;
+  until?: string;
+  onSinceChange?: (value: string) => void;
+  onUntilChange?: (value: string) => void;
 }) {
-  const activeCount = (author ? 1 : 0) + (path ? 1 : 0);
+  const dateActive = Boolean(since || until);
+  const activeCount = (author ? 1 : 0) + (path ? 1 : 0) + (dateActive ? 1 : 0);
   const triggerActive = activeCount > 0;
+  const dateInverted = Boolean(since && until && since > until);
   const clearAll = () => {
     if (author) onAuthorChange("");
     if (path) onPathChange("");
+    if (since) onSinceChange?.("");
+    if (until) onUntilChange?.("");
   };
   return (
     <Popover>
@@ -568,7 +605,7 @@ function FiltersMenu({
           title={
             triggerActive
               ? `${activeCount} filter${activeCount === 1 ? "" : "s"} active`
-              : "Filters: author and path"
+              : "Filters: author, path and date range"
           }
           style={
             triggerActive
@@ -740,6 +777,59 @@ function FiltersMenu({
             </button>
           )}
         </div>
+        {onSinceChange && onUntilChange ? (
+          <fieldset style={{ border: "none", padding: 0, margin: "0 0 12px" }}>
+            <legend
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 11,
+                color: "var(--rs-text-secondary)",
+                marginBottom: 4,
+                fontFamily: "var(--rs-sans)",
+                padding: 0,
+              }}
+            >
+              <CalendarRange size={12} aria-hidden />
+              Committed between
+            </legend>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="date"
+                aria-label="Committed on or after"
+                value={since}
+                max={until || undefined}
+                onChange={(event) => onSinceChange(event.target.value)}
+                className="min-w-0 flex-1"
+                style={DATE_INPUT_STYLE}
+              />
+              <span aria-hidden style={{ fontSize: 11, color: "var(--rs-text-muted)" }}>–</span>
+              <input
+                type="date"
+                aria-label="Committed on or before"
+                value={until}
+                min={since || undefined}
+                onChange={(event) => onUntilChange(event.target.value)}
+                className="min-w-0 flex-1"
+                style={DATE_INPUT_STYLE}
+              />
+            </div>
+            <div
+              role={dateInverted ? "alert" : undefined}
+              style={{
+                marginTop: 4,
+                fontSize: 10,
+                fontFamily: "var(--rs-sans)",
+                color: dateInverted ? "var(--rs-warning)" : "var(--rs-text-muted)",
+              }}
+            >
+              {dateInverted
+                ? "Start date is after end date — no commits will match."
+                : "Searches the full history on the server, in your local time zone."}
+            </div>
+          </fieldset>
+        ) : null}
         <button
           type="button"
           onClick={clearAll}

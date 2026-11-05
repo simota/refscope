@@ -196,6 +196,20 @@ pnpm capture:web                                # regenerate captured screenshot
 
 The captured media in `apps/web/public/media/` is committed; the capture script is for refreshing it after meaningful UI changes. GitHub Pages deployment is automated by `.github/workflows/pages.yml` on push to `main`.
 
+## Browsing history
+
+- **Load older commits** — the timeline shows 100 commits per page; the footer button
+  fetches the next page with the same ref, search, author, path and date filters. Live
+  updates keep the pages you loaded when the new first page still connects to them.
+- **Committed between** — the Filters popover takes a date range (your local days) that
+  is applied by Git on the server, so it reaches commits far beyond the loaded pages.
+- **View file** — the file icon / right-click on a changed file (list, tree or diff file
+  list) opens the whole file at that commit; **Before** shows the parent's version
+  (following renames). Select lines in the gutter (Shift-click extends) and **Trace** to
+  see which commits shaped them, then jump to one.
+- **Links** — the URL tracks `?repo=&ref=&commit=&path=`, so reloads restore the view and
+  the link icon in the commit panel copies a link to the selected commit.
+
 ## API
 
 Read-only endpoints (none of them write to a repository):
@@ -207,7 +221,9 @@ Read-only endpoints (none of them write to a repository):
 - `GET /api/repos/:repoId/branches/grouped?prefix=feat/`
 - `GET /api/repos/:repoId/stashes`, `/worktrees`, `/submodules`, `/state`, `/worktree`
 - `GET /api/repos/:repoId/commits?ref=HEAD&limit=50&search=message&author=name&path=src/app.ts`
-  (`mode=pickaxe|regex|message&pattern=...` selects the other search modes)
+  (`mode=pickaxe|regex|message&pattern=...` selects the other search modes;
+  `skip=N` pages further back in history, max 200 per page;
+  `since=` / `until=` take `YYYY-MM-DD` or UTC `YYYY-MM-DDTHH:MM:SS[.sss]Z` bounds)
 - `GET /api/repos/:repoId/commits/summary?since=...&until=...&groupBy=prefix`
 - `GET /api/repos/:repoId/commits/:hash`
 - `GET /api/repos/:repoId/commits/:hash/diff`
@@ -216,6 +232,9 @@ Read-only endpoints (none of them write to a repository):
 - `GET /api/repos/:repoId/compare?base=main&target=feature/refscope`
 - `GET /api/repos/:repoId/compare/cherry?base=main&target=feature/refscope`
 - `GET /api/repos/:repoId/files/history?path=...`
+- `GET /api/repos/:repoId/files/content?commit=<full hash>&path=...` — the whole file
+  at that commit (raw `cat-file`, 1 MiB cap with `truncated`, `binary: true` and no content
+  for binary blobs)
 - `GET /api/repos/:repoId/files/range-history?path=...&lineStart=1&lineEnd=20`
 - `GET /api/repos/:repoId/files/related?path=...`
 - `GET /api/repos/:repoId/files/hotspot?ref=HEAD&limit=500&commitCap=200`

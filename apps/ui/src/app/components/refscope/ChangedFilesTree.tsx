@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, FileSearch, History } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, FileCode, FileSearch, History } from "lucide-react";
 import type { ChangedFile } from "./data";
 import { FileBadge } from "./DetailPanel";
 import { StructuralDiffBadge } from "./StructuralDiffBadge";
@@ -24,11 +24,13 @@ export function ChangedFilesTree({
   repoId,
   onOpenFileHistory,
   onFilterByPath,
+  onViewFile,
 }: {
   files: ChangedFile[];
   repoId: string;
   onOpenFileHistory: (path: string) => void;
   onFilterByPath?: (path: string) => void;
+  onViewFile?: (path: string, side: "after" | "before", beforePath?: string) => void;
 }) {
   const nodes = useMemo(() => buildFileTree(files), [files]);
   const initialExpanded = useMemo(
@@ -67,6 +69,7 @@ export function ChangedFilesTree({
           repoId={repoId}
           onOpenFileHistory={onOpenFileHistory}
           onFilterByPath={onFilterByPath}
+          onViewFile={onViewFile}
         />
       ))}
     </div>
@@ -81,6 +84,7 @@ function TreeRow({
   repoId,
   onOpenFileHistory,
   onFilterByPath,
+  onViewFile,
 }: {
   node: FileTreeNode;
   depth: number;
@@ -89,6 +93,7 @@ function TreeRow({
   repoId: string;
   onOpenFileHistory: (path: string) => void;
   onFilterByPath?: (path: string) => void;
+  onViewFile?: (path: string, side: "after" | "before", beforePath?: string) => void;
 }) {
   if (node.kind === "dir") {
     const isOpen = expanded.has(node.fullPath);
@@ -173,6 +178,7 @@ function TreeRow({
                 repoId={repoId}
                 onOpenFileHistory={onOpenFileHistory}
                 onFilterByPath={onFilterByPath}
+                onViewFile={onViewFile}
               />
             ))
           : null}
@@ -213,6 +219,9 @@ function TreeRow({
           <StructuralDiffBadge kind={f.structuralKind} compact />
           <span style={{ color: "var(--rs-git-added)" }}>+{f.added}</span>
           <span style={{ color: "var(--rs-git-deleted)" }}>-{f.deleted}</span>
+          {onViewFile ? (
+            <ViewFileButton path={node.fullPath} status={f.status} onViewFile={onViewFile} />
+          ) : null}
           <button
             type="button"
             className="rs-icon-btn"
@@ -234,6 +243,7 @@ function TreeRow({
           <History />
           Open file history
         </ContextMenuItem>
+        {onViewFile ? <ViewFileMenuItems path={node.fullPath} status={f.status} onViewFile={onViewFile} /> : null}
         <ContextMenuSeparator />
         <ContextMenuItem
           onSelect={() => void navigator.clipboard?.writeText(node.fullPath)}
@@ -250,5 +260,57 @@ function TreeRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/** Deleted files only exist on the parent side; everything else opens "after". */
+export function defaultViewSide(status: string): "after" | "before" {
+  return status.startsWith("D") ? "before" : "after";
+}
+
+export function ViewFileButton({
+  path,
+  status,
+  onViewFile,
+}: {
+  path: string;
+  status: string;
+  onViewFile: (path: string, side: "after" | "before") => void;
+}) {
+  const side = defaultViewSide(status);
+  return (
+    <button
+      type="button"
+      className="rs-icon-btn"
+      aria-label={`View ${path} ${side === "before" ? "before this commit" : "at this commit"}`}
+      title={side === "before" ? "View file before this commit" : "View full file at this commit"}
+      onClick={() => onViewFile(path, side)}
+      style={{ width: 22, height: 22 }}
+    >
+      <FileCode size={12} />
+    </button>
+  );
+}
+
+export function ViewFileMenuItems({
+  path,
+  status,
+  onViewFile,
+}: {
+  path: string;
+  status: string;
+  onViewFile: (path: string, side: "after" | "before") => void;
+}) {
+  return (
+    <>
+      <ContextMenuItem disabled={status.startsWith("D")} onSelect={() => onViewFile(path, "after")}>
+        <FileCode />
+        View file at this commit
+      </ContextMenuItem>
+      <ContextMenuItem disabled={status.startsWith("A")} onSelect={() => onViewFile(path, "before")}>
+        <FileCode />
+        View file before this commit
+      </ContextMenuItem>
+    </>
   );
 }
