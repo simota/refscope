@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  FileCode,
   FileSearch,
   History,
   Maximize2,
@@ -61,6 +62,7 @@ export function DiffViewer({
   onViewModeChange,
   onOpenFileHistory,
   onFilterByPath,
+  onViewFile,
 }: {
   diff: string;
   truncated: boolean;
@@ -75,6 +77,9 @@ export function DiffViewer({
   onOpenFileHistory?: (path: string) => void;
   // Right-click action: pin this file's path into the global path filter.
   onFilterByPath?: (path: string) => void;
+  // Right-click action: open the whole file at this commit / its parent.
+  // `beforePath` is the pre-rename path for renamed files.
+  onViewFile?: (path: string, side: "after" | "before", beforePath?: string) => void;
 }) {
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const totals = useMemo(() => countTotalChanges(parsed), [parsed]);
@@ -459,6 +464,7 @@ export function DiffViewer({
           listRef={listRef}
           onOpenFileHistory={onOpenFileHistory}
           onFilterByPath={onFilterByPath}
+          onViewFile={onViewFile}
         />
         <div
           ref={diffScrollRef}
@@ -731,6 +737,7 @@ function FileList({
   listRef,
   onOpenFileHistory,
   onFilterByPath,
+  onViewFile,
 }: {
   files: DiffFile[];
   selectedIndex: number;
@@ -742,6 +749,7 @@ function FileList({
   listRef?: React.RefObject<HTMLUListElement>;
   onOpenFileHistory?: (path: string) => void;
   onFilterByPath?: (path: string) => void;
+  onViewFile?: (path: string, side: "after" | "before", beforePath?: string) => void;
 }) {
   return (
     <ul
@@ -826,7 +834,7 @@ function FileList({
         // Skip wrapping when no handler is wired; keeps the row tree identical
         // to the pre-context-menu shape for callers that don't opt in to any
         // right-click action at all.
-        if (!onOpenFileHistory && !onFilterByPath) return row;
+        if (!onOpenFileHistory && !onFilterByPath && !onViewFile) return row;
         const pathAvailable = historyPath !== "(unknown)";
         return (
           <ContextMenu key={fileKey(file)}>
@@ -839,6 +847,28 @@ function FileList({
                 <History />
                 Open file history
               </ContextMenuItem>
+              {onViewFile ? (
+                <>
+                  <ContextMenuItem
+                    disabled={!file.newPath}
+                    onSelect={() => {
+                      if (file.newPath) onViewFile(file.newPath, "after", file.oldPath ?? undefined);
+                    }}
+                  >
+                    <FileCode />
+                    View file at this commit
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={!file.oldPath}
+                    onSelect={() => {
+                      if (file.oldPath) onViewFile(file.newPath ?? file.oldPath, "before", file.oldPath);
+                    }}
+                  >
+                    <FileCode />
+                    View file before this commit
+                  </ContextMenuItem>
+                </>
+              ) : null}
               <ContextMenuSeparator />
               <ContextMenuItem
                 disabled={!pathAvailable}

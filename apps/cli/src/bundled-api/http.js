@@ -206,6 +206,12 @@ export function createRequestHandler(config, gitService, fleetService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "fileContent") {
+        const result = await gitService.getFileContent(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+
       if (route.name === "rangeHistory") {
         const result = await gitService.getRangeHistory(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
@@ -392,6 +398,11 @@ function matchRoute(method, pathname) {
   // itself stays in the query string (where validation owns the contract).
   if (parts.length === 5 && parts[3] === "files" && parts[4] === "history") {
     return { name: "fileHistory", params: { repoId } };
+  }
+  // File-at-revision viewer: `/files/content` with commit + path in the
+  // query string, same shape as `/files/history`.
+  if (parts.length === 5 && parts[3] === "files" && parts[4] === "content") {
+    return { name: "fileContent", params: { repoId } };
   }
   // Range-history (Why panel): `/files/range-history` so the line range and
   // path stay in the query string, matching the validation contract exactly.

@@ -248,6 +248,19 @@ export async function getRepoState(
 
 export type SearchMode = "subject" | "pickaxe" | "regex" | "message";
 
+/** Commits fetched per timeline page; "Load older" requests the next page. */
+export const COMMIT_PAGE_SIZE = 100;
+
+/**
+ * Pagination offset and ISO date bounds (`YYYY-MM-DD` or UTC
+ * `YYYY-MM-DDTHH:MM:SSZ`) for the commit list. Empty values are omitted.
+ */
+export type CommitListWindow = {
+  skip?: number;
+  since?: string;
+  until?: string;
+};
+
 export async function listCommits(
   repoId: string,
   ref: string,
@@ -256,9 +269,13 @@ export async function listCommits(
   path = "",
   searchMode: SearchMode = "subject",
   searchPattern = "",
-  limit = 100,
+  limit = COMMIT_PAGE_SIZE,
+  window: CommitListWindow = {},
 ) {
   const params = new URLSearchParams({ ref, limit: String(limit) });
+  if (window.skip && window.skip > 0) params.set("skip", String(window.skip));
+  if (window.since) params.set("since", window.since);
+  if (window.until) params.set("until", window.until);
   // subject mode uses the legacy `search` param; other modes use `mode`+`pattern`.
   if (searchMode === "subject") {
     const normalizedSearch = search.trim();
@@ -284,6 +301,32 @@ export async function listCommits(
     `/api/repos/${encodeURIComponent(repoId)}/commits?${params}`,
   );
   return body.map(toCommit);
+}
+
+export type FileContentResponse = {
+  commit: string;
+  path: string;
+  objectId: string;
+  size: number;
+  binary: boolean;
+  truncated: boolean;
+  maxBytes: number;
+  lineCount: number | null;
+  content: string | null;
+};
+
+/** The whole file at `<commit>:<path>` (GET /files/content). */
+export async function fetchFileContent(
+  repoId: string,
+  commit: string,
+  path: string,
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ commit, path });
+  return getJson<FileContentResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/files/content?${params}`,
+    signal,
+  );
 }
 
 export async function getCommit(repoId: string, hash: string, signal?: AbortSignal) {

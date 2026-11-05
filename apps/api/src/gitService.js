@@ -18,6 +18,7 @@ import {
   parseNearIdenticalThresholdQuery,
   parsePathQuery,
   parsePatternQuery,
+  parseSkipQuery,
   parseSearchModeQuery,
   parseSearchQuery,
   BRANCH_GROUP_MAX_BRANCHES,
@@ -80,6 +81,18 @@ export const RANGE_HISTORY_MAX_LIMIT = 50;
 // confirms 50 commits is insufficient for typical refactor workflows.
 export const SYMBOL_HISTORY_DEFAULT_LIMIT = 20;
 export const SYMBOL_HISTORY_MAX_LIMIT = 50;
+
+// File-at-revision viewer cap. A source file worth reading in a browser is
+// far below this; larger blobs are returned truncated at a line boundary.
+export const FILE_CONTENT_MAX_BYTES = 1024 * 1024;
+
+/** LF count plus one for an unterminated last line ("" → 0). */
+function countLines(text) {
+  if (text === "") return 0;
+  let lines = 0;
+  for (let at = text.indexOf("\n"); at !== -1; at = text.indexOf("\n", at + 1)) lines += 1;
+  return text.endsWith("\n") ? lines : lines + 1;
+}
 
 // Git Ref Flight Recorder (feature-flagged UI surface).
 // In-memory, bounded event log per repo. It intentionally stores only ref
@@ -869,6 +882,18 @@ export function createGitService(config) {
       if (!pattern.ok) {
         return { status: 400, body: { error: pattern.error } };
       }
+      const skip = parseSkipQuery(queryValues.value.skip);
+      if (!skip.ok) {
+        return { status: 400, body: { error: skip.error } };
+      }
+      const since = parseDateQuery(queryValues.value.since, "since");
+      if (!since.ok) {
+        return { status: 400, body: { error: since.error } };
+      }
+      const until = parseDateQuery(queryValues.value.until, "until");
+      if (!until.ok) {
+        return { status: 400, body: { error: until.error } };
+      }
 
       // `search` is the legacy subject-search parameter. Combining it with a
       // non-subject mode is ambiguous — reject early to surface the conflict.
@@ -889,7 +914,11 @@ export function createGitService(config) {
       try {
         ({ stdout } = await runGit(
           repo,
-          commitListLogArgs(limit.value, searchArgs, authorArgs, commitishRef.hash, pathArgs),
+          commitListLogArgs(limit.value, searchArgs, authorArgs, commitishRef.hash, pathArgs, {
+            skip: skip.value,
+            since: since.value,
+            until: until.value,
+          }),
           // See listCommitRange: --numstat output grows with commit size.
           { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
         ));
@@ -1032,6 +1061,105 @@ export function createGitService(config) {
           diff: truncated ? stdout.slice(0, stdout.lastIndexOf("\n") + 1) : stdout,
           truncated,
           maxBytes: config.diffMaxBytes,
+        },
+      };
+    },
+
+    /**
+     * File-at-revision viewer: GET /api/repos/:id/files/content?commit=&path=
+     *
+     * Returns the blob stored at `<commit>:<path>` — the whole file as it was
+     * at that commit, not just the hunks a diff shows. Reads are raw object
+     * reads (`cat-file`), so no filter driver, textconv, or working-tree
+     * content is involved. Content is capped at FILE_CONTENT_MAX_BYTES; a
+     * larger file comes back `truncated: true` cut at a line boundary, and a
+     * file with a NUL byte in its first 8000 bytes (Git's own binary
+     * heuristic) comes back `binary: true` with no content.
+     *
+     * @param {{ id: string; path: string }} repo
+     * @param {URLSearchParams} query
+     */
+    async getFileContent(repo, query) {
+      const values = {};
+      for (const name of ["commit", "path"]) {
+        const all = query.getAll(name);
+        if (all.length > 1) {
+          return { status: 400, body: { error: `Duplicate ${name} parameter` } };
+        }
+        values[name] = all[0] ?? "";
+      }
+      if (!isValidObjectId(values.commit)) {
+        return { status: 400, body: { error: "Invalid commit parameter" } };
+      }
+      const path = parsePathQuery(values.path);
+      if (!path.ok) {
+        return { status: 400, body: { error: path.error } };
+      }
+      if (!path.value) {
+        return { status: 400, body: { error: "Missing path parameter" } };
+      }
+      const commitObject = await validateCommitObject(repo, values.commit, config.gitTimeoutMs);
+      if (!commitObject.ok) {
+        return commitObject.result;
+      }
+      const resolved = await resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      if (!resolved.ok) {
+        return resolved.result;
+      }
+      const commitOid = resolved.hash;
+
+      // The object name travels on stdin, never as an argument, so a path
+      // can never be read as an option. parsePathQuery already rejects LF.
+      const { stdout: checkOut } = await runGit(
+        repo,
+        ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+        { timeoutMs: config.gitTimeoutMs, maxBytes: 4096, input: `${commitOid}:${path.value}\n` },
+      );
+      const match = BATCH_CHECK_LINE_PATTERN.exec(checkOut.replace(/\n$/, ""));
+      if (!match) {
+        return { status: 404, body: { error: "Path not found at this commit" } };
+      }
+      if (match[2] !== "blob") {
+        return { status: 400, body: { error: "Path is not a file at this commit" } };
+      }
+      const objectId = match[1];
+      const size = Number(match[3]);
+      const readBytes = Math.min(size, FILE_CONTENT_MAX_BYTES);
+
+      let buffer = Buffer.alloc(0);
+      if (readBytes > 0) {
+        const { stdout } = await runGit(repo, ["cat-file", "blob", objectId], {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: readBytes,
+          allowTruncatedStdout: true,
+          rawStdout: true,
+        });
+        buffer = stdout;
+      }
+      const truncated = size > buffer.length;
+      const binary = buffer.subarray(0, 8000).includes(0);
+
+      let content = null;
+      let lineCount = null;
+      if (!binary) {
+        // A byte cap can split a line or a UTF-8 sequence; keep whole lines.
+        const whole = truncated ? buffer.subarray(0, buffer.lastIndexOf(0x0a) + 1) : buffer;
+        content = whole.toString("utf8");
+        lineCount = countLines(content);
+      }
+
+      return {
+        status: 200,
+        body: {
+          commit: commitOid,
+          path: path.value,
+          objectId,
+          size,
+          binary,
+          truncated,
+          maxBytes: FILE_CONTENT_MAX_BYTES,
+          lineCount,
+          content,
         },
       };
     },
@@ -2594,7 +2722,7 @@ async function readMergeBase(repo, base, target, timeoutMs) {
 
 function readCommitListQuery(query) {
   const values = {};
-  for (const name of ["limit", "ref", "search", "author", "path", "mode", "pattern"]) {
+  for (const name of ["limit", "ref", "search", "author", "path", "mode", "pattern", "skip", "since", "until"]) {
     const allValues = query.getAll(name);
     if (allValues.length > 1) {
       return { ok: false, error: `Duplicate ${name} parameter` };
@@ -2671,10 +2799,24 @@ export function commitRangeLogArgs(fromRevision, toRevision) {
   return ["--not", fromRevision, "--not", "--end-of-options", toRevision];
 }
 
-export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathArgs) {
+/**
+ * @param {number} limit
+ * @param {string[]} searchArgs
+ * @param {string[]} authorArgs
+ * @param {string} revision
+ * @param {string[]} pathArgs
+ * @param {{ skip?: number, since?: string|null, until?: string|null }} [window]
+ *   Pagination offset and validated ISO date bounds (see parseSkipQuery /
+ *   parseDateQuery). Omitted values add no arguments.
+ */
+export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathArgs, window = {}) {
+  const { skip = 0, since = null, until = null } = window;
   return [
     "log",
     `--max-count=${limit}`,
+    ...(skip > 0 ? [`--skip=${skip}`] : []),
+    ...(since ? [`--since=${since}`] : []),
+    ...(until ? [`--until=${until}`] : []),
     "--date=iso-strict",
     ...searchArgs,
     ...authorArgs,

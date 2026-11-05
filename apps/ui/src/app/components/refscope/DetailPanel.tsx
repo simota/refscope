@@ -6,6 +6,7 @@ import {
   FileSearch,
   FolderTree,
   History,
+  Link2,
   List as ListIcon,
   Search,
   ShieldCheck,
@@ -21,9 +22,10 @@ import type {
   WorkTreeUntrackedFile,
 } from "../../api";
 import { fetchRangeHistory } from "../../api";
+import { buildDeepLinkSearch, parseDeepLink } from "../../lib/historyBrowsing";
 import { DiffViewer } from "./DiffViewer";
 import { StructuralDiffBadge } from "./StructuralDiffBadge";
-import { ChangedFilesTree } from "./ChangedFilesTree";
+import { ChangedFilesTree, ViewFileButton, ViewFileMenuItems } from "./ChangedFilesTree";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -80,6 +82,7 @@ export function DetailPanel({
   onFilterByPath,
   whyPanelQuery,
   onWhyPanelQueryChange,
+  onViewFile,
 }: {
   commit: Commit | null;
   detail: CommitDetail | null;
@@ -105,6 +108,8 @@ export function DetailPanel({
   // "Why is this here?" panel query state (owned by App.tsx).
   whyPanelQuery?: WhyPanelQuery | null;
   onWhyPanelQueryChange?: (q: WhyPanelQuery | null) => void;
+  // Opens the file-at-revision viewer for a changed file of this commit.
+  onViewFile?: (path: string, side: "after" | "before", beforePath?: string) => void;
 }) {
   // Hooks must run unconditionally before any early return, otherwise React's
   // rules-of-hooks check trips and reorders break state. The previous version
@@ -218,6 +223,24 @@ export function DetailPanel({
             onClick={() => void copyToClipboard("git show command", gitShowCommand)}
           >
             <Terminal size={13} />
+          </button>
+          <button
+            type="button"
+            className="rs-icon-btn"
+            title="Copy link to this commit"
+            aria-label="Copy link to this commit"
+            onClick={() => {
+              const link = parseDeepLink(window.location.search);
+              const search = buildDeepLinkSearch(window.location.search, {
+                ...link,
+                repo: repoId || link.repo,
+                commit: commit.hash,
+              });
+              const url = `${window.location.origin}${window.location.pathname}${search}`;
+              void copyToClipboard("Link", url);
+            }}
+          >
+            <Link2 size={13} />
           </button>
           <button
             type="button"
@@ -356,6 +379,7 @@ export function DetailPanel({
               repoId={repoId}
               onOpenFileHistory={onOpenFileHistory}
               onFilterByPath={onFilterByPath}
+              onViewFile={onViewFile}
             />
           ) : (
             files.map((f) => (
@@ -381,6 +405,9 @@ export function DetailPanel({
                     <StructuralDiffBadge kind={f.structuralKind} compact />
                     <span style={{ color: "var(--rs-git-added)" }}>+{f.added}</span>
                     <span style={{ color: "var(--rs-git-deleted)" }}>-{f.deleted}</span>
+                    {onViewFile ? (
+                      <ViewFileButton path={f.path} status={f.status} onViewFile={onViewFile} />
+                    ) : null}
                     <button
                       type="button"
                       className="rs-icon-btn"
@@ -403,6 +430,9 @@ export function DetailPanel({
                     <History />
                     Open file history
                   </ContextMenuItem>
+                  {onViewFile ? (
+                    <ViewFileMenuItems path={f.path} status={f.status} onViewFile={onViewFile} />
+                  ) : null}
                   <ContextMenuSeparator />
                   <ContextMenuItem
                     onSelect={() => void navigator.clipboard?.writeText(f.path)}
@@ -439,6 +469,7 @@ export function DetailPanel({
               onViewModeChange={onDiffViewModeChange}
               onOpenFileHistory={onOpenFileHistory}
               onFilterByPath={onFilterByPath}
+              onViewFile={onViewFile}
             />
           ) : (
             <Empty>{loading ? "Loading diff…" : "No diff returned for this commit."}</Empty>

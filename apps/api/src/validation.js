@@ -96,6 +96,34 @@ export function parseLimitQuery(value, fallback, max, fieldName = "limit") {
   return { ok: true, value: Math.min(parsed, max) };
 }
 
+// Upper bound for history pagination offsets (`git log --skip`). Generous
+// enough for very deep histories, small enough that a typo cannot make Git
+// walk an unbounded number of commits just to discard them.
+export const SKIP_QUERY_MAX = 1_000_000;
+const SKIP_PATTERN = /^(?:0|[1-9][0-9]{0,6})$/;
+
+/**
+ * Parse the `skip` pagination offset for commit lists. Empty / missing → 0.
+ * Only canonical non-negative decimal integers up to SKIP_QUERY_MAX pass;
+ * `+1`, `01`, `1e3`, `-1`, and `1.5` are rejected.
+ *
+ * @param {string|null|undefined} value
+ * @returns {{ ok: true, value: number } | { ok: false, error: string }}
+ */
+export function parseSkipQuery(value) {
+  if (value == null || value === "") {
+    return { ok: true, value: 0 };
+  }
+  if (typeof value !== "string" || !SKIP_PATTERN.test(value)) {
+    return { ok: false, error: "Invalid skip parameter" };
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > SKIP_QUERY_MAX) {
+    return { ok: false, error: "Invalid skip parameter" };
+  }
+  return { ok: true, value: parsed };
+}
+
 export function parseSearchQuery(value) {
   return parseBoundedTextQuery(value, "Invalid search parameter");
 }

@@ -195,3 +195,24 @@ export function flattenTokens(
   }
   return out;
 }
+
+/**
+ * Highlight a whole file in one Prism pass (so block comments and template
+ * literals spanning lines tokenize correctly) and split the runs back into
+ * lines. Returns `null` when the language is unknown — render plain text.
+ * A trailing newline does not produce an extra empty line.
+ */
+export function highlightLines(text: string, lang: string | null): HighlightedRun[][] | null {
+  const tokens = tokenizeLine(text, lang);
+  if (!tokens) return null;
+  const lines: HighlightedRun[][] = [[]];
+  for (const run of flattenTokens(tokens)) {
+    const parts = run.text.split("\n");
+    parts.forEach((part, index) => {
+      if (index > 0) lines.push([]);
+      if (part) lines[lines.length - 1].push({ className: run.className, text: part });
+    });
+  }
+  if (text.endsWith("\n")) lines.pop();
+  return lines;
+}
