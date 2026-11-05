@@ -77,7 +77,7 @@ export function EmptyStateCard({
           style={{
             fontSize: 14,
             fontWeight: 600,
-            color: 'var(--rs-text)',
+            color: 'var(--rs-text-primary)',
             marginBottom: 8,
           }}
         >

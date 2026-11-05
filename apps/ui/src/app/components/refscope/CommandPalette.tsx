@@ -548,6 +548,33 @@ export function CommandPalette({
     return () => window.removeEventListener("keydown", onKey);
   }, [active, filtered, open, onClose]);
 
+  // Return focus to whatever opened the palette, unless the command that ran
+  // already moved focus somewhere meaningful (anything but <body>). The opener
+  // is captured during the render that opens the palette: by the time an
+  // effect runs, the input's autoFocus has already moved focus into it.
+  const openerRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+  if (open && !wasOpenRef.current) {
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+  wasOpenRef.current = open;
+  useEffect(() => {
+    if (!open) return;
+    const opener = openerRef.current;
+    return () => {
+      const current = document.activeElement;
+      if (opener && opener.isConnected && (!current || current === document.body)) {
+        opener.focus();
+      }
+    };
+  }, [open]);
+
+  // Keep the keyboard-highlighted option visible in the scrolling listbox.
+  useEffect(() => {
+    if (!open) return;
+    document.getElementById(`rs-palette-option-${active}`)?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
   if (!open) return null;
 
   async function runCommand(command: PaletteCommand | undefined) {
@@ -564,6 +591,7 @@ export function CommandPalette({
     <div
       role="dialog"
       aria-modal
+      aria-label="Command palette"
       className="fixed inset-0 grid place-items-start justify-center pt-[18vh]"
       style={{ background: "color-mix(in oklab, black, transparent 50%)", zIndex: "var(--rs-z-modal)" }}
       onClick={onClose}
@@ -587,6 +615,12 @@ export function CommandPalette({
           <Search size={14} style={{ color: "var(--rs-text-muted)" }} />
           <input
             autoFocus
+            role="combobox"
+            aria-label="Search commands"
+            aria-expanded="true"
+            aria-controls="rs-palette-listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={filtered.length > 0 ? `rs-palette-option-${active}` : undefined}
             placeholder="Type a command…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -608,9 +642,12 @@ export function CommandPalette({
             ESC
           </kbd>
         </div>
-        <ul role="listbox" className="py-1 max-h-80 overflow-y-auto">
+        <ul id="rs-palette-listbox" role="listbox" aria-label="Commands" className="py-1 max-h-80 overflow-y-auto">
           {filtered.length === 0 ? (
             <li
+              role="option"
+              aria-selected="false"
+              aria-disabled="true"
               className="px-4 py-6 text-center"
               style={{ color: "var(--rs-text-muted)", fontSize: 12 }}
             >
@@ -623,6 +660,7 @@ export function CommandPalette({
               return (
                 <li
                   key={c.label}
+                  id={`rs-palette-option-${i}`}
                   role="option"
                   aria-selected={isActive}
                   onMouseEnter={() => setActive(i)}

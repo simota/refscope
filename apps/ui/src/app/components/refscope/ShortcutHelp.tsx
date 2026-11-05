@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Keyboard } from "lucide-react";
 import {
   formatCombo,
@@ -30,6 +30,21 @@ export function ShortcutHelp({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // Move focus into the dialog on open and give it back on close, so
+  // keyboard and screen-reader users land in (and return from) the overlay.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    scrollRef.current?.focus();
+    return () => {
+      const current = document.activeElement;
+      if (previous && previous.isConnected && (!current || current === document.body)) {
+        previous.focus();
+      }
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -83,7 +98,12 @@ export function ShortcutHelp({
           </kbd>
         </div>
 
-        <div className="px-2 py-1 max-h-[60vh] overflow-y-auto">
+        <div
+          ref={scrollRef}
+          tabIndex={0}
+          aria-label="Shortcut list"
+          className="px-2 py-1 max-h-[60vh] overflow-y-auto"
+        >
           {/* Live Lens の 3 ペイン凡例 — 他 11 Lens は専用ファイル (LensHeader)
               で説明を担うが、Live は基幹 Lens で TopBar / ResizablePanelGroup
               構成のため、ここに小さな凡例を置いて自己説明性を底上げする。 */}
@@ -164,7 +184,7 @@ export function ShortcutHelp({
                         fontSize: 11,
                         fontFamily: "var(--rs-mono)",
                         color: "var(--rs-text-primary)",
-                        background: "var(--rs-bg-base)",
+                        background: "var(--rs-bg-canvas)",
                         border: "1px solid var(--rs-border)",
                       }}
                     >

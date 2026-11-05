@@ -43,6 +43,7 @@ run_check "Dependencies install from lockfile" pnpm install --frozen-lockfile
 run_check "Build succeeds" pnpm build
 run_check "No high-severity dependency advisories" pnpm audit --audit-level high
 run_check "Tests pass when configured" run_optional_script test
+run_check "Type check passes when configured" run_optional_script typecheck
 run_check "Lint passes when configured" run_optional_script lint
 
 echo ""

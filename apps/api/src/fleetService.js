@@ -199,7 +199,10 @@ async function getFleetRepoSnapshot(repoId, repoPath, window, gitService) {
         status: "git_error",
       };
     }
-    // Unknown error: surface as git_error to avoid leaking internals.
+    // Unknown error: surface as git_error to avoid leaking internals, but log
+    // it — a programming error here (e.g. a missing probe) would otherwise
+    // be indistinguishable from a broken repository.
+    console.error(`[fleet] unexpected error probing ${repoId}:`, err);
     return {
       repoId,
       ...nullRepoFields(),

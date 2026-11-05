@@ -44,6 +44,7 @@ import { FleetSurface } from "./components/refscope/FleetSurface";
 import { FleetOnboardingOverlay } from "./components/refscope/FleetOnboardingOverlay";
 import { AddRepoDialog } from "./components/refscope/AddRepoDialog";
 import { SymbolHistoryView } from "./components/refscope/SymbolHistoryView";
+import { useIsMobile } from "./components/ui/use-mobile";
 import type {
   Commit,
   CommitDetail,
@@ -454,7 +455,6 @@ export default function App() {
       return { ok: true as const };
     }
     return { ok: false as const, error: result.error };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [evictRepo, selectedRepo, repositories, switchRepo]);
   const [selectedRef, setSelectedRef] = useState("HEAD");
   const [selected, setSelected] = useState("");
@@ -645,6 +645,23 @@ export default function App() {
     toggleActivityGraph,
   } = useTimelinePrefs();
   const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
+  // Below 768px the three panes stack vertically instead of being squeezed
+  // side by side (each pane was ~130px wide at 390px).
+  const isNarrow = useIsMobile();
+  // Mount the sidebar at its collapsed size when the persisted preference says
+  // so. Mounting it expanded made react-resizable-panels fire onExpand, which
+  // overwrote the saved "hidden" preference on every reload.
+  const initialPanelSizes = useMemo(() => {
+    if (!sidebarCollapsed) return panelSizes;
+    const rest = panelSizes.center + panelSizes.detail;
+    return {
+      sidebar: 0,
+      center: (panelSizes.center / rest) * 100,
+      detail: (panelSizes.detail / rest) * 100,
+    };
+    // Only the mount-time value matters (defaultSize); recompute when the
+    // group remounts for a layout-direction change.
+  }, [isNarrow]);
   // Track collapse intent vs. actual panel state so the imperative API is only
   // called when they diverge — react-resizable-panels' collapse() is idempotent
   // but extra calls during drag would fight user input.
@@ -654,9 +671,13 @@ export default function App() {
     if (sidebarCollapsed && !handle.isCollapsed()) {
       handle.collapse();
     } else if (!sidebarCollapsed && handle.isCollapsed()) {
-      handle.expand();
+      // A panel mounted collapsed has no pre-collapse size to restore, so
+      // reopen it at the user's saved ratio rather than at minSize.
+      handle.resize(Math.min(30, Math.max(12, panelSizes.sidebar)));
     }
-  }, [sidebarCollapsed]);
+    // panelSizes is read for the restore size only; re-running on every drag
+    // would fight user input.
+  }, [sidebarCollapsed, isNarrow]);
   // Quiet mode controls motion only; SSE application must not gate on isQuiet,
   // or OS prefers-reduced-motion silently freezes ref/commit updates.
   const effectivePaused = livePaused;
@@ -1220,7 +1241,6 @@ export default function App() {
     // their useCallback closures; the only reactive identifier the EventSource
     // itself depends on is `selectedRepo` (plus `streamRetryKey`, which only
     // reopens it), mirroring existing precedent in this file.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepo, streamRetryKey]);
 
   // Repo-scoped sidebar facts refresh per repo. All four endpoints are
@@ -1573,7 +1593,6 @@ export default function App() {
       searchPatternRef.current,
     ).catch((err) => setError(errorMessage(err)));
     // refreshTimeline is stable through refs; selectedRepo is the only reactive input.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepo]);
 
   // useCallback (not a plain function) so the `shortcutBindings` memo below
@@ -1756,7 +1775,6 @@ export default function App() {
       >
         Skip to commit list
       </a>
-      <RefScopeTokens />
       <TopBar
         repositories={repositories}
         selectedRepo={selectedRepo}
@@ -2062,7 +2080,7 @@ export default function App() {
             flexShrink: 0,
           }}
         >
-          <span style={{ fontWeight: 600, color: 'var(--rs-text)' }} aria-hidden="true">
+          <span style={{ fontWeight: 600, color: 'var(--rs-text-primary)' }} aria-hidden="true">
             Live
           </span>
           <span aria-hidden="true" style={{ opacity: 0.5 }}>·</span>
@@ -2103,7 +2121,7 @@ export default function App() {
               background: 'color-mix(in oklab, var(--rs-bg-panel), var(--rs-warning) 12%)',
               fontFamily: 'var(--rs-sans)',
               fontSize: 11,
-              color: 'var(--rs-text)',
+              color: 'var(--rs-text-primary)',
               flexShrink: 0,
             }}
           >
@@ -2115,9 +2133,12 @@ export default function App() {
         )}
 
       <ResizablePanelGroup
-        direction="horizontal"
+        key={isNarrow ? "stacked" : "side-by-side"}
+        direction={isNarrow ? "vertical" : "horizontal"}
         className="flex flex-1 overflow-hidden"
         onLayout={(layout) => {
+          // Stacked (narrow) heights must not overwrite the desktop width ratios.
+          if (isNarrow) return;
           // layout reflects the live order of panels; when the sidebar is collapsed
           // it is still present (collapsedSize=0) so the array length stays at 3.
           if (layout.length !== 3) return;
@@ -2135,7 +2156,7 @@ export default function App() {
           ref={sidebarPanelRef}
           collapsible
           collapsedSize={0}
-          defaultSize={panelSizes.sidebar}
+          defaultSize={initialPanelSizes.sidebar}
           minSize={12}
           maxSize={30}
           onCollapse={() => setSidebarCollapsed(true)}
@@ -2164,11 +2185,11 @@ export default function App() {
           />
           </aside>
         </ResizablePanel>
-        <ResizableHandle withHandle aria-label="Resize Refs panel (drag to adjust width)" />
+        <ResizableHandle withHandle aria-label={`Resize Refs panel (drag to adjust ${isNarrow ? "height" : "width"})`} />
         <ResizablePanel
           id="rs-center"
           order={2}
-          defaultSize={panelSizes.center}
+          defaultSize={initialPanelSizes.center}
           minSize={25}
         >
           <div id="main-content" tabIndex={-1} aria-label="Commit timeline" className="flex flex-col overflow-hidden h-full">
@@ -2240,11 +2261,11 @@ export default function App() {
             />
           </div>
         </ResizablePanel>
-        <ResizableHandle withHandle aria-label="Resize Commit details panel (drag to adjust width)" />
+        <ResizableHandle withHandle aria-label={`Resize Commit details panel (drag to adjust ${isNarrow ? "height" : "width"})`} />
         <ResizablePanel
           id="rs-detail"
           order={3}
-          defaultSize={panelSizes.detail}
+          defaultSize={initialPanelSizes.detail}
           minSize={25}
           maxSize={70}
         >
@@ -2428,7 +2449,7 @@ function DateRangeFilterBanner({
       <span style={{ color: "var(--rs-accent)", fontWeight: 600 }}>
         Range filter
       </span>
-      <span style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text)" }}>
+      <span style={{ fontFamily: "var(--rs-mono)", color: "var(--rs-text-primary)" }}>
         {fmt(from)} – {fmt(to)}
       </span>
       <span style={{ color: "var(--rs-text-muted)" }}>
@@ -2446,7 +2467,7 @@ function DateRangeFilterBanner({
           border: "1px solid var(--rs-border)",
           borderRadius: "var(--rs-radius-sm)",
           background: "var(--rs-bg-elevated)",
-          color: "var(--rs-text)",
+          color: "var(--rs-text-primary)",
           cursor: "pointer",
         }}
       >
@@ -2608,421 +2629,3 @@ function markRealtimeNewCommits(commits: Commit[], hashes: Set<string>) {
   }));
 }
 
-function RefScopeTokens() {
-  return (
-    <style>{`
-      :root {
-        --rs-bg-canvas: oklch(16% 0.015 255);
-        --rs-bg-panel: oklch(20% 0.018 255);
-        --rs-bg-elevated: oklch(24% 0.02 255);
-        --rs-border: oklch(34% 0.025 255);
-        --rs-text-primary: oklch(92% 0.015 255);
-        --rs-text-secondary: oklch(72% 0.02 255);
-        --rs-text-muted: oklch(62% 0.02 255);
-        --rs-accent: oklch(72% 0.14 235);
-        --rs-git-added: oklch(72% 0.14 150);
-        --rs-git-deleted: oklch(70% 0.16 25);
-        --rs-git-modified: oklch(78% 0.15 80);
-        --rs-git-merge: oklch(74% 0.15 285);
-        --rs-warning: oklch(78% 0.16 75);
-        --rs-radius-sm: 6px;
-        --rs-radius-md: 8px;
-        --rs-radius-lg: 12px;
-        --rs-mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", ui-monospace, monospace;
-        --rs-sans: Inter, "Noto Sans JP", system-ui, -apple-system, sans-serif;
-        --rs-z-base:     0;
-        --rs-z-elevated: 1;
-        --rs-z-overlay:  40;
-        --rs-z-modal:    50;
-        --rs-z-toast:    60;
-      }
-      .rs-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        height: 28px;
-        padding: 0 10px;
-        border-radius: var(--rs-radius-sm);
-        background: var(--rs-bg-elevated);
-        border: 1px solid var(--rs-border);
-        color: var(--rs-text-primary);
-        font-size: 12px;
-        font-family: var(--rs-mono);
-        transition: background 80ms ease-out;
-      }
-      .rs-chip:hover {
-        background: color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 10%);
-      }
-      .rs-compact-button {
-        display: inline-flex;
-        align-items: center;
-        height: 26px;
-        padding: 0 9px;
-        border-radius: var(--rs-radius-sm);
-        border: 1px solid var(--rs-border);
-        background: var(--rs-bg-canvas);
-        color: var(--rs-text-secondary);
-        font-size: 11px;
-        white-space: nowrap;
-      }
-      .rs-compact-button:not(:disabled) {
-        cursor: pointer;
-      }
-      .rs-compact-button:disabled {
-        opacity: 0.45;
-      }
-      .rs-compact-button:not(:disabled):hover {
-        color: var(--rs-text-primary);
-        border-color: color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%);
-      }
-      .rs-compare-select {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        height: 26px;
-        padding: 0 8px;
-        border-radius: var(--rs-radius-sm);
-        border: 1px solid var(--rs-border);
-        background: var(--rs-bg-canvas);
-        color: var(--rs-text-secondary);
-        font-size: 11px;
-      }
-      .rs-compare-select select {
-        max-width: 170px;
-        background: transparent;
-        color: var(--rs-text-primary);
-        border: 0;
-        outline: 0;
-        font: inherit;
-      }
-      .rs-compare-select option {
-        background: var(--rs-bg-elevated);
-        color: var(--rs-text-primary);
-      }
-      .rs-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        height: 24px;
-        padding: 0 10px;
-        border-radius: var(--rs-radius-sm);
-        font-size: 11px;
-        font-weight: 500;
-        border: 1px solid transparent;
-        cursor: pointer;
-        transition: background 80ms ease-out;
-      }
-      .rs-btn--accent {
-        background: var(--rs-accent);
-        color: oklch(15% 0.02 255);
-      }
-      .rs-btn--accent:hover {
-        background: color-mix(in oklab, var(--rs-accent), white 10%);
-      }
-      .rs-btn--warning {
-        background: var(--rs-warning);
-        color: oklch(20% 0.02 70);
-      }
-      .rs-btn--ghost {
-        background: transparent;
-        color: var(--rs-text-secondary);
-        border-color: var(--rs-border);
-      }
-      .rs-btn--ghost:hover {
-        background: var(--rs-bg-elevated);
-        color: var(--rs-text-primary);
-      }
-      .rs-icon-btn {
-        width: 26px;
-        height: 26px;
-        display: grid;
-        place-items: center;
-        border-radius: var(--rs-radius-sm);
-        color: var(--rs-text-secondary);
-        background: transparent;
-        cursor: pointer;
-      }
-      .rs-icon-btn:hover {
-        background: var(--rs-bg-elevated);
-        color: var(--rs-text-primary);
-      }
-      *:focus-visible {
-        outline: 2px solid var(--rs-accent);
-        outline-offset: 2px;
-      }
-      /* Quiet mode: stop ambient transitions and animations across the tree.
-         Saturation is lowered by remapping the chroma channel of accent / status
-         tokens while preserving the lightness channel — keeps WCAG 2.2 AA
-         contrast against bg-canvas and bg-panel intact. */
-      [data-quiet="true"] *,
-      [data-quiet="true"] *::before,
-      [data-quiet="true"] *::after {
-        transition-duration: 0ms !important;
-        animation-duration: 0ms !important;
-        animation-iteration-count: 1 !important;
-      }
-      [data-quiet="true"] {
-        --rs-accent: oklch(72% 0.04 235);
-        --rs-git-added: oklch(72% 0.05 150);
-        --rs-git-deleted: oklch(70% 0.06 25);
-        --rs-git-modified: oklch(78% 0.05 80);
-        --rs-git-merge: oklch(74% 0.05 285);
-        --rs-warning: oklch(78% 0.06 75);
-      }
-      [data-quiet="true"] .rs-chip:hover,
-      [data-quiet="true"] .rs-btn--accent:hover,
-      [data-quiet="true"] .rs-icon-btn:hover,
-      [data-quiet="true"] .rs-btn--ghost:hover {
-        background: var(--rs-bg-elevated);
-      }
-      /* Prism token colors. Scoped to .rs-prism so we never bleed into the
-         rest of the UI. Hue picked to harmonize with the existing rs-* palette
-         and to keep contrast on top of the +/- background tints. */
-      .rs-prism .token.comment,
-      .rs-prism .token.prolog,
-      .rs-prism .token.cdata,
-      .rs-prism .token.doctype {
-        color: oklch(63% 0.03 255);
-        font-style: italic;
-      }
-      .rs-prism .token.punctuation {
-        color: oklch(72% 0.02 255);
-      }
-      .rs-prism .token.namespace {
-        opacity: 0.7;
-      }
-      .rs-prism .token.string,
-      .rs-prism .token.char,
-      .rs-prism .token.attr-value,
-      .rs-prism .token.regex,
-      .rs-prism .token.template-string {
-        color: oklch(78% 0.13 145);
-      }
-      .rs-prism .token.number,
-      .rs-prism .token.boolean,
-      .rs-prism .token.constant,
-      .rs-prism .token.symbol {
-        color: oklch(78% 0.15 80);
-      }
-      .rs-prism .token.keyword,
-      .rs-prism .token.atrule,
-      .rs-prism .token.important,
-      .rs-prism .token.rule {
-        color: oklch(74% 0.15 285);
-      }
-      .rs-prism .token.tag,
-      .rs-prism .token.selector,
-      .rs-prism .token.deleted {
-        color: oklch(72% 0.14 25);
-      }
-      .rs-prism .token.attr-name,
-      .rs-prism .token.builtin,
-      .rs-prism .token.property,
-      .rs-prism .token.entity,
-      .rs-prism .token.url,
-      .rs-prism .token.variable {
-        color: oklch(78% 0.13 195);
-      }
-      .rs-prism .token.function,
-      .rs-prism .token.class-name {
-        color: oklch(80% 0.14 95);
-      }
-      .rs-prism .token.operator {
-        color: oklch(82% 0.04 255);
-      }
-      .rs-prism .token.inserted {
-        color: oklch(72% 0.14 150);
-      }
-      .rs-prism .token.bold {
-        font-weight: 600;
-      }
-      .rs-prism .token.italic {
-        font-style: italic;
-      }
-
-      /* ─── CVD-safe theme ────────────────────────────────────────────────
-         Activated by data-color-vision="cvd-safe" on the root element.
-         Completely independent from data-quiet — both can be active at once
-         without CSS cascade conflicts (different attribute selectors, different
-         custom property names for CVD tokens).
-
-         Palette: Wong (2011) + Paul Tol neutral blue family.
-           add  → orange  oklch(74% 0.17 55)   ≈ #E69F00  (Wong orange)
-           del  → blue    oklch(50% 0.17 240)   ≈ #0072B2  (Wong blue)
-         Both hues are >90° apart on the hue wheel — safe for deuteranopia,
-         protanopia, and tritanopia.  Neither is green or red.
-
-         Prism tokens in CVD-safe mode — chosen so no token shares a hue
-         within 30° of the add (55°) or del (240°) anchors:
-           keyword  → vermilion  oklch(62% 0.18 25)   ≈ #D55E00  (Wong vermilion)
-           string   → sky-blue   oklch(70% 0.12 200)  ≈ #56B4E9  (Wong sky-blue)
-           comment  → gray       oklch(55% 0.02 255)  (achromatic, italic)
-           number   → amber      oklch(80% 0.16 85)   ≈ #F0E442  (Wong yellow)
-           function → bluish-grn oklch(68% 0.14 175)  ≈ #009E73  (Wong blueish-green, hue 175° — far from add 55°/del 240°)
-           variable → white      oklch(86% 0.02 255)  (near-white, distinct from all above)
-           operator → muted      oklch(72% 0.03 255)  (near-neutral)
-           punctuation → muted   oklch(65% 0.02 255)
-
-         Non-color signals (always active in CVD-safe mode):
-           · Left bar: 4px solid (add) vs 4px dashed (del) via box-shadow trick on the row.
-           · The +/- glyph column is always present (fact layer, never removed).
-           · ChangeKindBadge A/D/M letters are always shown (file level).
-         ─────────────────────────────────────────────────────────────────── */
-      [data-color-vision="cvd-safe"] {
-        --rs-git-added:   oklch(74% 0.17 55);
-        --rs-git-deleted: oklch(50% 0.17 240);
-        --rs-git-modified: oklch(68% 0.14 175);
-        --rs-git-merge:   oklch(70% 0.12 200);
-      }
-
-      /* CVD-safe Prism overrides — scoped to both attributes independently */
-      [data-color-vision="cvd-safe"] .rs-prism .token.keyword,
-      [data-color-vision="cvd-safe"] .rs-prism .token.atrule,
-      [data-color-vision="cvd-safe"] .rs-prism .token.important,
-      [data-color-vision="cvd-safe"] .rs-prism .token.rule {
-        /* Wong vermilion. Was oklch(62% 0.18 25) — failed WCAG 2.2 AA
-           (4.24:1 vs canvas, 0.26pt short of 4.5:1). On the dark canvas
-           (L≈16%) we need to raise lightness, not lower it. L=68% with
-           reduced chroma (0.16) keeps the Wong vermilion identity (hue 25°,
-           >30° from add 55° and del 240° anchors) while clearing AA on
-           canvas (7.02:1), add bg (5.80:1), and del bg (6.37:1). */
-        color: oklch(68% 0.16 25);
-      }
-      [data-color-vision="cvd-safe"] .rs-prism .token.string,
-      [data-color-vision="cvd-safe"] .rs-prism .token.char,
-      [data-color-vision="cvd-safe"] .rs-prism .token.attr-value,
-      [data-color-vision="cvd-safe"] .rs-prism .token.regex,
-      [data-color-vision="cvd-safe"] .rs-prism .token.template-string {
-        color: oklch(70% 0.12 200);
-      }
-      [data-color-vision="cvd-safe"] .rs-prism .token.number,
-      [data-color-vision="cvd-safe"] .rs-prism .token.boolean,
-      [data-color-vision="cvd-safe"] .rs-prism .token.constant,
-      [data-color-vision="cvd-safe"] .rs-prism .token.symbol {
-        color: oklch(80% 0.16 85);
-      }
-      [data-color-vision="cvd-safe"] .rs-prism .token.function,
-      [data-color-vision="cvd-safe"] .rs-prism .token.class-name {
-        color: oklch(68% 0.14 175);
-      }
-      [data-color-vision="cvd-safe"] .rs-prism .token.attr-name,
-      [data-color-vision="cvd-safe"] .rs-prism .token.builtin,
-      [data-color-vision="cvd-safe"] .rs-prism .token.property,
-      [data-color-vision="cvd-safe"] .rs-prism .token.entity,
-      [data-color-vision="cvd-safe"] .rs-prism .token.url,
-      [data-color-vision="cvd-safe"] .rs-prism .token.variable {
-        color: oklch(86% 0.02 255);
-      }
-      [data-color-vision="cvd-safe"] .rs-prism .token.operator {
-        color: oklch(72% 0.03 255);
-      }
-      [data-color-vision="cvd-safe"] .rs-prism .token.punctuation {
-        color: oklch(65% 0.02 255);
-      }
-      [data-color-vision="cvd-safe"] .rs-prism .token.comment,
-      [data-color-vision="cvd-safe"] .rs-prism .token.prolog,
-      [data-color-vision="cvd-safe"] .rs-prism .token.cdata,
-      [data-color-vision="cvd-safe"] .rs-prism .token.doctype {
-        color: oklch(62% 0.02 255);
-        font-style: italic;
-      }
-      [data-color-vision="cvd-safe"] .rs-prism .token.tag,
-      [data-color-vision="cvd-safe"] .rs-prism .token.selector,
-      [data-color-vision="cvd-safe"] .rs-prism .token.deleted {
-        color: oklch(62% 0.18 25);
-      }
-      [data-color-vision="cvd-safe"] .rs-prism .token.inserted {
-        color: oklch(74% 0.17 55);
-      }
-
-      /* Non-color diff line signals: left bar width+style in CVD-safe mode.
-         The bar is rendered as a box-shadow on the row element via the
-         .rs-diff-add / .rs-diff-del / .rs-diff-context classes that
-         DiffViewer sets.  This is additive to the existing +/- glyph. */
-      [data-color-vision="cvd-safe"] .rs-diff-add {
-        box-shadow: inset 4px 0 0 var(--rs-git-added);
-      }
-      [data-color-vision="cvd-safe"] .rs-diff-del {
-        box-shadow: inset 4px 0 0 var(--rs-git-deleted);
-        background-image: repeating-linear-gradient(
-          135deg,
-          transparent,
-          transparent 3px,
-          color-mix(in oklab, var(--rs-git-deleted), transparent 85%) 3px,
-          color-mix(in oklab, var(--rs-git-deleted), transparent 85%) 4px
-        );
-      }
-
-      /* Quiet + CVD-safe stacking: when both attributes are present, quiet
-         takes the chroma-reduction path (lightness preserved) while CVD-safe
-         overrides the hue anchors.  No selector conflict because data-quiet
-         and data-color-vision are distinct attributes — both rules apply via
-         independent cascade entries. The resulting palette is:
-           add  → orange low-chroma (quiet reduces chroma to 0.05 range)
-           del  → blue low-chroma
-         Both remain distinguishable in grayscale because their lightness
-         values differ: add L≈74%, del L≈50% → ΔL≈24 points. */
-      [data-quiet="true"][data-color-vision="cvd-safe"] {
-        --rs-git-added:   oklch(74% 0.05 55);
-        --rs-git-deleted: oklch(50% 0.06 240);
-        --rs-git-modified: oklch(68% 0.05 175);
-        --rs-git-merge:   oklch(70% 0.04 200);
-      }
-      /* D5 a11y — prefers-reduced-motion CSS floor.
-         data-quiet already zeros animations when useQuietMode unions
-         user toggle and OS reduced-motion. This @media block is the
-         CSS-level floor that guarantees motion is suppressed even
-         before React hydrates and sets data-quiet, and survives any
-         future regression where the attribute fails to propagate. */
-      @media (prefers-reduced-motion: reduce) {
-        *,
-        *::before,
-        *::after {
-          transition-duration: 0.001ms !important;
-          transition-delay: 0ms !important;
-          animation-duration: 0.001ms !important;
-          animation-iteration-count: 1 !important;
-          animation-delay: 0ms !important;
-          scroll-behavior: auto !important;
-        }
-      }
-      /* D5 a11y — forced-colors fallback (Windows High Contrast Mode etc).
-         The UA strips author background/foreground colors, so surfaces
-         that signal meaning via background color alone would lose
-         information. We:
-         - Replace focus-visible outline (currently var(--rs-accent),
-           which the UA rewrites) with the system Highlight color so
-           keyboard focus stays visible. The author rule above keeps the
-           accent cyan in non-forced-colors environments — both branches
-           coexist via media-query specificity.
-         - Add a CanvasText border to rs-chip / rs-compact-button /
-           rs-compare-select / rs-btn so the chrome of action surfaces
-           remains identifiable when their background is stripped.
-         - Use Highlight on rs-btn--accent to mark it as the primary
-           action affordance in forced-colors mode (replaces the
-           accent fill that the UA removes).
-         forced-color-adjust is left at the default value (auto) — we
-         never opt out of the UA's contrast guarantees, only ensure
-         that each meaningful surface keeps a visible boundary the UA
-         can render. */
-      @media (forced-colors: active) {
-        *:focus-visible {
-          outline: 2px solid Highlight !important;
-          outline-offset: 2px;
-        }
-        .rs-chip,
-        .rs-compact-button,
-        .rs-compare-select,
-        .rs-btn {
-          border: 1px solid CanvasText;
-        }
-        .rs-btn--accent {
-          border: 2px solid Highlight;
-        }
-        .rs-btn--warning {
-          border: 2px solid CanvasText;
-        }
-      }
-    `}</style>
-  );
-}

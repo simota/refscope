@@ -139,7 +139,7 @@ function formatRelative(iso: string): string {
 function HotspotHelpContent() {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)' }}>
         Hotspot Lens の見方
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -147,13 +147,13 @@ function HotspotHelpContent() {
         <strong>変更頻度 (churn)</strong> の 2 軸でプロットし、
         改修候補となるファイルを浮かび上がらせます。
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         hotScore の式
       </div>
       <div
         style={{
           fontFamily: 'var(--rs-mono)',
-          color: 'var(--rs-text)',
+          color: 'var(--rs-text-primary)',
           marginBottom: 8,
           padding: '4px 8px',
           background: 'var(--rs-bg-canvas)',
@@ -162,7 +162,7 @@ function HotspotHelpContent() {
       >
         log10(lines+1) × log10(churn+1)
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         4 象限
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -174,7 +174,7 @@ function HotspotHelpContent() {
           <li><strong>Quiet</strong>: 小さく変わらない — 触らなくて良い</li>
         </ul>
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         Risk Heatmap との違い
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -182,7 +182,7 @@ function HotspotHelpContent() {
         Hotspot は <strong>"どのファイル"</strong> が改修候補かを見ます。
         色語彙も別系統 (Risk = 赤 / Hotspot = 青〜マゼンタ) にして混同を避けています。
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         色と粒度
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -304,8 +304,16 @@ function ScatterPanel({
     [onClickPath],
   );
 
+  // The plot is one image for assistive tech: recharts marks every point
+  // role="img" without a name, and points are mouse-only. The ランキング tab
+  // lists the same files as keyboard-operable rows.
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div
+      role="img"
+      aria-label={`ホットスポット散布図: ${points.length} ファイル (LOC × churn)。同じファイルは「ランキング」タブで一覧・選択できます。`}
+      style={{ position: 'relative', width: '100%', height: '100%' }}
+    >
+    <div aria-hidden="true" style={{ width: '100%', height: '100%' }}>
     <ResponsiveContainer width="100%" height="100%">
       <ScatterChart margin={{ top: 12, right: 24, bottom: 32, left: 24 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--rs-border)" opacity={0.4} />
@@ -381,6 +389,7 @@ function ScatterPanel({
         />
       </ScatterChart>
     </ResponsiveContainer>
+    </div>
       <div style={{ ...QUADRANT_LABEL_STYLE, top: 16, right: 32 }}>Hotspot</div>
       <div style={{ ...QUADRANT_LABEL_STYLE, top: 16, left: 40 }}>Volatile · small</div>
       <div style={{ ...QUADRANT_LABEL_STYLE, bottom: 40, right: 32 }}>Stable · big</div>
@@ -402,7 +411,7 @@ function ScatterLegend() {
         gap: 16,
         fontSize: 10,
         fontFamily: 'var(--rs-sans)',
-        color: 'var(--rs-text)',
+        color: 'var(--rs-text-primary)',
       }}
       aria-label="散布図の凡例"
     >
@@ -423,7 +432,7 @@ function ScatterLegend() {
         <svg width="44" height="14" viewBox="0 0 44 14" aria-hidden>
           <circle cx="6" cy="7" r="3" fill="var(--rs-text-muted)" opacity="0.6" />
           <circle cx="22" cy="7" r="5" fill="var(--rs-text-muted)" opacity="0.7" />
-          <circle cx="38" cy="7" r="6" fill="var(--rs-text)" opacity="0.85" />
+          <circle cx="38" cy="7" r="6" fill="var(--rs-text-primary)" opacity="0.85" />
         </svg>
         <span>recent →</span>
       </div>
@@ -472,7 +481,7 @@ function StatCard({
         style={{
           fontSize: 14,
           fontFamily: 'var(--rs-mono)',
-          color: 'var(--rs-text)',
+          color: 'var(--rs-text-primary)',
           lineHeight: 1.2,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
@@ -546,7 +555,7 @@ const RANKING_HEAD_STYLE: CSSProperties = {
   fontWeight: 600,
   textTransform: 'uppercase',
   letterSpacing: '0.06em',
-  color: 'var(--rs-text)',
+  color: 'var(--rs-text-primary)',
   background: 'var(--rs-bg-elevated)',
   height: 30,
   borderBottom: '1px solid var(--rs-border)',
@@ -644,7 +653,6 @@ function SortableHead({
           fontFamily: 'var(--rs-sans)',
           cursor: 'pointer',
           userSelect: 'none',
-          outline: 'none',
         }}
         className="rs-hotspot-sort-btn"
       >
@@ -730,8 +738,7 @@ function RankingPanel({
             border: '1px solid var(--rs-border)',
             borderRadius: 'var(--rs-radius-sm)',
             background: 'var(--rs-bg-elevated)',
-            color: 'var(--rs-text)',
-            outline: 'none',
+            color: 'var(--rs-text-primary)',
           }}
         />
         <input
@@ -750,8 +757,7 @@ function RankingPanel({
             border: '1px solid var(--rs-border)',
             borderRadius: 'var(--rs-radius-sm)',
             background: 'var(--rs-bg-elevated)',
-            color: 'var(--rs-text)',
-            outline: 'none',
+            color: 'var(--rs-text-primary)',
           }}
         />
         {hasAnyFilter && (
@@ -923,7 +929,7 @@ function RankingPanel({
                     textAlign: 'right',
                     fontFamily: 'var(--rs-mono)',
                     fontSize: 11,
-                    color: 'var(--rs-text)',
+                    color: 'var(--rs-text-primary)',
                   }}
                   title={`log10(${file.lines}+1) × log10(${file.churn}+1) = ${hotScore.toFixed(2)}`}
                 >
@@ -1149,7 +1155,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
       <HotspotShell>
         {toolbar}
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ fontSize: 13, color: 'var(--rs-text-secondary)', fontFamily: 'var(--rs-sans)' }}>
+          <div role="status" style={{ fontSize: 13, color: 'var(--rs-text-secondary)', fontFamily: 'var(--rs-sans)' }}>
             ホットスポットを分析中…
           </div>
         </div>
@@ -1161,7 +1167,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
     return (
       <HotspotShell>
         {toolbar}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+        <div role="alert" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
           <div style={{ fontSize: 13, color: 'var(--rs-git-deleted)', fontFamily: 'var(--rs-sans)' }}>
             ホットスポットの取得に失敗しました
           </div>
@@ -1177,7 +1183,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
               borderRadius: 'var(--rs-radius-sm)',
               border: '1px solid var(--rs-border)',
               background: 'transparent',
-              color: 'var(--rs-text)',
+              color: 'var(--rs-text-primary)',
               cursor: 'pointer',
             }}
           >
@@ -1241,7 +1247,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
                 fontWeight: tab === 'scatter' ? 700 : 500,
                 height: 34,
                 padding: '0 14px',
-                color: tab === 'scatter' ? 'var(--rs-accent)' : 'var(--rs-text)',
+                color: tab === 'scatter' ? 'var(--rs-accent)' : 'var(--rs-text-primary)',
                 borderBottom: tab === 'scatter' ? '2px solid var(--rs-accent)' : '2px solid transparent',
                 marginBottom: -1,
                 transition: 'color 80ms ease-out, border-color 80ms ease-out',
@@ -1258,7 +1264,7 @@ export function HotspotLens({ repoId, selectedRef, onOpenFileHistory }: HotspotL
                 fontWeight: tab === 'ranking' ? 700 : 500,
                 height: 34,
                 padding: '0 14px',
-                color: tab === 'ranking' ? 'var(--rs-accent)' : 'var(--rs-text)',
+                color: tab === 'ranking' ? 'var(--rs-accent)' : 'var(--rs-text-primary)',
                 borderBottom: tab === 'ranking' ? '2px solid var(--rs-accent)' : '2px solid transparent',
                 marginBottom: -1,
                 transition: 'color 80ms ease-out, border-color 80ms ease-out',

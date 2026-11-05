@@ -142,7 +142,7 @@ export function TopBar({
 
   return (
     <header
-      className="flex items-center gap-3 px-4 border-b min-w-0 overflow-hidden"
+      className="flex items-center gap-3 px-4 border-b min-w-0 overflow-x-auto overflow-y-hidden"
       style={{
         height: 48,
         background: "var(--rs-bg-panel)",

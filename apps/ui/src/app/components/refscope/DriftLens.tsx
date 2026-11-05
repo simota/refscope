@@ -13,7 +13,7 @@
  *   左下 "Aligned" / 左上 "Hot" / 右下 "Stale" / 右上 "Diverged"
  * - 点クリック または Enter / Space → onSelectRef(refName) + onChangeLens('risk-trend')
  *
- * a11y: SVG 全体に role="img" + aria-label、視覚非表示の <ul> で SR 用テキスト経路を提供。
+ * a11y: チャート全体に role="group" + aria-label、視覚非表示の <ul> で SR 用テキスト経路を提供。
  * 各点に tabIndex + onKeyDown を設定し、キーボードで点間移動 (Tab) + 選択 (Enter/Space) 可能。
  *
  * 仕様変更 (PR-B): API を fetchRefDrift → fetchBranchGroupHealth に切替。
@@ -153,7 +153,7 @@ function toDriftPoint(entry: BranchGroupEntry): DriftPoint {
 function DriftHelpContent(): ReactNode {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)' }}>
         Drift Lens とは
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -161,7 +161,7 @@ function DriftHelpContent(): ReactNode {
         散布図にプロット。散らばり方からブランチ整理の優先順位を把握できます。
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         4 象限の意味
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
@@ -171,7 +171,7 @@ function DriftHelpContent(): ReactNode {
         ・<strong>Diverged</strong> (右上): 双方向に乖離、rebase / merge が必要
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         点のサイズ
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -179,7 +179,7 @@ function DriftHelpContent(): ReactNode {
         {' '}{RADIUS_MIN} 〜 {RADIUS_MAX} px。古いブランチほど大きく表示されます。
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         点の色 (rotScore)
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
@@ -190,7 +190,7 @@ function DriftHelpContent(): ReactNode {
         {' '}<span style={{ color: 'var(--rs-git-deleted)' }}>critical (16+)</span>
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         base ブランチの推定
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -198,7 +198,7 @@ function DriftHelpContent(): ReactNode {
         手動切替 UI は Phase 2 で追加予定です。
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         操作
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 4 }}>
@@ -243,7 +243,7 @@ function DriftTooltip({ active, payload }: TooltipProps<number, string>) {
     padding: '8px 12px',
     fontSize: 12,
     fontFamily: 'var(--rs-mono)',
-    color: 'var(--rs-text)',
+    color: 'var(--rs-text-primary)',
     maxWidth: 280,
     wordBreak: 'break-all',
   };
@@ -356,7 +356,7 @@ function DotShape({ cx = 0, cy = 0, payload, onActivate, selectedRef }: DotShape
 
 const QUADRANT_LABEL_STYLE: CSSProperties = {
   fontSize: 12,
-  fill: 'var(--rs-text)',
+  fill: 'var(--rs-text-primary)',
   fontWeight: 500,
 };
 
@@ -440,7 +440,7 @@ export function DriftLens({
     flexDirection: 'column',
     height: '100%',
     background: 'var(--rs-bg-panel)',
-    color: 'var(--rs-text)',
+    color: 'var(--rs-text-primary)',
     fontFamily: 'var(--rs-sans)',
   };
 
@@ -494,6 +494,7 @@ export function DriftLens({
           }}
         >
           <div
+            role="alert"
             style={{
               maxWidth: 440,
               padding: '20px 24px',
@@ -663,7 +664,8 @@ export function DriftLens({
 
       <div
         style={{ flex: 1, minHeight: 0, padding: '12px 8px 8px' }}
-        role="img"
+        // "group", not "img": the branch dots inside are focusable buttons.
+        role="group"
         aria-label={
           `Drift scatter chart: ${points.length} local branches plotted by ahead and behind ` +
           `commits against base ${base}.`

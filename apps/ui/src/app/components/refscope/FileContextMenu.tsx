@@ -171,7 +171,6 @@ function MenuButton({
         fontSize: 12,
         cursor: 'pointer',
         borderRadius: 4,
-        outline: 'none',
         transition: 'background 80ms ease-out, color 80ms ease-out',
       }}
     >

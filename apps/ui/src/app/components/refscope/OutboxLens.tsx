@@ -120,7 +120,7 @@ function stashAgeColor(committedAt: string | null | undefined): string {
 function OutboxHelpContent(): ReactNode {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)' }}>
         Outbox Lens とは
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -129,7 +129,7 @@ function OutboxHelpContent(): ReactNode {
         同じカンバンで見渡せます。
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         3 列の意味
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
@@ -141,7 +141,7 @@ function OutboxHelpContent(): ReactNode {
         コミット (出口: <code>git push</code>)
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         バッジ・色の読み方
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8, lineHeight: 1.7 }}>
@@ -159,7 +159,7 @@ function OutboxHelpContent(): ReactNode {
         ・各列は <strong>{CARD_CAP}</strong> 件で打ち切り。超過時は警告バナーを表示します
       </div>
 
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         操作
       </div>
       <div style={{ color: 'var(--rs-text-secondary)' }}>
@@ -216,12 +216,11 @@ const CARD_STYLE: CSSProperties = {
   cursor: 'pointer',
   fontSize: 12,
   fontFamily: 'var(--rs-sans)',
-  color: 'var(--rs-text)',
+  color: 'var(--rs-text-primary)',
   display: 'flex',
   flexDirection: 'column',
   gap: 4,
   transition: 'border-color 80ms ease-out, background 80ms ease-out',
-  outline: 'none',
 };
 
 const CARD_TITLE_STYLE: CSSProperties = {
@@ -614,7 +613,7 @@ export function OutboxLens({
     flexDirection: 'column',
     height: '100%',
     background: 'var(--rs-bg-panel)',
-    color: 'var(--rs-text)',
+    color: 'var(--rs-text-primary)',
     fontFamily: 'var(--rs-sans)',
     overflow: 'hidden',
   };
@@ -707,6 +706,7 @@ export function OutboxLens({
           }}
         >
           <div
+            role="alert"
             style={{
               maxWidth: 440,
               padding: '20px 24px',

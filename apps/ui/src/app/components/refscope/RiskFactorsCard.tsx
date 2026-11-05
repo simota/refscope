@@ -171,7 +171,7 @@ export function RiskFactorsCard({
           fontWeight: 500,
           marginBottom: 4,
           wordBreak: 'break-all',
-          color: 'var(--rs-text)',
+          color: 'var(--rs-text-primary)',
         }}
       >
         {factor.subject}

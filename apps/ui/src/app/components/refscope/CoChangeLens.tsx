@@ -10,7 +10,7 @@
  * - Enter キー → シングルクリック相当 (中心入れ替え)
  * - d3-force: manyBody + link + center の minimal セットアップ
  *
- * a11y: 各ノードに tabIndex + onKeyDown を設定。SVG 全体に role="img" と
+ * a11y: 各ノードに tabIndex + onKeyDown を設定。SVG 全体に role="group" と
  * aria-describedby、視覚非表示の <ul> で SR 用テキスト経路を提供する。
  */
 
@@ -172,7 +172,7 @@ function recencyToColor(recency: number): string {
 function CoChangeHelpContent() {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)' }}>
         Co-change グラフとは
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -182,7 +182,7 @@ function CoChangeHelpContent() {
         エッジの色は <strong>最後に共変化した時刻の新しさ</strong> を表します
         (赤=新しい、グレー=古い)。
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text)' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--rs-text-primary)' }}>
         操作
       </div>
       <div style={{ color: 'var(--rs-text-secondary)', marginBottom: 8 }}>
@@ -494,7 +494,7 @@ export function CoChangeLens({
                   border: '1px solid var(--rs-border)',
                   borderRadius: 'var(--rs-radius-sm)',
                   background: active ? 'var(--rs-accent)' : 'transparent',
-                  color: active ? 'var(--rs-bg-panel)' : 'var(--rs-text)',
+                  color: active ? 'var(--rs-bg-panel)' : 'var(--rs-text-primary)',
                   fontFamily: 'var(--rs-mono)',
                   fontSize: 11,
                   cursor: 'pointer',
@@ -596,7 +596,7 @@ export function CoChangeLens({
                 border: '1px solid var(--rs-border)',
                 borderRadius: 'var(--rs-radius-sm)',
                 background: 'transparent',
-                color: 'var(--rs-text)',
+                color: 'var(--rs-text-primary)',
                 fontFamily: 'var(--rs-sans)',
                 fontSize: 10,
                 cursor: 'pointer',
@@ -645,6 +645,7 @@ export function CoChangeLens({
           }}
         >
           <div
+            role="alert"
             style={{
               maxWidth: 440,
               padding: '20px 24px',
@@ -816,7 +817,9 @@ export function CoChangeLens({
             opacity: loading ? 0.4 : 1,
             transition: 'opacity 150ms ease-out',
           }}
-          role="img"
+          // "group", not "img": an img's children are presentational, which
+          // hid the focusable role="button" nodes from assistive tech.
+          role="group"
           aria-label={
             centerPath
               ? `Co-change グラフ。中心 ${shortPath(centerPath)}、関連 ${nodes.length - 1} 件。`
@@ -896,7 +899,7 @@ export function CoChangeLens({
                 : 'var(--rs-border)';
               const textColor = node.isCenter
                 ? 'var(--rs-bg-panel)'
-                : 'var(--rs-text)';
+                : 'var(--rs-text-primary)';
               const label = shortPath(node.path);
 
               return (

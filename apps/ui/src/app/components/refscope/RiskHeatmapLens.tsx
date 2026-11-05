@@ -269,9 +269,29 @@ function HeatCell({
   const score = cell?.avgScore ?? 0;
   const style = scoreToStyle(score, lowThreshold, highThreshold);
 
+  // Cells with data select their riskiest commit, so they are buttons for
+  // keyboard and assistive-technology users too. Empty cells stay inert.
+  const interactive = Boolean(cell && onClick);
   const cellInner = (
     <div
       onClick={onClick}
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-label={
+        interactive && cell
+          ? `${cellLabel ? `${cellLabel} · ` : ''}${cell.count} ${cell.count === 1 ? 'commit' : 'commits'}, max risk ${cell.maxScore}, average ${cell.avgScore.toFixed(1)}. Select riskiest commit`
+          : undefined
+      }
+      onKeyDown={
+        interactive
+          ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onClick?.();
+              }
+            }
+          : undefined
+      }
       style={{
         width: '100%',
         height: '100%',
@@ -324,8 +344,8 @@ function HeatCell({
               }}
             >
               {cellLabel} · {cell.count} {cell.count === 1 ? 'commit' : 'commits'} ·
-              max <span style={{ color: 'var(--rs-text)' }}>{cell.maxScore}</span> ·
-              avg <span style={{ color: 'var(--rs-text)' }}>{cell.avgScore.toFixed(1)}</span>
+              max <span style={{ color: 'var(--rs-text-primary)' }}>{cell.maxScore}</span> ·
+              avg <span style={{ color: 'var(--rs-text-primary)' }}>{cell.avgScore.toFixed(1)}</span>
             </div>
           )}
         </div>
@@ -478,22 +498,22 @@ function ModeHelpPopover() {
             color: 'var(--rs-text-secondary)',
           }}
         >
-          <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text)', fontSize: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--rs-text-primary)', fontSize: 12 }}>
             モードについて
           </div>
           <div style={{ marginBottom: 6 }}>
-            両モードは <b style={{ color: 'var(--rs-text)' }}>同じコミットデータの別ビュー</b> です。
+            両モードは <b style={{ color: 'var(--rs-text-primary)' }}>同じコミットデータの別ビュー</b> です。
             切替で集計範囲・軸が変わるだけで、ベースになるコミット集合は共通。
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div>
-              <span style={{ fontFamily: 'var(--rs-mono)', color: 'var(--rs-text)' }}>
+              <span style={{ fontFamily: 'var(--rs-mono)', color: 'var(--rs-text-primary)' }}>
                 30d × author
               </span>
               : 直近 30 日、誰がいつリスク変更を入れたかを俯瞰
             </div>
             <div>
-              <span style={{ fontFamily: 'var(--rs-mono)', color: 'var(--rs-text)' }}>
+              <span style={{ fontFamily: 'var(--rs-mono)', color: 'var(--rs-text-primary)' }}>
                 7d × hour
               </span>
               : 直近 7 日、時間帯別パターン（リリース直前など）を確認
@@ -926,7 +946,7 @@ function AuthorDayGrid({
               width: labelW,
               flexShrink: 0,
               fontSize: 13,
-              color: 'var(--rs-text)',
+              color: 'var(--rs-text-primary)',
               paddingRight: 8,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -1102,7 +1122,7 @@ function DayHourGrid({
                 width: labelW,
                 flexShrink: 0,
                 fontSize: 11,
-                color: 'var(--rs-text)',
+                color: 'var(--rs-text-primary)',
                 paddingRight: 8,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',

@@ -19,8 +19,6 @@ import {
   HOTSPOT_MAX_LIMIT,
   RANGE_HISTORY_DEFAULT_LIMIT,
   RANGE_HISTORY_MAX_LIMIT,
-  REF_FLIGHT_DEFAULT_LIMIT,
-  REF_FLIGHT_MAX_LIMIT,
   SYMBOL_HISTORY_DEFAULT_LIMIT,
   SYMBOL_HISTORY_MAX_LIMIT,
 } from "./gitService.js";
@@ -153,15 +151,7 @@ export function createRequestHandler(config, gitService, fleetService) {
         return;
       }
       if (route.name === "refFlightEvents") {
-        const limitResult = parseLimitQuery(
-          url.searchParams.get("limit"),
-          REF_FLIGHT_DEFAULT_LIMIT,
-          REF_FLIGHT_MAX_LIMIT,
-        );
-        if (!limitResult.ok) {
-          sendJson(res, 400, { error: limitResult.error });
-          return;
-        }
+        // `limit` is validated by listRefFlightEvents (same 400 contract).
         const result = await gitService.listRefFlightEvents(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
         return;
@@ -478,6 +468,9 @@ function handleError(res, error) {
     return;
   }
 
+  // Unexpected (non-Git) failures are programming or environment errors.
+  // The client gets a generic 500; the operator gets the stack.
+  console.error("[api] unexpected error:", error);
   sendJson(res, 500, { error: "Internal server error" });
 }
 

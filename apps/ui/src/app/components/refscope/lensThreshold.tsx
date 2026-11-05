@@ -153,7 +153,7 @@ export function ThresholdSelector({ threshold, onChange }: ThresholdSelectorProp
           background: active
             ? 'color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 15%)'
             : 'transparent',
-          color: active ? 'var(--rs-accent)' : 'var(--rs-text)',
+          color: active ? 'var(--rs-accent)' : 'var(--rs-text-primary)',
           border: '1px solid',
           borderColor: active
             ? 'color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)'
@@ -197,7 +197,7 @@ export function ThresholdSelector({ threshold, onChange }: ThresholdSelectorProp
             style={{
               fontWeight: 600,
               marginBottom: 8,
-              color: 'var(--rs-text)',
+              color: 'var(--rs-text-primary)',
               fontSize: 13,
             }}
           >
@@ -242,7 +242,7 @@ export function ThresholdSelector({ threshold, onChange }: ThresholdSelectorProp
                     border: '1px solid var(--rs-border)',
                     borderRadius: 'var(--rs-radius-sm)',
                     background: 'var(--rs-bg-elevated)',
-                    color: 'var(--rs-text)',
+                    color: 'var(--rs-text-primary)',
                   }}
                 />
               </label>
@@ -268,7 +268,7 @@ export function ThresholdSelector({ threshold, onChange }: ThresholdSelectorProp
                     border: '1px solid var(--rs-border)',
                     borderRadius: 'var(--rs-radius-sm)',
                     background: 'var(--rs-bg-elevated)',
-                    color: 'var(--rs-text)',
+                    color: 'var(--rs-text-primary)',
                   }}
                 />
               </label>

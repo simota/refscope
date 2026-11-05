@@ -135,7 +135,7 @@ export function DetailPanel({
   if (!commit) {
     return (
       <PanelShell>
-        <div role="status" aria-busy={loading}>
+        <div aria-busy={loading}>
           <Empty>{loading ? "Loading commit detail…" : error || "No commit selected"}</Empty>
         </div>
       </PanelShell>
@@ -1197,6 +1197,8 @@ function WhyPanel({
                   fontSize: 10,
                   fontFamily: "var(--rs-mono)",
                   padding: "1px 6px",
+                  minHeight: 24, // WCAG 2.5.8 target size
+
                   borderRadius: 99,
                   background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 10%)",
                   color: "var(--rs-text-secondary)",
@@ -1217,7 +1219,7 @@ function WhyPanel({
 
       {/* Results */}
       {fetchError ? (
-        <div className="px-3 pb-3" style={{ fontSize: 11, color: "var(--rs-git-deleted)" }}>
+        <div role="alert" className="px-3 pb-3" style={{ fontSize: 11, color: "var(--rs-git-deleted)" }}>
           {fetchError}
         </div>
       ) : null}
@@ -1559,6 +1561,7 @@ function ChangedFilesViewButton({
 function Empty({ children }: { children: React.ReactNode }) {
   return (
     <div
+      role="status"
       className="px-3 py-4"
       style={{ fontSize: 12, color: "var(--rs-text-muted)" }}
     >

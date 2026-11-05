@@ -53,7 +53,7 @@ function formatTime(isoDate: string): string {
 function SymbolHelpContent() {
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--rs-text)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--rs-text-primary)" }}>
         Symbol Lens の見方
       </div>
       <div style={{ color: "var(--rs-text-secondary)", marginBottom: 8 }}>
@@ -61,13 +61,13 @@ function SymbolHelpContent() {
         Git の <code style={{ fontFamily: "var(--rs-mono)" }}>git log -L</code>{" "}
         で辿ります。Refscope は推論を行わず、Git の出力をそのまま観測します。
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text-primary)" }}>
         構文
       </div>
       <div
         style={{
           fontFamily: "var(--rs-mono)",
-          color: "var(--rs-text)",
+          color: "var(--rs-text-primary)",
           marginBottom: 8,
           padding: "4px 8px",
           background: "var(--rs-bg-canvas)",
@@ -76,7 +76,7 @@ function SymbolHelpContent() {
       >
         git log -L :&lt;funcname&gt;:&lt;path&gt;
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text-primary)" }}>
         入力例
       </div>
       <ul
@@ -103,7 +103,7 @@ function SymbolHelpContent() {
           <code style={{ fontFamily: "var(--rs-mono)" }}>_resolve_scope</code>
         </li>
       </ul>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text-primary)" }}>
         範囲と制約
       </div>
       <ul
@@ -173,7 +173,7 @@ function CommitEntry({ entry }: { entry: SymbolHistoryEntry }) {
             <code
               style={{
                 fontFamily: "var(--rs-mono)",
-                background: "var(--rs-bg-code)",
+                background: "var(--rs-bg-canvas)",
                 padding: "0 3px",
                 borderRadius: 3,
               }}
@@ -184,7 +184,7 @@ function CommitEntry({ entry }: { entry: SymbolHistoryEntry }) {
             <code
               style={{
                 fontFamily: "var(--rs-mono)",
-                background: "var(--rs-bg-code)",
+                background: "var(--rs-bg-canvas)",
                 padding: "0 3px",
                 borderRadius: 3,
               }}
@@ -206,7 +206,7 @@ function CommitEntry({ entry }: { entry: SymbolHistoryEntry }) {
           margin: 0,
           fontSize: 13,
           fontWeight: 500,
-          color: "var(--rs-text)",
+          color: "var(--rs-text-primary)",
           lineHeight: 1.4,
         }}
       >
@@ -246,7 +246,7 @@ function CommitEntry({ entry }: { entry: SymbolHistoryEntry }) {
         <code
           style={{
             fontFamily: "var(--rs-mono)",
-            background: "var(--rs-bg-code)",
+            background: "var(--rs-bg-canvas)",
             padding: "1px 4px",
             borderRadius: 3,
             fontSize: 10,
@@ -478,9 +478,8 @@ export function SymbolHistoryView({
             padding: "4px 8px",
             borderRadius: "var(--rs-radius-sm)",
             border: "1px solid var(--rs-border)",
-            background: "var(--rs-bg-input)",
-            color: "var(--rs-text)",
-            outline: "none",
+            background: "var(--rs-bg-canvas)",
+            color: "var(--rs-text-primary)",
           }}
         />
         <label
@@ -504,9 +503,8 @@ export function SymbolHistoryView({
             padding: "4px 8px",
             borderRadius: "var(--rs-radius-sm)",
             border: "1px solid var(--rs-border)",
-            background: "var(--rs-bg-input)",
-            color: "var(--rs-text)",
-            outline: "none",
+            background: "var(--rs-bg-canvas)",
+            color: "var(--rs-text-primary)",
           }}
         />
         {validationMessage && (
@@ -534,7 +532,7 @@ export function SymbolHistoryView({
               borderRadius: "var(--rs-radius-sm)",
               border: "1px solid var(--rs-border)",
               background: "var(--rs-accent)",
-              color: "var(--rs-bg)",
+              color: "var(--rs-bg-canvas)",
               cursor: "pointer",
               fontWeight: 600,
             }}
@@ -599,7 +597,7 @@ export function SymbolHistoryView({
               border: "1px solid color-mix(in oklab, var(--rs-border), var(--rs-git-deleted) 40%)",
               background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-git-deleted) 8%)",
               fontSize: 12,
-              color: "var(--rs-text)",
+              color: "var(--rs-text-primary)",
             }}
           >
             <div
@@ -645,10 +643,10 @@ export function SymbolHistoryView({
               <code
                 style={{
                   fontFamily: "var(--rs-mono)",
-                  background: "var(--rs-bg-code)",
+                  background: "var(--rs-bg-canvas)",
                   padding: "1px 4px",
                   borderRadius: 3,
-                  color: "var(--rs-text)",
+                  color: "var(--rs-text-primary)",
                   fontSize: 11,
                 }}
               >
@@ -658,10 +656,10 @@ export function SymbolHistoryView({
               <code
                 style={{
                   fontFamily: "var(--rs-mono)",
-                  background: "var(--rs-bg-code)",
+                  background: "var(--rs-bg-canvas)",
                   padding: "1px 4px",
                   borderRadius: 3,
-                  color: "var(--rs-text)",
+                  color: "var(--rs-text-primary)",
                   fontSize: 11,
                   maxWidth: 200,
                   overflow: "hidden",

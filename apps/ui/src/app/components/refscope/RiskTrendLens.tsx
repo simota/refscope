@@ -345,7 +345,7 @@ function DailyTooltip({ active, payload, lowThreshold, highThreshold }: DailyToo
         </div>
         <div
           style={{
-            color: 'var(--rs-text)',
+            color: 'var(--rs-text-primary)',
             wordBreak: 'break-all',
             marginBottom: 2,
           }}
@@ -978,6 +978,7 @@ export function RiskTrendLens({
               endIndex={defaultBrushEnd}
               stroke="var(--rs-border)"
               fill="var(--rs-bg-elevated)"
+              // @ts-expect-error travellerStyle is not in recharts' typed Brush props; kept as-is so runtime output is unchanged.
               travellerStyle={{ fill: 'var(--rs-text-muted)', stroke: 'var(--rs-border)' }}
               tick={{ fontSize: 9, fill: 'var(--rs-text-muted)', fontFamily: 'var(--rs-sans)' }}
             />

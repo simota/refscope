@@ -214,7 +214,10 @@ export function FileHistoryView({
     const el = articleRefs.current.get(hash);
     if (!el) return;
     setActiveHash(hash);
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    // A JS-requested smooth scroll is not overridden by the CSS
+    // `scroll-behavior` reduced-motion floor, so honour the setting here.
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
   }, []);
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -905,6 +908,7 @@ function RelatedFilesPanel({
         <div className="px-2 pb-3" style={{ paddingTop: 2 }}>
           {loading ? (
             <div
+              role="status"
               className="px-2 py-2"
               style={{ fontSize: 11, color: "var(--rs-text-muted)" }}
             >
@@ -1403,7 +1407,7 @@ function backgroundForLine(line: DiffLine): string {
 
 function Empty({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-4 py-6" style={{ fontSize: 12, color: "var(--rs-text-muted)" }}>
+    <div role="status" className="px-4 py-6" style={{ fontSize: 12, color: "var(--rs-text-muted)" }}>
       {children}
     </div>
   );

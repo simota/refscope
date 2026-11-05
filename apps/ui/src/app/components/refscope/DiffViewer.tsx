@@ -556,7 +556,7 @@ function DiffToolbar({
   copyStatus: string;
   fullscreen: boolean;
   onFullscreenToggle: () => void;
-  toggleRef: React.RefObject<HTMLButtonElement | null>;
+  toggleRef: React.RefObject<HTMLButtonElement>;
 }) {
   return (
     <div
@@ -739,7 +739,7 @@ function FileList({
   collapsedKeys: Set<string>;
   onKeyDown: (event: React.KeyboardEvent<HTMLUListElement>) => void;
   listStyle?: React.CSSProperties;
-  listRef?: React.RefObject<HTMLUListElement | null>;
+  listRef?: React.RefObject<HTMLUListElement>;
   onOpenFileHistory?: (path: string) => void;
   onFilterByPath?: (path: string) => void;
 }) {
