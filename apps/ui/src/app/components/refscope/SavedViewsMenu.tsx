@@ -88,7 +88,7 @@ export function SavedViewsMenu({
           className="rs-compact-button shrink-0"
           disabled={disabled}
           aria-label={activeView ? `Views (current: ${activeView.name})` : "Views"}
-          title="Saved views, share link and export"
+          title={activeView ? `View: ${activeView.name} — saved views, share link and export` : "Saved views, share link and export"}
           style={
             activeView
               ? {
@@ -99,13 +99,16 @@ export function SavedViewsMenu({
               : undefined
           }
         >
-          <Bookmark size={11} aria-hidden style={{ marginRight: 4 }} />
+          {/* Icon-only below 2xl so the search field keeps its width; the
+              name stays in the accessible label and tooltip. */}
+          <Bookmark size={11} aria-hidden fill={activeView ? "currentColor" : "none"} />
           <span
-            style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            className="hidden 2xl:inline"
+            style={{ marginLeft: 4, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
           >
             {activeView ? activeView.name : "Views"}
           </span>
-          <ChevronDown size={11} aria-hidden style={{ marginLeft: 4 }} />
+          <ChevronDown size={11} aria-hidden className="hidden 2xl:inline" style={{ marginLeft: 4 }} />
         </button>
       </PopoverTrigger>
       <PopoverContent

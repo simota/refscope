@@ -813,3 +813,28 @@ export function parseCompareModeQuery(rawValue) {
   }
   return { ok: true, value: rawValue };
 }
+
+/**
+ * History shape for `/commits` — which commits of the walk are listed.
+ *
+ * - `all` (default): every commit reachable from the ref.
+ * - `first-parent`: follow only first parents (`--first-parent`), i.e. the
+ *   ref's own line of history; a merged branch appears as its merge commit.
+ * - `merges`: only merge commits on the first-parent line
+ *   (`--first-parent --merges`) — on a pull-request workflow, one row per
+ *   merged pull request.
+ * - `no-merges`: every non-merge commit (`--no-merges`).
+ *
+ * Empty / missing → `all`. Anything else is rejected.
+ */
+export const HISTORY_SHAPES = new Set(["all", "first-parent", "merges", "no-merges"]);
+
+export function parseHistoryShapeQuery(rawValue) {
+  if (rawValue == null || rawValue === "") {
+    return { ok: true, value: "all" };
+  }
+  if (typeof rawValue !== "string" || !HISTORY_SHAPES.has(rawValue)) {
+    return { ok: false, error: "Invalid history parameter" };
+  }
+  return { ok: true, value: rawValue };
+}
