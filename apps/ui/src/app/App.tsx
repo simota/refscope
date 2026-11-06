@@ -104,6 +104,25 @@ import {
   mergeLiveFirstPage,
   pageMayHaveMore,
 } from "./lib/historyBrowsing";
+import {
+  HISTORY_SHAPES,
+  HISTORY_SHAPE_INFO,
+  buildFilterLinkSearch,
+  describeFilters,
+  exportFileStem,
+  findMatchingView,
+  parseFilterLink,
+  parseHistoryShape,
+  shortRefName,
+  timelineToCsv,
+  timelineToMarkdown,
+  type HistoryShape,
+  type SavedView,
+  type TimelineFilters,
+} from "./lib/timelineViews";
+import { useSavedViews } from "./hooks/useSavedViews";
+import { SavedViewsMenu } from "./components/refscope/SavedViewsMenu";
+import type { TimelineViewCommand } from "./components/refscope/CommandPalette";
 import { buildCompareLinkSearch, parseCompareLink } from "./lib/compareReview";
 import {
   loadRewriteSnapshots,
@@ -295,6 +314,13 @@ export default function App() {
       typeof window === "undefined"
         ? { repo: "", ref: "", commit: "", path: "" }
         : parseDeepLink(window.location.search),
+    [],
+  );
+  // `?q=&mode=&author=&since=&until=&history=` — the timeline filters a
+  // shared view link carries. Redact-mode carry-over wins over the URL.
+  const initialFilterLink = useMemo(
+    () =>
+      parseFilterLink(typeof window === "undefined" ? "" : window.location.search),
     [],
   );
   // The linked commit may be older than the first page or off the linked
@@ -566,8 +592,8 @@ export default function App() {
   const [summaryViewOpen, setSummaryViewOpen] = useState(false);
   const [diffFullscreen, setDiffFullscreen] = useState(false);
   const [diffViewMode, setDiffViewMode] = useState<"all" | "single">("all");
-  const [search, setSearch] = useState(() => redactCarry?.search ?? "");
-  const [author, setAuthor] = useState(() => redactCarry?.author ?? "");
+  const [search, setSearch] = useState(() => redactCarry?.search ?? initialFilterLink.search);
+  const [author, setAuthor] = useState(() => redactCarry?.author ?? initialFilterLink.author);
   const [path, setPath] = useState(() => initialDeepLink.path);
   // Commit kind filter (D-2): client-side filter applied to coarseKind from API.
   // 'all' = show all, 'refactor' = likely_refactor + empty, 'logic' = likely_logic.
@@ -579,20 +605,28 @@ export default function App() {
   // Keeping them separate prevents mode-switch cross-contamination and maps 1-to-1 onto the API contract
   // (`search` param vs `mode`+`pattern` params).
   const [searchMode, setSearchMode] = useState<SearchMode>(
-    () => (redactCarry?.searchMode as SearchMode | undefined) ?? "subject",
+    () => (redactCarry?.searchMode as SearchMode | undefined) ?? initialFilterLink.searchMode,
   );
-  const [searchPattern, setSearchPattern] = useState(() => redactCarry?.searchPattern ?? "");
+  const [searchPattern, setSearchPattern] = useState(
+    () => redactCarry?.searchPattern ?? initialFilterLink.searchPattern,
+  );
   // Server-side commit date window (`YYYY-MM-DD` local days from the Filters
   // popover). Unlike `dateRangeFilter` (a client-side narrowing of the rows
   // already loaded), this re-queries the whole history.
-  const [sinceDate, setSinceDate] = useState(() => redactCarry?.sinceDate ?? "");
-  const [untilDate, setUntilDate] = useState(() => redactCarry?.untilDate ?? "");
+  const [sinceDate, setSinceDate] = useState(() => redactCarry?.sinceDate ?? initialFilterLink.since);
+  const [untilDate, setUntilDate] = useState(() => redactCarry?.untilDate ?? initialFilterLink.until);
+  // History shape: every commit, the first-parent line, merges only (one row
+  // per merged pull request), or no merges. Server-side, like the dates.
+  const [historyShape, setHistoryShape] = useState<HistoryShape>(() =>
+    redactCarry?.historyShape ? parseHistoryShape(redactCarry.historyShape) : initialFilterLink.history,
+  );
   const commitWindow = useMemo<CommitListWindow>(
     () => ({
       since: localDateToIsoBound(sinceDate, "start") || undefined,
       until: localDateToIsoBound(untilDate, "end") || undefined,
+      history: historyShape,
     }),
-    [sinceDate, untilDate],
+    [sinceDate, untilDate, historyShape],
   );
   // History pagination: whether the last page was full (so older commits may
   // exist) and whether a "Load older" request is in flight.
@@ -738,8 +772,8 @@ export default function App() {
   const { quietMode, prefersReducedMotion, isQuiet, toggleQuietMode } = useQuietMode();
   const { redacted, setRedacted } = useRedactMode();
   // Read through a ref so the shortcut / palette callbacks stay stable.
-  const redactCarryStateRef = useRef({ search, author, searchMode, searchPattern, sinceDate, untilDate, activeLens });
-  redactCarryStateRef.current = { search, author, searchMode, searchPattern, sinceDate, untilDate, activeLens };
+  const redactCarryStateRef = useRef({ search, author, searchMode, searchPattern, sinceDate, untilDate, historyShape, activeLens });
+  redactCarryStateRef.current = { search, author, searchMode, searchPattern, sinceDate, untilDate, historyShape, activeLens };
   const toggleRedact = useCallback(() => {
     setRedacted(!redacted, redactCarryStateRef.current);
   }, [redacted, setRedacted]);
@@ -1478,6 +1512,177 @@ export default function App() {
   const repoName = repositories.find((repo) => repo.id === selectedRepo)?.name ?? selectedRepo;
   const refName = displayRefName(selectedRef, refs);
   const toggleSummaryView = useCallback(() => setSummaryViewOpen((prev) => !prev), []);
+
+  // ---- Saved views, share link and export -------------------------------
+  // A view is the server-side filter set (ref, search, author, path, dates,
+  // history shape). Typed values are compared after debounce so a view only
+  // reads as "current" once the timeline actually shows it.
+  const { views: savedViews, saveView, deleteView } = useSavedViews(selectedRepo);
+  const currentFilters = useMemo<TimelineFilters>(
+    () => ({
+      ref: selectedRef,
+      searchMode,
+      search: debouncedSearch,
+      searchPattern: debouncedSearchPattern,
+      author: debouncedAuthor,
+      path: debouncedPath,
+      since: sinceDate,
+      until: untilDate,
+      history: historyShape,
+    }),
+    [
+      selectedRef,
+      searchMode,
+      debouncedSearch,
+      debouncedSearchPattern,
+      debouncedAuthor,
+      debouncedPath,
+      sinceDate,
+      untilDate,
+      historyShape,
+    ],
+  );
+  const activeSavedView = useMemo(
+    () => findMatchingView(savedViews, currentFilters),
+    [savedViews, currentFilters],
+  );
+  const applySavedView = useCallback((view: SavedView) => {
+    const { filters } = view;
+    setSelectedRef(filters.ref);
+    setSearchMode(filters.searchMode);
+    setSearch(filters.search);
+    setSearchPattern(filters.searchPattern);
+    setAuthor(filters.author);
+    setPath(filters.path);
+    setSinceDate(filters.since);
+    setUntilDate(filters.until);
+    setHistoryShape(filters.history);
+    setDateRangeFilter(null);
+    setSelected("");
+    setActiveLens("live");
+    setLiveAnnouncement(`Applied view ${view.name}.`);
+  }, []);
+  const saveCurrentView = useCallback(
+    (name: string) => {
+      // Save what the inputs say now, not the debounced copy, so typing a
+      // filter and saving immediately keeps the last keystrokes.
+      const { view, persisted } = saveView(name, {
+        ref: selectedRef,
+        searchMode,
+        search,
+        searchPattern,
+        author,
+        path,
+        since: sinceDate,
+        until: untilDate,
+        history: historyShape,
+      });
+      if (!view) return "Enter a name for the view.";
+      return persisted
+        ? `Saved “${view.name}”.`
+        : `Saved “${view.name}” for this session — browser storage is unavailable.`;
+    },
+    [saveView, selectedRef, searchMode, search, searchPattern, author, path, sinceDate, untilDate, historyShape],
+  );
+  const exportExtraFilters = useMemo(
+    () =>
+      [
+        commitKindFilter !== "all" ? `kind: ${commitKindFilter}` : "",
+        dateRangeFilter
+          ? `brushed ${new Date(dateRangeFilter.from).toISOString().slice(0, 10)} → ${new Date(dateRangeFilter.to).toISOString().slice(0, 10)}`
+          : "",
+      ].filter(Boolean),
+    [commitKindFilter, dateRangeFilter],
+  );
+  const buildTimelineExport = useCallback(
+    (format: "markdown" | "csv") => {
+      const generatedAt = new Date().toISOString();
+      const text =
+        format === "markdown"
+          ? timelineToMarkdown(filteredCommits, {
+              repo: repoName,
+              filters: currentFilters,
+              generatedAt,
+              hasMore: hasMoreCommits,
+              extraFilters: exportExtraFilters,
+            })
+          : timelineToCsv(filteredCommits);
+      return { text, stem: exportFileStem(repoName, selectedRef, generatedAt) };
+    },
+    [filteredCommits, repoName, currentFilters, hasMoreCommits, exportExtraFilters, selectedRef],
+  );
+  const copyViewLink = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      return redacted && author.trim()
+        ? "Link copied — the author filter is left out in Redact mode."
+        : "Link copied.";
+    } catch {
+      return "Copy failed — copy the address bar instead.";
+    }
+  }, [redacted, author]);
+  const copyTimelineMarkdown = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(buildTimelineExport("markdown").text);
+      return `Copied ${filteredCommits.length} commit${filteredCommits.length === 1 ? "" : "s"} as Markdown.`;
+    } catch {
+      return "Copy failed — use Download instead.";
+    }
+  }, [buildTimelineExport, filteredCommits.length]);
+  const downloadTimeline = useCallback(
+    (format: "markdown" | "csv") => {
+      const { text, stem } = buildTimelineExport(format);
+      const blob = new Blob([text], {
+        type: format === "markdown" ? "text/markdown;charset=utf-8" : "text/csv;charset=utf-8",
+      });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = `${stem}.${format === "markdown" ? "md" : "csv"}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 0);
+      return `Downloaded ${link.download}.`;
+    },
+    [buildTimelineExport],
+  );
+  const timelineViewCommands = useMemo<TimelineViewCommand[]>(() => {
+    if (mode !== "detail" || !selectedRepo) return [];
+    const viewCommands: TimelineViewCommand[] = savedViews.map((view) => ({
+      kind: "view",
+      label: `Apply view: ${view.name}`,
+      hint: [shortRefName(view.filters.ref), ...describeFilters(view.filters)].join(" · "),
+      run: () => applySavedView(view),
+    }));
+    const historyCommands: TimelineViewCommand[] = HISTORY_SHAPES.filter((shape) => shape !== historyShape).map(
+      (shape) => ({
+        kind: "history",
+        label: `History: ${HISTORY_SHAPE_INFO[shape].label}`,
+        hint: shape === "merges" ? "pull requests" : shape,
+        run: () => {
+          setHistoryShape(shape);
+          setSelected("");
+        },
+      }),
+    );
+    const exportCommands: TimelineViewCommand[] = [
+      { kind: "export", label: "Copy link to this view", hint: "share", run: copyViewLink },
+      { kind: "export", label: "Copy commit list as Markdown", hint: `${filteredCommits.length} commits`, run: copyTimelineMarkdown },
+      { kind: "export", label: "Download commit list as CSV", hint: "export", run: () => downloadTimeline("csv") },
+    ];
+    return [...viewCommands, ...historyCommands, ...exportCommands];
+  }, [
+    mode,
+    selectedRepo,
+    savedViews,
+    applySavedView,
+    historyShape,
+    copyViewLink,
+    copyTimelineMarkdown,
+    downloadTimeline,
+    filteredCommits.length,
+  ]);
   // Suggestions for the file-history prompt: most-recent first, then the
   // currently-selected commit's changed files. Dedup happens here so the
   // prompt component stays presentational.
@@ -1581,21 +1786,52 @@ export default function App() {
   // Deep-link sync: mirror repo / ref / selected commit / path filter into
   // the URL (replaceState — no history entry per click), so a reload or a
   // copied link reopens the same view. Unrelated params (fleet, flight) stay.
+  // The timeline filters ride along so the URL is a shareable view; in Redact
+  // mode the author filter stays out of the address bar.
   useEffect(() => {
     if (typeof window === "undefined" || !selectedRepo) return;
-    const search = buildCompareLinkSearch(
-      buildDeepLinkSearch(window.location.search, {
-        repo: selectedRepo,
-        ref: selectedRef,
-        commit: selectedWorkTree ? "" : selected,
-        path: debouncedPath.trim(),
-      }),
-      { base: compareBase, target: compareTarget, mode: compareMode },
+    const search = buildFilterLinkSearch(
+      buildCompareLinkSearch(
+        buildDeepLinkSearch(window.location.search, {
+          repo: selectedRepo,
+          ref: selectedRef,
+          commit: selectedWorkTree ? "" : selected,
+          path: debouncedPath.trim(),
+        }),
+        { base: compareBase, target: compareTarget, mode: compareMode },
+      ),
+      {
+        searchMode,
+        search: debouncedSearch,
+        searchPattern: debouncedSearchPattern,
+        author: debouncedAuthor,
+        since: sinceDate,
+        until: untilDate,
+        history: historyShape,
+      },
+      { includeAuthor: !redacted },
     );
     if (search === window.location.search) return;
     const url = `${window.location.pathname}${search}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", url);
-  }, [selectedRepo, selectedRef, selected, selectedWorkTree, debouncedPath, compareBase, compareTarget, compareMode]);
+  }, [
+    selectedRepo,
+    selectedRef,
+    selected,
+    selectedWorkTree,
+    debouncedPath,
+    compareBase,
+    compareTarget,
+    compareMode,
+    searchMode,
+    debouncedSearch,
+    debouncedSearchPattern,
+    debouncedAuthor,
+    sinceDate,
+    untilDate,
+    historyShape,
+    redacted,
+  ]);
   // The viewer reads from one repository; a repo switch closes it.
   useEffect(() => {
     setFileViewerTarget(null);
@@ -2164,6 +2400,27 @@ export default function App() {
           setUntilDate(value);
           setSelected("");
         }}
+        historyShape={historyShape}
+        onHistoryShapeChange={(shape) => {
+          setHistoryShape(shape);
+          setSelected("");
+        }}
+        viewsMenu={
+          mode === "detail" && selectedRepo ? (
+            <SavedViewsMenu
+              views={savedViews}
+              activeViewId={activeSavedView?.id ?? null}
+              onApply={applySavedView}
+              onSave={saveCurrentView}
+              onDelete={(view) => deleteView(view.id)}
+              onCopyLink={copyViewLink}
+              onCopyMarkdown={copyTimelineMarkdown}
+              onDownload={downloadTimeline}
+              commitCount={filteredCommits.length}
+              hasMore={hasMoreCommits}
+            />
+          ) : null
+        }
         searchMode={searchMode}
         onSearchModeChange={(mode) => {
           setSearchMode(mode);
@@ -2619,7 +2876,7 @@ export default function App() {
               livePaused={livePaused}
               pendingUpdates={pendingUpdates}
               liveAnnouncement={liveAnnouncement}
-              activeFilters={activeFilters(search, author, path, searchMode, searchPattern, sinceDate, untilDate)}
+              activeFilters={activeFilters(search, author, path, searchMode, searchPattern, sinceDate, untilDate, historyShape)}
               hasMoreCommits={hasMoreCommits}
               loadingOlderCommits={loadingOlderCommits}
               onLoadOlderCommits={loadOlderCommits}
@@ -2817,6 +3074,7 @@ export default function App() {
           recordLastOpened(id);
           switchRepo(id);
         }}
+        timelineViewCommands={timelineViewCommands}
         lastOpenedRepos={lastOpenedRepos}
       />
       <FileHistoryPrompt
@@ -2947,6 +3205,7 @@ function activeFilters(
   searchPattern: string,
   sinceDate = "",
   untilDate = "",
+  historyShape: HistoryShape = "all",
 ) {
   const modeLabels: Record<SearchMode, string> = {
     subject: "Subject",
@@ -2965,6 +3224,7 @@ function activeFilters(
     sinceDate || untilDate
       ? `date ${sinceDate || "…"} → ${untilDate || "…"}`
       : "",
+    HISTORY_SHAPE_INFO[historyShape].chip,
   ].filter(Boolean);
 }
 

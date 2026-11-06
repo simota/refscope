@@ -288,6 +288,8 @@ export type CommitListWindow = {
   skip?: number;
   since?: string;
   until?: string;
+  /** `first-parent` / `merges` / `no-merges`; omitted or `all` lists every commit. */
+  history?: "all" | "first-parent" | "merges" | "no-merges";
 };
 
 export async function listCommits(
@@ -305,6 +307,7 @@ export async function listCommits(
   if (window.skip && window.skip > 0) params.set("skip", String(window.skip));
   if (window.since) params.set("since", window.since);
   if (window.until) params.set("until", window.until);
+  if (window.history && window.history !== "all") params.set("history", window.history);
   // subject mode uses the legacy `search` param; other modes use `mode`+`pattern`.
   if (searchMode === "subject") {
     const normalizedSearch = search.trim();

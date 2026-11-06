@@ -11,8 +11,9 @@ import {
   FILE_CONTENT_MAX_BYTES,
   commitListLogArgs,
   createGitService,
+  historyShapeArgs,
 } from "../src/gitService.js";
-import { SKIP_QUERY_MAX, parseSkipQuery } from "../src/validation.js";
+import { SKIP_QUERY_MAX, parseHistoryShapeQuery, parseSkipQuery } from "../src/validation.js";
 import { createRequestHandler } from "../src/http.js";
 
 const REV = "1111111111111111111111111111111111111111";
@@ -83,6 +84,76 @@ test("listCommits pages through history with skip and filters by date window", a
     }
     const dup = new URLSearchParams([["skip", "1"], ["skip", "2"]]);
     assert.equal((await service.listCommits(repo, dup)).status, 400);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("parseHistoryShapeQuery accepts the four shapes only", () => {
+  assert.deepEqual(parseHistoryShapeQuery(undefined), { ok: true, value: "all" });
+  assert.deepEqual(parseHistoryShapeQuery(""), { ok: true, value: "all" });
+  for (const shape of ["all", "first-parent", "merges", "no-merges"]) {
+    assert.deepEqual(parseHistoryShapeQuery(shape), { ok: true, value: shape });
+  }
+  for (const bad of ["ALL", "first_parent", " merges", "--merges", "graph"]) {
+    assert.equal(parseHistoryShapeQuery(bad).ok, false, `expected ${JSON.stringify(bad)} to be rejected`);
+  }
+});
+
+test("historyShapeArgs maps shapes to log options before the terminator", () => {
+  assert.deepEqual(historyShapeArgs("all"), []);
+  assert.deepEqual(historyShapeArgs("first-parent"), ["--first-parent"]);
+  assert.deepEqual(historyShapeArgs("merges"), ["--first-parent", "--merges"]);
+  assert.deepEqual(historyShapeArgs("no-merges"), ["--no-merges"]);
+  const args = commitListLogArgs(50, [], [], REV, [], { history: "merges" });
+  const end = args.indexOf("--end-of-options");
+  assert.ok(args.indexOf("--merges") > 0 && args.indexOf("--merges") < end);
+  assert.ok(!commitListLogArgs(50, [], [], REV, []).includes("--first-parent"));
+});
+
+test("listCommits history shapes: first-parent, merges only, no merges", async () => {
+  const repoPath = createTempPath("refscope-shape-");
+  try {
+    initRepo(repoPath);
+    commitAt(repoPath, "a.txt", "1\n", "chore: root", "2024-01-01T12:00:00Z");
+    git(repoPath, "checkout", "-q", "-b", "feature");
+    commitAt(repoPath, "b.txt", "1\n", "feat: side one", "2024-01-02T12:00:00Z");
+    commitAt(repoPath, "b.txt", "2\n", "feat: side two", "2024-01-03T12:00:00Z");
+    git(repoPath, "checkout", "-q", "main");
+    commitAt(repoPath, "a.txt", "2\n", "fix: mainline", "2024-01-04T12:00:00Z");
+    gitWithDate(repoPath, "2024-01-05T12:00:00Z", "merge", "-q", "--no-ff", "-m", "Merge feature", "feature");
+
+    const service = makeService();
+    const repo = { id: "demo", name: "demo", path: repoPath };
+    const subjects = async (params) => {
+      const result = await service.listCommits(repo, new URLSearchParams(params));
+      assert.equal(result.status, 200, JSON.stringify(result.body));
+      return result.body.map((c) => c.subject);
+    };
+
+    assert.equal((await subjects({})).length, 5);
+    assert.deepEqual(await subjects({ history: "all" }), await subjects({}));
+    assert.deepEqual(await subjects({ history: "first-parent" }), ["Merge feature", "fix: mainline", "chore: root"]);
+    assert.deepEqual(await subjects({ history: "merges" }), ["Merge feature"]);
+    assert.deepEqual(
+      (await subjects({ history: "no-merges" })).sort(),
+      ["chore: root", "feat: side one", "feat: side two", "fix: mainline"],
+    );
+
+    // A first-parent merge row carries the merged change as its stats.
+    const merges = await service.listCommits(repo, new URLSearchParams({ history: "merges" }));
+    assert.equal(merges.body[0].isMerge, true);
+    assert.equal(merges.body[0].added, 1);
+
+    // Combines with pagination and the subject search.
+    assert.deepEqual(await subjects({ history: "first-parent", limit: "1", skip: "1" }), ["fix: mainline"]);
+    assert.deepEqual(await subjects({ history: "no-merges", search: "side" }).then((s) => s.sort()), ["feat: side one", "feat: side two"]);
+
+    const bad = await service.listCommits(repo, new URLSearchParams({ history: "graph" }));
+    assert.equal(bad.status, 400);
+    assert.equal(bad.body.error, "Invalid history parameter");
+    const dup = await service.listCommits(repo, new URLSearchParams([["history", "merges"], ["history", "all"]]));
+    assert.equal(dup.status, 400);
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }

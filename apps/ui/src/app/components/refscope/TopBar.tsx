@@ -31,8 +31,10 @@ import {
   DropdownMenuSeparator,
 } from "../ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import { Filter } from "lucide-react";
+import { Filter, GitMerge } from "lucide-react";
+import type { ReactNode } from "react";
 import type { SearchMode } from "../../api";
+import { HISTORY_SHAPES, HISTORY_SHAPE_INFO, type HistoryShape } from "../../lib/timelineViews";
 import type { GitRef, Repository } from "./data";
 
 export function TopBar({
@@ -67,6 +69,9 @@ export function TopBar({
   until,
   onSinceChange,
   onUntilChange,
+  historyShape = "all",
+  onHistoryShapeChange,
+  viewsMenu,
   searchMode,
   onSearchModeChange,
   searchPattern,
@@ -116,6 +121,11 @@ export function TopBar({
   until?: string;
   onSinceChange?: (value: string) => void;
   onUntilChange?: (value: string) => void;
+  /** Which commits of the walk are listed (first-parent / merges / no merges). */
+  historyShape?: HistoryShape;
+  onHistoryShapeChange?: (shape: HistoryShape) => void;
+  /** Saved views / share / export menu, rendered next to Filters. */
+  viewsMenu?: ReactNode;
   searchMode: SearchMode;
   onSearchModeChange: (mode: SearchMode) => void;
   searchPattern: string;
@@ -339,7 +349,10 @@ export function TopBar({
           until={until}
           onSinceChange={onSinceChange}
           onUntilChange={onUntilChange}
+          historyShape={historyShape}
+          onHistoryShapeChange={onHistoryShapeChange}
         />
+        {viewsMenu}
         {/* Active path-scope chip — only rendered when a scope is active.
             Visible at all viewports (the path input above hides at sub-xl)
             so a monorepo user always knows what's filtered, and can clear it
@@ -578,6 +591,8 @@ function FiltersMenu({
   until = "",
   onSinceChange,
   onUntilChange,
+  historyShape = "all",
+  onHistoryShapeChange,
 }: {
   author: string;
   path: string;
@@ -587,9 +602,12 @@ function FiltersMenu({
   until?: string;
   onSinceChange?: (value: string) => void;
   onUntilChange?: (value: string) => void;
+  historyShape?: HistoryShape;
+  onHistoryShapeChange?: (shape: HistoryShape) => void;
 }) {
   const dateActive = Boolean(since || until);
-  const activeCount = (author ? 1 : 0) + (path ? 1 : 0) + (dateActive ? 1 : 0);
+  const historyActive = historyShape !== "all";
+  const activeCount = (author ? 1 : 0) + (path ? 1 : 0) + (dateActive ? 1 : 0) + (historyActive ? 1 : 0);
   const triggerActive = activeCount > 0;
   const dateInverted = Boolean(since && until && since > until);
   const clearAll = () => {
@@ -597,6 +615,7 @@ function FiltersMenu({
     if (path) onPathChange("");
     if (since) onSinceChange?.("");
     if (until) onUntilChange?.("");
+    if (historyActive) onHistoryShapeChange?.("all");
   };
   return (
     <Popover>
@@ -612,7 +631,7 @@ function FiltersMenu({
           title={
             triggerActive
               ? `${activeCount} filter${activeCount === 1 ? "" : "s"} active`
-              : "Filters: author, path and date range"
+              : "Filters: author, path, date range and history shape"
           }
           style={
             triggerActive
@@ -834,6 +853,66 @@ function FiltersMenu({
               {dateInverted
                 ? "Start date is after end date — no commits will match."
                 : "Searches the full history on the server, in your local time zone."}
+            </div>
+          </fieldset>
+        ) : null}
+        {onHistoryShapeChange ? (
+          <fieldset style={{ border: "none", padding: 0, margin: "0 0 12px" }}>
+            <legend
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 11,
+                color: "var(--rs-text-secondary)",
+                marginBottom: 4,
+                fontFamily: "var(--rs-sans)",
+                padding: 0,
+              }}
+            >
+              <GitMerge size={12} aria-hidden />
+              History
+            </legend>
+            <div role="radiogroup" aria-label="History shape" style={{ display: "grid", gap: 2 }}>
+              {HISTORY_SHAPES.map((shape) => {
+                const info = HISTORY_SHAPE_INFO[shape];
+                const checked = historyShape === shape;
+                return (
+                  <label
+                    key={shape}
+                    title={info.description}
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 6,
+                      padding: "3px 4px",
+                      borderRadius: "var(--rs-radius-sm)",
+                      fontFamily: "var(--rs-sans)",
+                      cursor: "pointer",
+                      background: checked
+                        ? "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 14%)"
+                        : "transparent",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="topbar-history-shape"
+                      value={shape}
+                      checked={checked}
+                      onChange={() => onHistoryShapeChange(shape)}
+                      style={{ marginTop: 2, accentColor: "var(--rs-accent)" }}
+                    />
+                    <span>
+                      <span style={{ display: "block", fontSize: 12, color: "var(--rs-text-primary)" }}>
+                        {info.label}
+                      </span>
+                      <span style={{ display: "block", fontSize: 10, color: "var(--rs-text-muted)" }}>
+                        {info.description}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
             </div>
           </fieldset>
         ) : null}
