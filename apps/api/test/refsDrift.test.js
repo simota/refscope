@@ -9,6 +9,8 @@ import {
   REF_DRIFT_DEFAULT_LIMIT,
   REF_DRIFT_MAX_LIMIT,
   createGitService,
+  inferAncestorMergeBase,
+  readAheadBehindBatch,
 } from "../src/gitService.js";
 
 test("getRefDrift returns ahead/behind for branches against the default HEAD base", async () => {
@@ -272,6 +274,133 @@ test("getRefDrift returns 404 for an unknown base ref", async () => {
     );
     assert.equal(result.status, 404);
     assert.deepEqual(result.body, { error: "Ref not found or not a commit" });
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("getRefDrift mergeBase matches git merge-base for ancestor, descendant, diverged and unrelated refs", async () => {
+  const repoPath = createTempPath("rtgv-ref-drift-mergebase-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "v0\n", "chore: seed");
+    writeAndCommit(repoPath, "a.txt", "a\n", "feat: a");
+    git(repoPath, "branch", "behind-only");
+    git(repoPath, "checkout", "-b", "diverged");
+    writeAndCommit(repoPath, "d.txt", "d\n", "feat: d");
+    git(repoPath, "checkout", "main");
+    writeAndCommit(repoPath, "b.txt", "b\n", "feat: b");
+    git(repoPath, "branch", "ahead-only");
+    git(repoPath, "checkout", "ahead-only");
+    writeAndCommit(repoPath, "c.txt", "c\n", "feat: c");
+    git(repoPath, "checkout", "--orphan", "unrelated");
+    git(repoPath, "rm", "-rf", "--quiet", ".");
+    writeAndCommit(repoPath, "u.txt", "u\n", "chore: unrelated root");
+    git(repoPath, "checkout", "main");
+    // A criss-cross merge leaves two best merge-bases: Git picks one, and the
+    // drift payload must report the same one.
+    git(repoPath, "checkout", "-b", "cross-x", "diverged");
+    git(repoPath, "merge", "--no-edit", "-q", "main");
+    git(repoPath, "checkout", "main");
+    git(repoPath, "merge", "--no-edit", "-q", "diverged");
+    git(repoPath, "checkout", "-q", "main");
+
+    const service = createGitService({
+      repositories: new Map(),
+      gitTimeoutMs: 5000,
+      diffMaxBytes: 65_536,
+    });
+    const result = await service.getRefDrift(
+      { id: "demo", name: "demo", path: repoPath },
+      new URLSearchParams(),
+    );
+    assert.equal(result.status, 200);
+    const base = result.body.base.resolved;
+    const byShort = indexByShortName(result.body.refs);
+    for (const name of ["behind-only", "ahead-only", "diverged", "unrelated", "cross-x"]) {
+      const entry = byShort.get(name);
+      assert.ok(entry, `missing drift entry for ${name}`);
+      const mergeBase = spawnSync("git", ["merge-base", base, entry.hash], {
+        cwd: repoPath,
+        encoding: "utf8",
+      });
+      const expected = mergeBase.status === 0 ? mergeBase.stdout.trim() : null;
+      assert.equal(entry.mergeBase, expected, `mergeBase for ${name}`);
+      const counts = git(repoPath, "rev-list", "--left-right", "--count", `${base}...${entry.hash}`)
+        .trim()
+        .split("\t")
+        .map(Number);
+      assert.deepEqual([entry.behind, entry.ahead], counts, `counts for ${name}`);
+    }
+    assert.equal(byShort.get("behind-only").ahead, 0);
+    assert.equal(byShort.get("behind-only").mergeBase, byShort.get("behind-only").hash);
+    assert.equal(byShort.get("cross-x").behind > 0, true);
+    assert.equal(byShort.get("unrelated").mergeBase, null);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test("inferAncestorMergeBase only answers when one side of the counts is zero", () => {
+  const base = "b".repeat(40);
+  const ref = { hash: "r".repeat(40) };
+  assert.deepEqual(inferAncestorMergeBase(base, ref, { ahead: 0, behind: 3 }), { known: true, mergeBase: ref.hash });
+  assert.deepEqual(inferAncestorMergeBase(base, ref, { ahead: 2, behind: 0 }), { known: true, mergeBase: base });
+  assert.deepEqual(inferAncestorMergeBase(base, ref, { ahead: 1, behind: 1 }), { known: false });
+  // A ref whose tag chain may not have peeled keeps the real merge-base read.
+  const nested = { hash: ref.hash };
+  Object.defineProperty(nested, "nestedTag", { value: true, enumerable: false });
+  assert.deepEqual(inferAncestorMergeBase(base, nested, { ahead: 0, behind: 3 }), { known: false });
+});
+
+test("readAheadBehindBatch answers only for refs that still name the listed commit", async () => {
+  const repoPath = createTempPath("rtgv-ref-drift-batch-");
+  try {
+    initRepo(repoPath, "Alice", "alice@example.test");
+    writeAndCommit(repoPath, "README.md", "v0\n", "chore: seed");
+    writeAndCommit(repoPath, "a.txt", "a\n", "feat: a");
+    git(repoPath, "checkout", "-b", "feat", "HEAD~1");
+    writeAndCommit(repoPath, "f.txt", "f\n", "feat: f");
+    git(repoPath, "checkout", "main");
+    git(repoPath, "tag", "-a", "-m", "annotated", "v1", "HEAD~1");
+    // A remote ref may name an annotated tag; its counts are those of the
+    // commit the tag points to, which is the hash the ref list reports.
+    git(repoPath, "update-ref", "refs/remotes/origin/tagged", git(repoPath, "rev-parse", "v1").trim());
+    const tree = git(repoPath, "rev-parse", "HEAD^{tree}").trim();
+    git(repoPath, "update-ref", "refs/remotes/origin/tree", tree);
+
+    const repo = { id: "demo", name: "demo", path: repoPath };
+    const base = git(repoPath, "rev-parse", "main").trim();
+    const featHash = git(repoPath, "rev-parse", "feat").trim();
+    const seedHash = git(repoPath, "rev-parse", "main~1").trim();
+    const feat = { name: "refs/heads/feat", hash: featHash };
+    const tagged = { name: "refs/remotes/origin/tagged", hash: seedHash };
+    const treeRef = { name: "refs/remotes/origin/tree", hash: tree };
+    // Listed before the ref moved: the batch now sees another object.
+    const stale = { name: "refs/heads/feat", hash: seedHash };
+    const nested = { name: "refs/heads/feat", hash: featHash };
+    Object.defineProperty(nested, "nestedTag", { value: true, enumerable: false });
+    const missing = { name: "refs/heads/gone", hash: featHash };
+
+    const counts = await readAheadBehindBatch(
+      repo,
+      base,
+      [feat, tagged, treeRef, stale, nested, missing],
+      5000,
+    );
+    assert.deepEqual(counts.get(feat), { ahead: 1, behind: 1 });
+    assert.deepEqual(counts.get(tagged), { ahead: 0, behind: 1 });
+    for (const ref of [treeRef, stale, nested, missing]) {
+      assert.equal(counts.has(ref), false, ref.name);
+    }
+    // The counts are exactly what the per-ref rev-list walk reports.
+    const [behind, ahead] = git(repoPath, "rev-list", "--left-right", "--count", `${base}...${featHash}`)
+      .trim()
+      .split("\t")
+      .map(Number);
+    assert.deepEqual(counts.get(feat), { ahead, behind });
+    // A base that is not a full object id is never spliced into the format.
+    assert.equal((await readAheadBehindBatch(repo, "main", [feat], 5000)).size, 0);
   } finally {
     fs.rmSync(repoPath, { recursive: true, force: true, maxRetries: 10 });
   }

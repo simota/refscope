@@ -1570,15 +1570,13 @@ export function createGitService(config) {
         ? driftEligibleRefs.slice(0, limit)
         : driftEligibleRefs;
 
-      // Drift per ref runs in parallel; the outer Promise.all unions all
-      // refs, and `computeRefDrift` itself runs ahead/behind and merge-base in
-      // parallel internally. Total fanout is 2 * processedRefs git calls.
+      // One `for-each-ref` reads ahead/behind for every ref; merge-bases are
+      // then read in parallel, only for refs that diverged from the base.
+      // Refs the batch cannot answer for (or a Git without the
+      // `ahead-behind` atom) fall back to `computeRefDrift`'s two parallel
+      // per-ref reads. See `computeRefDrifts`.
       const driftEntries = (
-        await Promise.all(
-          refsToProcess.map((ref) =>
-            computeRefDrift(repo, baseRevision.hash, ref, config.gitTimeoutMs),
-          ),
-        )
+        await computeRefDrifts(repo, baseRevision.hash, refsToProcess, config.gitTimeoutMs)
       ).filter(Boolean);
 
       return {
@@ -1655,9 +1653,15 @@ export function createGitService(config) {
       const now = Date.now();
 
       // Compute drift + rotScore in parallel across matching branches.
+      const drifts = await computeRefDrifts(
+        repo,
+        baseRevision.hash,
+        matchingBranches,
+        config.gitTimeoutMs,
+      );
       const branches = (await Promise.all(
-        matchingBranches.map(async (ref) => {
-          const drift = await computeRefDrift(repo, baseRevision.hash, ref, config.gitTimeoutMs);
+        matchingBranches.map(async (ref, index) => {
+          const drift = drifts[index];
           if (!drift) return null;
           const ahead = drift.ahead;
           const behind = drift.behind;
@@ -2650,9 +2654,10 @@ export function createGitService(config) {
       const allPaths = [...fileStats.keys()];
 
       // ── Step 4: per-file lines + bytes via git show <oid>:<path> ───────────
-      // Chunk to os.cpus().length / 2 concurrency to avoid saturating the
-      // event loop on large repositories.
-      const concurrency = Math.max(1, Math.floor(os.cpus().length / 2));
+      // Paths the batch read below could not size are read one by one,
+      // chunked to os.cpus().length / 2 concurrency to avoid saturating the
+      // event loop on large repositories. The CPU count is only looked up
+      // when such paths remain: `os.cpus()` reads /proc/cpuinfo each call.
 
       /**
        * @param {string} filePath
@@ -2717,6 +2722,8 @@ export function createGitService(config) {
         : allPaths;
       sizeMap ??= new Map();
 
+      const concurrency =
+        pendingPaths.length > 0 ? Math.max(1, Math.floor(os.cpus().length / 2)) : 1;
       for (let i = 0; i < pendingPaths.length; i += concurrency) {
         if (Date.now() > deadline) {
           return {
@@ -4751,12 +4758,18 @@ function readRefDriftQuery(query) {
  * share no state. Ahead and behind come from one `--left-right --count` walk
  * (see `aheadBehindRevListArgs`).
  *
+ * `known`, when given, holds ahead/behind counts that `readAheadBehindBatch`
+ * already read from Git for exactly `ref.hash`; the count walk is skipped and
+ * the merge-base is read only when the counts do not determine it (see
+ * `inferAncestorMergeBase`).
+ *
  * @param {{ id: string, name: string, path: string }} repo
  * @param {string} baseHash  Already resolved object id for the base ref.
  * @param {{ name: string, type: "branch"|"remote"|"tag"|"other", hash: string }} ref
  * @param {number} timeoutMs
+ * @param {{ ahead: number, behind: number }} [known]
  */
-async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
+async function computeRefDrift(repo, baseHash, ref, timeoutMs, known) {
   if (ref.hash === baseHash) {
     return {
       name: ref.name,
@@ -4767,12 +4780,22 @@ async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
       hash: ref.hash,
     };
   }
-  let counts, mergeBase;
+  let ahead, behind, mergeBase;
   try {
-    [counts, mergeBase] = await Promise.all([
-      runGit(repo, aheadBehindRevListArgs(baseHash, ref.hash), { timeoutMs }),
-      readMergeBase(repo, baseHash, ref.hash, timeoutMs),
-    ]);
+    if (known) {
+      ({ ahead, behind } = known);
+      const inferred = inferAncestorMergeBase(baseHash, ref, known);
+      mergeBase = inferred.known
+        ? inferred.mergeBase
+        : await readMergeBase(repo, baseHash, ref.hash, timeoutMs);
+    } else {
+      let counts;
+      [counts, mergeBase] = await Promise.all([
+        runGit(repo, aheadBehindRevListArgs(baseHash, ref.hash), { timeoutMs }),
+        readMergeBase(repo, baseHash, ref.hash, timeoutMs),
+      ]);
+      ({ ahead, behind } = parseAheadBehindCounts(counts.stdout));
+    }
   } catch (error) {
     // A ref may name a blob or tree; it has no drift and must not fail the
     // whole fan-out. Any other failure (missing objects, timeouts) still
@@ -4787,7 +4810,6 @@ async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
     }
     throw error;
   }
-  const { ahead, behind } = parseAheadBehindCounts(counts.stdout);
   return {
     name: ref.name,
     type: ref.type,
@@ -4796,6 +4818,142 @@ async function computeRefDrift(repo, baseHash, ref, timeoutMs) {
     mergeBase,
     hash: ref.hash,
   };
+}
+
+/**
+ * Drift for many refs against one base, in input order (`null` where
+ * `computeRefDrift` skips a ref). The ahead/behind counts of every ref are
+ * read by one `for-each-ref` (see `readAheadBehindBatch`) instead of one
+ * `rev-list` per ref; a ref the batch could not answer for takes the
+ * per-ref path unchanged.
+ *
+ * @param {{ id: string, name: string, path: string }} repo
+ * @param {string} baseHash
+ * @param {Array<{ name: string, type: "branch"|"remote"|"tag"|"other", hash: string, nestedTag?: boolean }>} refs
+ * @param {number} timeoutMs
+ */
+async function computeRefDrifts(repo, baseHash, refs, timeoutMs) {
+  const known = await readAheadBehindBatch(
+    repo,
+    baseHash,
+    refs.filter((ref) => ref.hash !== baseHash),
+    timeoutMs,
+  );
+  return Promise.all(
+    refs.map((ref) => computeRefDrift(repo, baseHash, ref, timeoutMs, known.get(ref))),
+  );
+}
+
+// A resolved object id as Git prints it (SHA-1 or SHA-256); it is spliced
+// into a --format argument, so nothing else may reach it.
+const FULL_OBJECT_ID_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+// `%(ahead-behind:...)` needs Git 2.41+. Set once an older Git rejects the
+// atom, so later requests go straight to the per-ref reads; it only ever
+// selects the slower path, never a different answer.
+let aheadBehindAtomUnsupported = false;
+
+/**
+ * Ahead/behind counts for many refs from one `for-each-ref` run. Git walks
+ * all tips together, which costs about one `rev-list` walk instead of one
+ * per ref (and one process instead of one per ref).
+ *
+ * The refs were listed by an earlier read, so a count is used only when the
+ * ref still names the object that read saw (`ref.hash`, with one level of
+ * tag peeling as in `parsePublicRefLines`). Refs that moved, name no commit
+ * (Git prints an empty field), may hold an unpeeled tag chain (`nestedTag`),
+ * or are missing from the output get no entry; any failure of the batch
+ * yields no entries. Callers fall back to the per-ref read for those.
+ *
+ * @param {{ path: string }} repo
+ * @param {string} baseHash  resolved commit id (never an option: hex only)
+ * @param {Array<{ name: string, hash: string, nestedTag?: boolean }>} refs
+ * @param {number} timeoutMs
+ * @returns {Promise<Map<object, { ahead: number, behind: number }>>} keyed by ref object
+ */
+export async function readAheadBehindBatch(repo, baseHash, refs, timeoutMs) {
+  /** @type {Map<object, { ahead: number, behind: number }>} */
+  const counts = new Map();
+  const candidates = refs.filter((ref) => !ref.nestedTag);
+  if (aheadBehindAtomUnsupported || candidates.length === 0 || !FULL_OBJECT_ID_PATTERN.test(baseHash)) {
+    return counts;
+  }
+  /** @type {Map<string, Array<object>>} */
+  const byName = new Map();
+  let nameBytes = 0;
+  for (const ref of candidates) {
+    const list = byName.get(ref.name);
+    if (list) {
+      list.push(ref);
+    } else {
+      byName.set(ref.name, [ref]);
+      nameBytes += ref.name.length;
+    }
+  }
+  if (nameBytes > REF_POLL_TARGETED_MAX_ARG_BYTES) return counts;
+
+  let stdout;
+  try {
+    ({ stdout } = await runGit(
+      repo,
+      [
+        "for-each-ref",
+        `--format=%(refname)%00%(objectname)%00%(*objectname)%00%(ahead-behind:${baseHash})`,
+        // An exact ref name is also a prefix pattern (refs/heads/a matches
+        // refs/heads/a/b); only exact matches are used below.
+        ...byName.keys(),
+      ],
+      { timeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
+    ));
+  } catch (error) {
+    if (!(error instanceof GitCommandError)) throw error;
+    if (/unknown field name/.test(error.stderr) && error.stderr.includes("ahead-behind")) {
+      aheadBehindAtomUnsupported = true;
+    }
+    // Timeouts included: the per-ref reads each get their own budget, as
+    // they did before this batch existed.
+    return counts;
+  }
+
+  for (const line of stdout.split("\n")) {
+    const [name, objectHash, peeledHash, aheadBehind] = line.split(COMMIT_FIELD_SEPARATOR);
+    const listed = byName.get(name);
+    if (!listed || aheadBehind === undefined) continue;
+    const match = /^(\d+) (\d+)$/.exec(aheadBehind);
+    if (!match) continue;
+    const ahead = Number(match[1]);
+    const behind = Number(match[2]);
+    if (!Number.isSafeInteger(ahead) || !Number.isSafeInteger(behind)) continue;
+    for (const ref of listed) {
+      if ((peeledHash || objectHash) === ref.hash) counts.set(ref, { ahead, behind });
+    }
+  }
+  return counts;
+}
+
+/**
+ * The merge-base that exact ahead/behind counts of `<base>...<ref>` already
+ * determine, without running `git merge-base`.
+ *
+ * - ahead 0: every commit reachable from the ref is reachable from the base,
+ *   so the ref is an ancestor of the base and is their only merge-base.
+ * - behind 0: likewise the base is an ancestor of the ref.
+ *
+ * Only a ref that diverged (both counts non-zero) needs the extra read. A
+ * ref flagged `nestedTag` may still name a tag object when its chain failed
+ * to peel, while `git merge-base` prints the commit; such refs always take
+ * the read.
+ *
+ * @param {string} baseHash  resolved commit id of the base
+ * @param {{ hash: string, nestedTag?: boolean }} ref
+ * @param {{ ahead: number, behind: number }} counts  exact counts read for `ref.hash`
+ * @returns {{ known: true, mergeBase: string } | { known: false }}
+ */
+export function inferAncestorMergeBase(baseHash, ref, { ahead, behind }) {
+  if (ref.nestedTag) return { known: false };
+  if (ahead === 0) return { known: true, mergeBase: ref.hash };
+  if (behind === 0) return { known: true, mergeBase: baseHash };
+  return { known: false };
 }
 
 function readFileHistoryQuery(query) {
