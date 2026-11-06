@@ -87,3 +87,12 @@ test("createRedactor.resolveName: a clicked pseudonym filters by the real author
   assert.equal(redactor.resolveName(out.author), "Carol King");
   assert.equal(redactor.resolveName("someone typed"), "someone typed");
 });
+
+test("path-owner name aliases are pseudonymized like authors", () => {
+  const redactor = createRedactor();
+  const out = redactor.redact({ authors: [{ author: "Ann Lee", authorEmail: "ann@x.test", authorAliases: ["ann.lee", "alee"] }] });
+  const owner = out.authors[0];
+  assert.equal(owner.authorEmail, "[redacted]");
+  assert.ok(owner.authorAliases.every((alias: string) => /·[0-9a-f]{4}$/.test(alias)));
+  assert.equal(redactor.resolveName(owner.authorAliases[0]), "ann.lee");
+});

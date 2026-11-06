@@ -130,6 +130,7 @@ export function BranchSidebar({
   driftBaseShortName,
   onSetRefAsCompareBase,
   onSetRefAsCompareTarget,
+  onOpenReleases,
   stashes = [],
   worktrees = [],
   submodules = [],
@@ -155,6 +156,8 @@ export function BranchSidebar({
   driftBaseShortName?: string;
   onSetRefAsCompareBase?: (refName: string) => void;
   onSetRefAsCompareTarget?: (refName: string) => void;
+  /** Opens the Releases dialog (tags as releases, unreleased changes). */
+  onOpenReleases?: () => void;
   // `stash list` entries (`refs/stash` + reflog). Right-click hashes can drive
   // the same compare endpoints as branches, since each stash is a real commit.
   stashes?: StashEntry[];
@@ -311,7 +314,24 @@ export function BranchSidebar({
         )}
       </Section>
 
-      <Section icon={<Tag size={11} />} title="TAGS">
+      <Section
+        icon={<Tag size={11} />}
+        title="TAGS"
+        action={
+          onOpenReleases ? (
+            <button
+              type="button"
+              className="rs-compact-button"
+              onClick={onOpenReleases}
+              title="Releases: what each tag added, unreleased changes, release notes (Shift+L)"
+              aria-label="Open releases"
+              style={{ fontSize: 10, letterSpacing: 0, fontWeight: 500, padding: "0 6px", height: 18 }}
+            >
+              Releases
+            </button>
+          ) : null
+        }
+      >
         {tags.length ? (
           tags.map((ref) => (
             <TagRow
@@ -818,11 +838,14 @@ function Section({
   children,
   tone,
   hint,
+  action,
 }: {
   icon: React.ReactNode;
   title: string;
   children: React.ReactNode;
   tone?: "warning";
+  /** Optional header control (e.g. TAGS → Releases). */
+  action?: React.ReactNode;
   // Right-aligned count or status pill — used for STASHES / WORKTREES so the
   // header conveys "is there anything in here?" at a glance.
   hint?: string;
@@ -853,6 +876,7 @@ function Section({
             {hint}
           </span>
         ) : null}
+        {action}
       </div>
       <div className="flex flex-col">{children}</div>
     </div>

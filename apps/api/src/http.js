@@ -241,6 +241,16 @@ export function createRequestHandler(config, gitService, fleetService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "releases") {
+        const result = await gitService.getReleases(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "pathOwners") {
+        const result = await gitService.getPathOwners(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "fileContent") {
         const result = await gitService.getFileContent(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
@@ -492,6 +502,12 @@ function matchRoute(method, pathname) {
   if (parts.length === 4 && parts[3] === "code-search") return { name: "codeSearch", params: { repoId } };
   if (parts.length === 4 && parts[3] === "reflog") return { name: "reflog", params: { repoId } };
   if (parts.length === 4 && parts[3] === "events") return { name: "events", params: { repoId } };
+  // Insights (insightsService.js): tag releases reachable from a ref, and the
+  // authors who changed a path at a commit. Inputs stay in the query string.
+  if (parts.length === 4 && parts[3] === "releases") return { name: "releases", params: { repoId } };
+  if (parts.length === 5 && parts[3] === "paths" && parts[4] === "owners") {
+    return { name: "pathOwners", params: { repoId } };
+  }
   // Branch group health: GET /api/repos/:id/branches/grouped
   // Returns branches filtered by prefix with ahead/behind/rotScore fields.
   if (parts.length === 5 && parts[3] === "branches" && parts[4] === "grouped") {
