@@ -58,6 +58,45 @@ test("builds a non-interactive local-only git environment", () => {
   assert.equal(env.GCM_TRACE, undefined);
 });
 
+test("buildGitEnv keeps the same names, order and values as an entries-based copy", () => {
+  const source = {
+    PATH: "/usr/bin",
+    git_lower: "kept: only the upper-case GIT_ prefix is stripped",
+    GIT_DIR: "/tmp/other/.git",
+    ssh_auth_sock: "/tmp/agent",
+    Https_Proxy: "http://proxy",
+    gcm_trace: "/tmp/trace",
+    LANG: "C.UTF-8",
+    PAGER: "less",
+    EMPTY: "",
+    HOME: "/tmp/home",
+  };
+  const blocked = new Set(["SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]);
+  const expected = Object.entries(source).filter(([name]) => {
+    const upper = name.toUpperCase();
+    return !name.startsWith("GIT_") && !upper.startsWith("GCM_") && !blocked.has(upper);
+  });
+  const env = buildGitEnv(source);
+  const inherited = Object.entries(env).filter(([name]) => !name.startsWith("GIT_"));
+  // PAGER keeps its inherited position but is forced to `cat`.
+  assert.deepEqual(
+    inherited,
+    expected.map(([name, value]) => [name, name === "PAGER" ? "cat" : value]),
+  );
+});
+
+test("buildGitEnv reads process.env at call time", () => {
+  const name = "RTGV_TEST_LIVE_ENV_PROBE";
+  assert.equal(buildGitEnv(process.env)[name], undefined);
+  process.env[name] = "set";
+  try {
+    assert.equal(buildGitEnv(process.env)[name], "set");
+  } finally {
+    delete process.env[name];
+  }
+  assert.equal(buildGitEnv(process.env)[name], undefined);
+});
+
 test("forces repo-config program hooks off through env-scoped config", () => {
   const env = buildGitEnv({
     GIT_CONFIG_COUNT: "1",

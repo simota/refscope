@@ -8,12 +8,7 @@ import type { WhyPanelQuery } from "./components/refscope/DetailPanel";
 import { CommandPalette } from "./components/refscope/CommandPalette";
 import { FileHistoryView } from "./components/refscope/FileHistoryView";
 import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
-import {
-  RepoBrowserDialog,
-  type BrowserRevision,
-  type BrowserTab,
-} from "./components/refscope/RepoBrowserDialog";
-import { ReleasesDialog } from "./components/refscope/ReleasesDialog";
+import type { BrowserRevision, BrowserTab } from "./components/refscope/RepoBrowserDialog";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -33,7 +28,7 @@ import { usePinnedRefs } from "./hooks/usePinnedRefs";
 import { useRefBriefing } from "./hooks/useRefBriefing";
 import { useWatchNotifications } from "./hooks/useWatchNotifications";
 import { SinceLastVisitBanner } from "./components/refscope/SinceLastVisitBanner";
-import { lazyWithPreload, whenIdle } from "./lib/lazyWithPreload";
+import { lazyWithPreload, useLatch, whenIdle } from "./lib/lazyWithPreload";
 import { useLayoutPrefs } from "./hooks/useLayoutPrefs";
 import { useTimelinePrefs } from "./hooks/useTimelinePrefs";
 import { useColorVisionTheme } from "./hooks/useColorVisionTheme";
@@ -47,10 +42,7 @@ import { FleetSurface } from "./components/refscope/FleetSurface";
 import { FleetOnboardingOverlay } from "./components/refscope/FleetOnboardingOverlay";
 import { AddRepoDialog } from "./components/refscope/AddRepoDialog";
 import { SymbolHistoryView } from "./components/refscope/SymbolHistoryView";
-import {
-  FileViewerDialog,
-  type FileViewerTarget,
-} from "./components/refscope/FileViewerDialog";
+import type { FileViewerTarget } from "./components/refscope/FileViewerDialog";
 import { useIsMobile } from "./components/ui/use-mobile";
 import type {
   Commit,
@@ -170,6 +162,17 @@ const RewriteRescuePanel = lazyWithPreload(() =>
 );
 const RefFlightRecorderLens = lazyWithPreload(() =>
   import("./components/refscope/RefFlightRecorderLens").then((m) => m.RefFlightRecorderLens),
+);
+// Dialogs that render nothing until opened: each mounts on its first open
+// (see useLatch) and is prefetched with the lenses.
+const RepoBrowserDialog = lazyWithPreload(() =>
+  import("./components/refscope/RepoBrowserDialog").then((m) => m.RepoBrowserDialog),
+);
+const ReleasesDialog = lazyWithPreload(() =>
+  import("./components/refscope/ReleasesDialog").then((m) => m.ReleasesDialog),
+);
+const FileViewerDialog = lazyWithPreload(() =>
+  import("./components/refscope/FileViewerDialog").then((m) => m.FileViewerDialog),
 );
 
 function LensLoading() {
@@ -523,6 +526,9 @@ export default function App() {
           DigestLens,
           RewriteRescuePanel,
           RefFlightRecorderLens,
+          RepoBrowserDialog,
+          ReleasesDialog,
+          FileViewerDialog,
         ]) {
           lens.preload().catch(() => {});
         }
@@ -2327,6 +2333,11 @@ export default function App() {
 
   useKeyboardShortcuts(shortcutBindings, shortcutsSuppressed);
 
+  const releasesDialogOpen = releasesOpen && Boolean(selectedRepo);
+  const repoBrowserMounted = useLatch(browserRevision !== null);
+  const releasesDialogMounted = useLatch(releasesDialogOpen);
+  const fileViewerMounted = useLatch(fileViewerTarget !== null);
+
   return (
     <div
       className="size-full flex flex-col"
@@ -2965,46 +2976,58 @@ export default function App() {
         </ResizablePanel>
       </ResizablePanelGroup>
       </div>
-      <RepoBrowserDialog
-        repoId={selectedRepo}
-        open={browserRevision !== null}
-        revision={browserRevision}
-        requestedTab={browserTabRequest}
-        refs={refs}
-        onRevisionChange={setBrowserRevision}
-        onClose={() => setBrowserRevision(null)}
-        onOpenFile={handleOpenFileFromBrowser}
-        onOpenHistory={(filePath) => {
-          setBrowserRevision(null);
-          submitFileHistoryPath(filePath);
-        }}
-        onShowAuthorCommits={showAuthorCommitsOnPath}
-      />
-      <ReleasesDialog
-        repoId={selectedRepo}
-        open={releasesOpen && Boolean(selectedRepo)}
-        refs={refs}
-        initialRef={selectedRef && !selectedRef.startsWith("refs/tags/") ? selectedRef : "HEAD"}
-        onClose={() => setReleasesOpen(false)}
-        onReview={openReleaseReview}
-        onBrowse={(commitHash, label) => {
-          setReleasesOpen(false);
-          openBrowser("files", { commit: commitHash, label });
-        }}
-        onShowRef={(refName) => {
-          setReleasesOpen(false);
-          setSelectedRef(refName);
-          setSelected("");
-          setActiveLens("live");
-        }}
-      />
-      <FileViewerDialog
-        repoId={selectedRepo}
-        target={fileViewerTarget}
-        onClose={() => setFileViewerTarget(null)}
-        onOpenHistory={submitFileHistoryPath}
-        onSelectCommit={handleSelectCommit}
-      />
+      {repoBrowserMounted && (
+        <Suspense fallback={null}>
+          <RepoBrowserDialog
+            repoId={selectedRepo}
+            open={browserRevision !== null}
+            revision={browserRevision}
+            requestedTab={browserTabRequest}
+            refs={refs}
+            onRevisionChange={setBrowserRevision}
+            onClose={() => setBrowserRevision(null)}
+            onOpenFile={handleOpenFileFromBrowser}
+            onOpenHistory={(filePath) => {
+              setBrowserRevision(null);
+              submitFileHistoryPath(filePath);
+            }}
+            onShowAuthorCommits={showAuthorCommitsOnPath}
+          />
+        </Suspense>
+      )}
+      {releasesDialogMounted && (
+        <Suspense fallback={null}>
+          <ReleasesDialog
+            repoId={selectedRepo}
+            open={releasesDialogOpen}
+            refs={refs}
+            initialRef={selectedRef && !selectedRef.startsWith("refs/tags/") ? selectedRef : "HEAD"}
+            onClose={() => setReleasesOpen(false)}
+            onReview={openReleaseReview}
+            onBrowse={(commitHash, label) => {
+              setReleasesOpen(false);
+              openBrowser("files", { commit: commitHash, label });
+            }}
+            onShowRef={(refName) => {
+              setReleasesOpen(false);
+              setSelectedRef(refName);
+              setSelected("");
+              setActiveLens("live");
+            }}
+          />
+        </Suspense>
+      )}
+      {fileViewerMounted && (
+        <Suspense fallback={null}>
+          <FileViewerDialog
+            repoId={selectedRepo}
+            target={fileViewerTarget}
+            onClose={() => setFileViewerTarget(null)}
+            onOpenHistory={submitFileHistoryPath}
+            onSelectCommit={handleSelectCommit}
+          />
+        </Suspense>
+      )}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

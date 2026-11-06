@@ -40,6 +40,20 @@ export function lazyWithPreload<P extends object>(
   return LazyWithPreload;
 }
 
+/**
+ * `true` from the first render where `active` is true, and on every render
+ * after it. Mounts an on-demand view (a dialog) the first time it is opened
+ * and keeps it mounted afterwards, so its state and close animation behave
+ * as if it had been mounted from the start.
+ */
+export function useLatch(active: boolean): boolean {
+  const [latched, setLatched] = useState(active);
+  // Setting state during render is React's sanctioned way to derive it from
+  // props; it re-renders this component before the children see it.
+  if (active && !latched) setLatched(true);
+  return latched || active;
+}
+
 /** Run `task` once the browser is idle (or soon, where idle callbacks are missing). */
 export function whenIdle(task: () => void): () => void {
   if (typeof window.requestIdleCallback === "function") {
