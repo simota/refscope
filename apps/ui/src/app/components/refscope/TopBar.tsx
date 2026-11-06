@@ -11,6 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Eye,
+  EyeOff,
   RefreshCw,
   FolderPlus,
   SlidersHorizontal,
@@ -50,6 +51,8 @@ export function TopBar({
   quietMode,
   prefersReducedMotion,
   onToggleQuietMode,
+  redacted,
+  onToggleRedact,
   isCvdSafe,
   onToggleColorVision,
   pendingUpdates,
@@ -94,6 +97,9 @@ export function TopBar({
   quietMode: boolean;
   prefersReducedMotion: boolean;
   onToggleQuietMode: () => void;
+  /** Redact mode: identities and trailers are masked at the API boundary. */
+  redacted: boolean;
+  onToggleRedact: () => void;
   isCvdSafe: boolean;
   onToggleColorVision: () => void;
   pendingUpdates: number;
@@ -442,6 +448,7 @@ export function TopBar({
             <Separator />
           </>
         )}
+        <RedactToggle redacted={redacted} onToggle={onToggleRedact} />
         <ViewOptionsMenu
           mode={mode}
           sidebarCollapsed={sidebarCollapsed}
@@ -853,6 +860,46 @@ function FiltersMenu({
 function Separator() {
   return (
     <div style={{ width: 1, height: 20, background: "var(--rs-border)" }} aria-hidden />
+  );
+}
+
+/**
+ * Redact mode toggle. Off: a quiet compact button. On: a loud, always-visible
+ * "REDACTED" badge — the failure the feature exists to prevent is believing
+ * names are hidden when they are not, so the state must be unmistakable.
+ */
+function RedactToggle({ redacted, onToggle }: { redacted: boolean; onToggle: () => void }) {
+  const description = redacted
+    ? "Redact mode is ON: author / committer names are pseudonyms, e-mails and Signed-off-by / Reviewed-by trailers are masked in every view, copy and export. Hashes, paths, file contents and diffs are not masked. Click to show real identities (Shift+R)."
+    : "Redact mode: mask author names, e-mails and attribution trailers before screen sharing (Shift+R). Display only — the repository is never changed.";
+  return (
+    <button
+      type="button"
+      className="rs-compact-button"
+      aria-pressed={redacted}
+      aria-label={redacted ? "Redact mode on — show real identities" : "Turn on redact mode"}
+      title={description}
+      onClick={onToggle}
+      data-redact-badge={redacted ? "on" : undefined}
+      style={
+        redacted
+          ? {
+              color: "var(--rs-bg-canvas)",
+              background: "var(--rs-warning)",
+              borderColor: "var(--rs-warning)",
+              fontWeight: 700,
+              letterSpacing: "0.6px",
+            }
+          : undefined
+      }
+    >
+      {redacted ? (
+        <EyeOff size={11} aria-hidden style={{ marginRight: 4 }} />
+      ) : (
+        <Eye size={11} aria-hidden style={{ marginRight: 4 }} />
+      )}
+      {redacted ? "REDACTED" : "Redact"}
+    </button>
   );
 }
 

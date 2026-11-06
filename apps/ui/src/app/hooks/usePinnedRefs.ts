@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+const EMPTY_PINS: string[] = [];
 
 // User-curated favourites for the BRANCHES / TAGS / REMOTES sections. Fully
 // client-side: stored in localStorage and scoped per-repo so pins from one
@@ -7,6 +9,9 @@ import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "refscope.pinnedRefs.v1";
 const SCHEMA_VERSION = 1;
+// Same-tab broadcast: `storage` only fires in *other* tabs, but the sidebar
+// and App (watch list / since-last-visit) each hold an instance of this hook.
+const CHANGE_EVENT = "refscope:pinned-refs-changed";
 
 type PersistedShape = {
   v: typeof SCHEMA_VERSION;
@@ -42,6 +47,7 @@ function writePersisted(value: Record<string, string[]>): void {
   try {
     const payload: PersistedShape = { v: SCHEMA_VERSION, pinned: value };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    window.dispatchEvent(new Event(CHANGE_EVENT));
   } catch {
     // Storage may be disabled (private mode / quota); pinning still works in
     // memory for the current session, just doesn't persist.
@@ -68,27 +74,33 @@ export function usePinnedRefs(repoId: string) {
       if (event.key !== STORAGE_KEY) return;
       setAllPins(readPersisted());
     };
+    const onLocalChange = () => setAllPins(readPersisted());
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener(CHANGE_EVENT, onLocalChange);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(CHANGE_EVENT, onLocalChange);
+    };
   }, []);
 
-  const repoPins = allPins[repoId] ?? [];
-  const pinnedSet = new Set(repoPins);
+  const repoPins = allPins[repoId] ?? EMPTY_PINS;
+  const pinnedSet = useMemo(() => new Set(repoPins), [repoPins]);
 
   const toggle = useCallback(
     (refName: string) => {
       if (!repoId || !refName) return;
-      setAllPins((current) => {
-        const existing = current[repoId] ?? [];
-        const next = existing.includes(refName)
-          ? existing.filter((entry) => entry !== refName)
-          : [...existing, refName];
-        const merged = { ...current, [repoId]: next };
-        writePersisted(merged);
-        return merged;
-      });
+      // Computed outside a state updater: writePersisted broadcasts to the
+      // other hook instances, which must not be updated mid-render.
+      const current = allPins;
+      const existing = current[repoId] ?? [];
+      const next = existing.includes(refName)
+        ? existing.filter((entry) => entry !== refName)
+        : [...existing, refName];
+      const merged = { ...current, [repoId]: next };
+      writePersisted(merged);
+      setAllPins(merged);
     },
-    [repoId],
+    [repoId, allPins],
   );
 
   const isPinned = useCallback(
