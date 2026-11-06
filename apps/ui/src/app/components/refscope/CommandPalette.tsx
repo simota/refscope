@@ -22,11 +22,26 @@ import {
   RefreshCw,
   Search,
   Tag,
+  Bookmark,
+  Download,
+  GitMerge,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { SearchMode } from "../../api";
 import type { Commit, GitRef } from "./data";
 import type { LastOpenedEntry } from "../../hooks/useLastOpenedRepos";
+
+/**
+ * Timeline-view commands built by App (saved views, history shape, export).
+ * `kind` picks the icon; a command that reports a status keeps the palette
+ * open briefly so the feedback is visible.
+ */
+export type TimelineViewCommand = {
+  kind: "view" | "history" | "export";
+  label: string;
+  hint: string;
+  run: () => void | string | Promise<string | void>;
+};
 
 type PaletteCommand = {
   icon: LucideIcon;
@@ -83,6 +98,7 @@ export function CommandPalette({
   repos,
   onSetSelectedRepo,
   lastOpenedRepos,
+  timelineViewCommands = [],
 }: {
   open: boolean;
   onClose: () => void;
@@ -148,6 +164,8 @@ export function CommandPalette({
   onSetSelectedRepo: (id: string) => void;
   /** Last opened entries (newest first) — used to sort jump commands. */
   lastOpenedRepos: LastOpenedEntry[];
+  /** Saved views, history shape and timeline export (see TimelineViewCommand). */
+  timelineViewCommands?: TimelineViewCommand[];
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -499,8 +517,32 @@ export function CommandPalette({
         : []),
     ];
 
+    const viewIcons = { view: Bookmark, history: GitMerge, export: Download } as const;
+    const viewCommands: PaletteCommand[] = timelineViewCommands.map((command) => ({
+      icon: viewIcons[command.kind],
+      label: command.label,
+      hint: command.hint,
+      run: async () => {
+        const message = await command.run();
+        if (!message) {
+          onClose();
+          return;
+        }
+        setStatus(message);
+        if (closeTimerRef.current !== null) {
+          window.clearTimeout(closeTimerRef.current);
+        }
+        closeTimerRef.current = window.setTimeout(() => {
+          closeTimerRef.current = null;
+          setStatus("");
+          onClose();
+        }, 900);
+      },
+    }));
+
     return [
       ...refCommands,
+      ...viewCommands,
       ...repoJumpCommands,
       ...modeCommands,
       sidebarCommand,
@@ -519,6 +561,7 @@ export function CommandPalette({
       ...filterCommands,
     ];
   }, [
+    timelineViewCommands,
     author,
     diffAvailable,
     diffFullscreen,

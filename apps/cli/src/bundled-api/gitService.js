@@ -4,6 +4,8 @@ import path from "node:path";
 import { GitCommandError, MAX_GIT_OUTPUT_BYTES, runGit } from "./gitRunner.js";
 import { addRepository as configAddRepository, removeRepository as configRemoveRepository } from "./config.js";
 import { classifyFileDiff } from "./structuralDiff.js";
+import { createExplorerMethods } from "./explorerService.js";
+import { createInsightMethods } from "./insightsService.js";
 import {
   isPublicFullRefName,
   isValidGitRef,
@@ -14,6 +16,7 @@ import {
   parseDateQuery,
   parseFuncNameQuery,
   parseGroupByQuery,
+  parseHistoryShapeQuery,
   parseLimitQuery,
   parseLineNumberQuery,
   parseNearIdenticalThresholdQuery,
@@ -900,6 +903,10 @@ export function createGitService(config) {
       if (!until.ok) {
         return { status: 400, body: { error: until.error } };
       }
+      const history = parseHistoryShapeQuery(queryValues.value.history);
+      if (!history.ok) {
+        return { status: 400, body: { error: history.error } };
+      }
 
       // `search` is the legacy subject-search parameter. Combining it with a
       // non-subject mode is ambiguous — reject early to surface the conflict.
@@ -924,6 +931,7 @@ export function createGitService(config) {
             skip: skip.value,
             since: since.value,
             until: until.value,
+            history: history.value,
           }),
           // See listCommitRange: --numstat output grows with commit size.
           { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
@@ -1104,11 +1112,16 @@ export function createGitService(config) {
       if (!path.value) {
         return { status: 400, body: { error: "Missing path parameter" } };
       }
+      // Both reads are independent; run them together but report in the
+      // original order, so a failed type check still decides the response
+      // (and any failure of the second read is then ignored, as before).
+      const resolving = resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      resolving.catch(() => {});
       const commitObject = await validateCommitObject(repo, values.commit, config.gitTimeoutMs);
       if (!commitObject.ok) {
         return commitObject.result;
       }
-      const resolved = await resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      const resolved = await resolving;
       if (!resolved.ok) {
         return resolved.result;
       }
@@ -1213,11 +1226,16 @@ export function createGitService(config) {
       if (!path.value) {
         return { status: 400, body: { error: "Missing path parameter" } };
       }
+      // Both reads are independent; run them together but report in the
+      // original order, so a failed type check still decides the response
+      // (and any failure of the second read is then ignored, as before).
+      const resolving = resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      resolving.catch(() => {});
       const commitObject = await validateCommitObject(repo, values.commit, config.gitTimeoutMs);
       if (!commitObject.ok) {
         return commitObject.result;
       }
-      const resolved = await resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      const resolved = await resolving;
       if (!resolved.ok) {
         return resolved.result;
       }
@@ -1349,11 +1367,11 @@ export function createGitService(config) {
 
       // Sorted here rather than with --sort=-committerdate: annotated tags
       // have no committer date of their own and would all sink to the end.
-      const refs = (
-        await peelNestedTags(repo, parsePublicRefLines(stdout), config.gitTimeoutMs)
-      ).sort(
-        (a, b) => refDateMs(b.updatedAt) - refDateMs(a.updatedAt),
-      );
+      // Each date is parsed once, not on every comparison; the stable sort
+      // over the same keys yields the same order.
+      const peeled = await peelNestedTags(repo, parsePublicRefLines(stdout), config.gitTimeoutMs);
+      const dateMs = new Map(peeled.map((ref) => [ref, refDateMs(ref.updatedAt)]));
+      const refs = peeled.sort((a, b) => dateMs.get(b) - dateMs.get(a));
 
       return { status: 200, body: { refs } };
     },
@@ -2830,6 +2848,10 @@ export function createGitService(config) {
       };
     },
 
+    // Tree browser, code search, and reflog explorer (explorerService.js).
+    ...createExplorerMethods(config),
+    ...createInsightMethods(config, { resolveCommitishRevision }),
+
     // Fleet probes. fleetService receives this object (server.js), so the
     // probes must be reachable through it, not only as module exports.
     getHeadShortSha,
@@ -2985,7 +3007,7 @@ async function readMergeBase(repo, base, target, timeoutMs) {
 
 function readCommitListQuery(query) {
   const values = {};
-  for (const name of ["limit", "ref", "search", "author", "path", "mode", "pattern", "skip", "since", "until"]) {
+  for (const name of ["limit", "ref", "search", "author", "path", "mode", "pattern", "skip", "since", "until", "history"]) {
     const allValues = query.getAll(name);
     if (allValues.length > 1) {
       return { ok: false, error: `Duplicate ${name} parameter` };
@@ -3073,10 +3095,11 @@ export function commitRangeLogArgs(fromRevision, toRevision) {
  *   parseDateQuery). Omitted values add no arguments.
  */
 export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathArgs, window = {}) {
-  const { skip = 0, since = null, until = null } = window;
+  const { skip = 0, since = null, until = null, history = "all" } = window;
   return [
     "log",
     `--max-count=${limit}`,
+    ...historyShapeArgs(history),
     ...(skip > 0 ? [`--skip=${skip}`] : []),
     ...(since ? [`--since=${since}`] : []),
     ...(until ? [`--until=${until}`] : []),
@@ -3099,6 +3122,26 @@ export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathA
     "--",
     ...pathArgs,
   ];
+}
+
+/**
+ * `git log` options for a `/commits` history shape (see
+ * `parseHistoryShapeQuery`). Unknown shapes list the full walk.
+ *
+ * @param {string} history
+ * @returns {string[]}
+ */
+export function historyShapeArgs(history) {
+  switch (history) {
+    case "first-parent":
+      return ["--first-parent"];
+    case "merges":
+      return ["--first-parent", "--merges"];
+    case "no-merges":
+      return ["--no-merges"];
+    default:
+      return [];
+  }
 }
 
 export function symbolicFullNameArgs(revision) {

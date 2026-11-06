@@ -19,6 +19,7 @@ export type RedactCarryOver = {
   searchPattern: string;
   sinceDate: string;
   untilDate: string;
+  historyShape?: string;
   activeLens: string;
 };
 

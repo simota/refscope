@@ -16,6 +16,7 @@ import {
   parseDateQuery,
   parseFuncNameQuery,
   parseGroupByQuery,
+  parseHistoryShapeQuery,
   parseLimitQuery,
   parseLineNumberQuery,
   parseNearIdenticalThresholdQuery,
@@ -902,6 +903,10 @@ export function createGitService(config) {
       if (!until.ok) {
         return { status: 400, body: { error: until.error } };
       }
+      const history = parseHistoryShapeQuery(queryValues.value.history);
+      if (!history.ok) {
+        return { status: 400, body: { error: history.error } };
+      }
 
       // `search` is the legacy subject-search parameter. Combining it with a
       // non-subject mode is ambiguous — reject early to surface the conflict.
@@ -926,6 +931,7 @@ export function createGitService(config) {
             skip: skip.value,
             since: since.value,
             until: until.value,
+            history: history.value,
           }),
           // See listCommitRange: --numstat output grows with commit size.
           { timeoutMs: config.gitTimeoutMs, maxBytes: MAX_GIT_OUTPUT_BYTES },
@@ -3001,7 +3007,7 @@ async function readMergeBase(repo, base, target, timeoutMs) {
 
 function readCommitListQuery(query) {
   const values = {};
-  for (const name of ["limit", "ref", "search", "author", "path", "mode", "pattern", "skip", "since", "until"]) {
+  for (const name of ["limit", "ref", "search", "author", "path", "mode", "pattern", "skip", "since", "until", "history"]) {
     const allValues = query.getAll(name);
     if (allValues.length > 1) {
       return { ok: false, error: `Duplicate ${name} parameter` };
@@ -3089,10 +3095,11 @@ export function commitRangeLogArgs(fromRevision, toRevision) {
  *   parseDateQuery). Omitted values add no arguments.
  */
 export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathArgs, window = {}) {
-  const { skip = 0, since = null, until = null } = window;
+  const { skip = 0, since = null, until = null, history = "all" } = window;
   return [
     "log",
     `--max-count=${limit}`,
+    ...historyShapeArgs(history),
     ...(skip > 0 ? [`--skip=${skip}`] : []),
     ...(since ? [`--since=${since}`] : []),
     ...(until ? [`--until=${until}`] : []),
@@ -3115,6 +3122,26 @@ export function commitListLogArgs(limit, searchArgs, authorArgs, revision, pathA
     "--",
     ...pathArgs,
   ];
+}
+
+/**
+ * `git log` options for a `/commits` history shape (see
+ * `parseHistoryShapeQuery`). Unknown shapes list the full walk.
+ *
+ * @param {string} history
+ * @returns {string[]}
+ */
+export function historyShapeArgs(history) {
+  switch (history) {
+    case "first-parent":
+      return ["--first-parent"];
+    case "merges":
+      return ["--first-parent", "--merges"];
+    case "no-merges":
+      return ["--no-merges"];
+    default:
+      return [];
+  }
 }
 
 export function symbolicFullNameArgs(revision) {
