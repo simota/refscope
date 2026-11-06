@@ -1105,11 +1105,16 @@ export function createGitService(config) {
       if (!path.value) {
         return { status: 400, body: { error: "Missing path parameter" } };
       }
+      // Both reads are independent; run them together but report in the
+      // original order, so a failed type check still decides the response
+      // (and any failure of the second read is then ignored, as before).
+      const resolving = resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      resolving.catch(() => {});
       const commitObject = await validateCommitObject(repo, values.commit, config.gitTimeoutMs);
       if (!commitObject.ok) {
         return commitObject.result;
       }
-      const resolved = await resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      const resolved = await resolving;
       if (!resolved.ok) {
         return resolved.result;
       }
@@ -1214,11 +1219,16 @@ export function createGitService(config) {
       if (!path.value) {
         return { status: 400, body: { error: "Missing path parameter" } };
       }
+      // Both reads are independent; run them together but report in the
+      // original order, so a failed type check still decides the response
+      // (and any failure of the second read is then ignored, as before).
+      const resolving = resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      resolving.catch(() => {});
       const commitObject = await validateCommitObject(repo, values.commit, config.gitTimeoutMs);
       if (!commitObject.ok) {
         return commitObject.result;
       }
-      const resolved = await resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      const resolved = await resolving;
       if (!resolved.ok) {
         return resolved.result;
       }
@@ -1350,11 +1360,11 @@ export function createGitService(config) {
 
       // Sorted here rather than with --sort=-committerdate: annotated tags
       // have no committer date of their own and would all sink to the end.
-      const refs = (
-        await peelNestedTags(repo, parsePublicRefLines(stdout), config.gitTimeoutMs)
-      ).sort(
-        (a, b) => refDateMs(b.updatedAt) - refDateMs(a.updatedAt),
-      );
+      // Each date is parsed once, not on every comparison; the stable sort
+      // over the same keys yields the same order.
+      const peeled = await peelNestedTags(repo, parsePublicRefLines(stdout), config.gitTimeoutMs);
+      const dateMs = new Map(peeled.map((ref) => [ref, refDateMs(ref.updatedAt)]));
+      const refs = peeled.sort((a, b) => dateMs.get(b) - dateMs.get(a));
 
       return { status: 200, body: { refs } };
     },
