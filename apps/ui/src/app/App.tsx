@@ -27,6 +27,11 @@ import {
   ResizablePanelGroup,
 } from "./components/ui/resizable";
 import { useQuietMode } from "./hooks/useQuietMode";
+import { takeRedactCarryOver, useRedactMode } from "./hooks/useRedactMode";
+import { usePinnedRefs } from "./hooks/usePinnedRefs";
+import { useRefBriefing } from "./hooks/useRefBriefing";
+import { useWatchNotifications } from "./hooks/useWatchNotifications";
+import { SinceLastVisitBanner } from "./components/refscope/SinceLastVisitBanner";
 import { lazyWithPreload, whenIdle } from "./lib/lazyWithPreload";
 import { useLayoutPrefs } from "./hooks/useLayoutPrefs";
 import { useTimelinePrefs } from "./hooks/useTimelinePrefs";
@@ -87,6 +92,7 @@ import {
   type WorkTreeResponse,
   type WorktreeEntry,
   type CompareMode,
+  redactPayload,
 } from "./api";
 import type { RefDriftSummary } from "./components/refscope/BranchSidebar";
 import {
@@ -278,6 +284,9 @@ const STREAM_RETRY_MIN_MS = 2_000;
 const STREAM_RETRY_MAX_MS = 30_000;
 
 export default function App() {
+  // View state handed over by the previous instance when Redact mode was
+  // toggled (it remounts <App>); null on a normal page load.
+  const [redactCarry] = useState(takeRedactCarryOver);
   // `?repo=&ref=&commit=&path=` captured once at startup; later URL writes
   // (replaceState below) must not feed back into selection.
   const initialDeepLink = useMemo(
@@ -468,7 +477,9 @@ export default function App() {
   }, [setMode, recordLastOpened, switchRepo]);
 
   // Lens switcher state — 'live' is the default; other lenses are placeholders.
-  const [activeLens, setActiveLens] = useState<LensId>('live');
+  const [activeLens, setActiveLens] = useState<LensId>(
+    () => (redactCarry?.activeLens as LensId | undefined) ?? 'live',
+  );
   useEffect(
     () =>
       whenIdle(() => {
@@ -554,8 +565,8 @@ export default function App() {
   const [summaryViewOpen, setSummaryViewOpen] = useState(false);
   const [diffFullscreen, setDiffFullscreen] = useState(false);
   const [diffViewMode, setDiffViewMode] = useState<"all" | "single">("all");
-  const [search, setSearch] = useState("");
-  const [author, setAuthor] = useState("");
+  const [search, setSearch] = useState(() => redactCarry?.search ?? "");
+  const [author, setAuthor] = useState(() => redactCarry?.author ?? "");
   const [path, setPath] = useState(() => initialDeepLink.path);
   // Commit kind filter (D-2): client-side filter applied to coarseKind from API.
   // 'all' = show all, 'refactor' = likely_refactor + empty, 'logic' = likely_logic.
@@ -566,13 +577,15 @@ export default function App() {
   // State A: subject-mode value lives in `search`; pickaxe/regex/message values live in `searchPattern`.
   // Keeping them separate prevents mode-switch cross-contamination and maps 1-to-1 onto the API contract
   // (`search` param vs `mode`+`pattern` params).
-  const [searchMode, setSearchMode] = useState<SearchMode>("subject");
-  const [searchPattern, setSearchPattern] = useState("");
+  const [searchMode, setSearchMode] = useState<SearchMode>(
+    () => (redactCarry?.searchMode as SearchMode | undefined) ?? "subject",
+  );
+  const [searchPattern, setSearchPattern] = useState(() => redactCarry?.searchPattern ?? "");
   // Server-side commit date window (`YYYY-MM-DD` local days from the Filters
   // popover). Unlike `dateRangeFilter` (a client-side narrowing of the rows
   // already loaded), this re-queries the whole history.
-  const [sinceDate, setSinceDate] = useState("");
-  const [untilDate, setUntilDate] = useState("");
+  const [sinceDate, setSinceDate] = useState(() => redactCarry?.sinceDate ?? "");
+  const [untilDate, setUntilDate] = useState(() => redactCarry?.untilDate ?? "");
   const commitWindow = useMemo<CommitListWindow>(
     () => ({
       since: localDateToIsoBound(sinceDate, "start") || undefined,
@@ -722,6 +735,22 @@ export default function App() {
   const pendingRealtimeEventsRef = useRef<Array<() => void>>([]);
   const realtimeNewCommitHashesRef = useRef<Set<string>>(new Set());
   const { quietMode, prefersReducedMotion, isQuiet, toggleQuietMode } = useQuietMode();
+  const { redacted, setRedacted } = useRedactMode();
+  // Read through a ref so the shortcut / palette callbacks stay stable.
+  const redactCarryStateRef = useRef({ search, author, searchMode, searchPattern, sinceDate, untilDate, activeLens });
+  redactCarryStateRef.current = { search, author, searchMode, searchPattern, sinceDate, untilDate, activeLens };
+  const toggleRedact = useCallback(() => {
+    setRedacted(!redacted, redactCarryStateRef.current);
+  }, [redacted, setRedacted]);
+  // Pinned refs double as the watch list: they sort first in the
+  // since-last-visit briefing and can raise desktop notifications.
+  const { pinnedSet: watchedRefs } = usePinnedRefs(selectedRepo);
+  const { briefing: refBriefing, dismiss: dismissRefBriefing } = useRefBriefing(selectedRepo, refs, watchedRefs);
+  const watchNotifications = useWatchNotifications(
+    watchedRefs,
+    repositories.find((repo) => repo.id === selectedRepo)?.name ?? selectedRepo,
+  );
+  const notifyWatchedRef = watchNotifications.notify;
   const { colorVisionTheme, isCvdSafe, toggleTheme: toggleColorVisionTheme } = useColorVisionTheme();
   const {
     sidebarCollapsed,
@@ -1258,6 +1287,7 @@ export default function App() {
     });
     source.addEventListener("commit_added", (event) => {
       const data = parseEvent(event);
+      notifyWatchedRef(data);
       const notice = `New commit on ${eventRefName(data)}`;
       handleRealtimeEvent(notice, () => {
         setEventNotice(notice);
@@ -1272,6 +1302,7 @@ export default function App() {
     });
     source.addEventListener("history_rewritten", (event) => {
       const data = parseEvent(event);
+      notifyWatchedRef(data);
       const notice = `History rewritten on ${eventRefName(data)}`;
       // Capture the pre-rewrite snapshot immediately (outside the pause guard)
       // so we never miss it even when live updates are paused. Persistence to
@@ -1314,7 +1345,12 @@ export default function App() {
       setFlightRefreshKey((value) => value + 1);
     });
     for (const type of ["ref_created", "ref_updated", "ref_deleted"] as const) {
-      source.addEventListener(type, () => {
+      source.addEventListener(type, (event) => {
+        try {
+          notifyWatchedRef(parseEvent(event));
+        } catch {
+          // A malformed payload only skips the notification.
+        }
         const notice = "Refs changed";
         handleRealtimeEvent(notice, () => setEventNotice(notice));
         // Any ref topology change can shift drift on every other ref (e.g.
@@ -1937,6 +1973,12 @@ export default function App() {
         category: "View",
         run: toggleLiveUpdates,
       },
+      {
+        combo: "Shift+R",
+        description: "Toggle redact mode (mask names & e-mails)",
+        category: "View",
+        run: toggleRedact,
+      },
     ];
     // Commit navigation is suppressed while the diff overlay owns the keyboard;
     // otherwise the same ArrowUp/Down used to move between files would also
@@ -1991,6 +2033,7 @@ export default function App() {
     toggleSidebar,
     toggleSummaryView,
     toggleLiveUpdates,
+    toggleRedact,
     goToAdjacentCommit,
     diffFullscreenAvailable,
     diffFullscreen,
@@ -2015,6 +2058,7 @@ export default function App() {
     <div
       className="size-full flex flex-col"
       data-quiet={isQuiet ? "true" : undefined}
+      data-redacted={redacted ? "true" : undefined}
       data-color-vision={colorVisionTheme}
       style={{
         background: "var(--rs-bg-canvas)",
@@ -2052,6 +2096,8 @@ export default function App() {
         quietMode={quietMode}
         prefersReducedMotion={prefersReducedMotion}
         onToggleQuietMode={toggleQuietMode}
+        redacted={redacted}
+        onToggleRedact={toggleRedact}
         isCvdSafe={isCvdSafe}
         onToggleColorVision={toggleColorVisionTheme}
         pendingUpdates={pendingUpdates}
@@ -2108,6 +2154,28 @@ export default function App() {
         hidden={mode === "fleet"}
         availableLenses={availableLenses}
       />
+      {refBriefing && mode === "detail" && (
+        <SinceLastVisitBanner
+          briefing={refBriefing}
+          onDismiss={dismissRefBriefing}
+          onReview={(base, target) => {
+            setCompareBase(base);
+            setCompareTarget(target);
+            setActiveLens('live');
+          }}
+          onShowRef={(refName) => {
+            setSelectedRef(refName);
+            setActiveLens('live');
+          }}
+          watchNotifications={{
+            enabled: watchNotifications.enabled,
+            permission: watchNotifications.permission,
+            onToggle: () => {
+              void watchNotifications.toggle();
+            },
+          }}
+        />
+      )}
       {dateRangeFilter && mode !== "fleet" && (
         <DateRangeFilterBanner
           from={dateRangeFilter.from}
@@ -2644,6 +2712,12 @@ export default function App() {
         summaryViewOpen={summaryViewOpen}
         onToggleSummaryView={toggleSummaryView}
         onToggleQuietMode={toggleQuietMode}
+        redacted={redacted}
+        onToggleRedact={toggleRedact}
+        watchNotifyEnabled={watchNotifications.enabled}
+        onToggleWatchNotify={() => {
+          void watchNotifications.toggle();
+        }}
         onToggleLiveUpdates={toggleLiveUpdates}
         diffAvailable={diffFullscreenAvailable}
         diffFullscreen={diffFullscreen}
@@ -2879,7 +2953,7 @@ function displayRefName(selectedRef: string, refs: GitRef[]) {
 }
 
 function parseEvent(event: Event) {
-  return JSON.parse((event as MessageEvent<string>).data) as ViewerEvent;
+  return redactPayload(JSON.parse((event as MessageEvent<string>).data) as ViewerEvent);
 }
 
 function parseStreamErrorEvent(event: Event) {

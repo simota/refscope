@@ -1,4 +1,5 @@
 import type { ReflogAction } from "./lib/repoExplorer";
+import { createRedactor, type Redactor } from "./lib/redaction";
 import type {
   Commit,
   CommitDetail,
@@ -10,6 +11,33 @@ import type {
 
 export const API_BASE_URL = import.meta.env.VITE_RTGV_API_BASE_URL ?? "http://127.0.0.1:4175";
 const API_RECOVERY_COMMAND = "make dev-self";
+
+// ---------------------------------------------------------------------------
+// Redact mode — every JSON response passes through `getJson`, so masking here
+// covers every lens, dialog and export. One redactor lives for the page so
+// pseudonyms (and the in-memory pseudonym → name map) stay stable.
+// ---------------------------------------------------------------------------
+
+const redactor: Redactor = createRedactor();
+let redactionEnabled = false;
+
+export function setRedactionEnabled(enabled: boolean) {
+  redactionEnabled = enabled;
+}
+
+export function isRedactionEnabled() {
+  return redactionEnabled;
+}
+
+/** Apply Redact mode to a payload that did not come through `getJson` (SSE). */
+export function redactPayload<T>(value: T): T {
+  return redactionEnabled ? redactor.redact(value) : value;
+}
+
+/** A masked author typed or clicked as a filter is sent to the API as the real name. */
+export function resolveAuthorFilter(value: string): string {
+  return redactionEnabled ? redactor.resolveName(value) : value;
+}
 
 // ---------------------------------------------------------------------------
 // Repo management — POST /api/repos + DELETE /api/repos/:id
@@ -290,7 +318,7 @@ export async function listCommits(
       params.set("pattern", normalizedPattern);
     }
   }
-  const normalizedAuthor = author.trim();
+  const normalizedAuthor = resolveAuthorFilter(author.trim());
   if (normalizedAuthor) {
     params.set("author", normalizedAuthor);
   }
@@ -1220,7 +1248,8 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
     const message = await readError(response);
     throw new Error(message);
   }
-  return response.json() as Promise<T>;
+  const body = (await response.json()) as T;
+  return redactPayload(body);
 }
 
 async function readError(response: Response) {

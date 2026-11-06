@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarRange,
+  Bell,
   Eye,
+  EyeOff,
   FileSearch,
   FolderOpen,
   FolderTree,
@@ -50,6 +52,10 @@ export function CommandPalette({
   summaryViewOpen,
   onToggleSummaryView,
   onToggleQuietMode,
+  redacted,
+  onToggleRedact,
+  watchNotifyEnabled = false,
+  onToggleWatchNotify,
   onToggleLiveUpdates,
   onSearchChange,
   onAuthorChange,
@@ -92,6 +98,11 @@ export function CommandPalette({
   summaryViewOpen: boolean;
   onToggleSummaryView: () => void;
   onToggleQuietMode: () => void;
+  redacted: boolean;
+  onToggleRedact: () => void;
+  /** Desktop notifications for pinned refs while the tab is hidden. */
+  watchNotifyEnabled?: boolean;
+  onToggleWatchNotify?: () => void;
   onToggleLiveUpdates: () => void;
   onSearchChange: (value: string) => void;
   onAuthorChange: (value: string) => void;
@@ -246,6 +257,31 @@ export function CommandPalette({
         onClose();
       },
     };
+
+    const redactCommand: PaletteCommand = {
+      icon: EyeOff,
+      // "privacy" / "hide" / "screen share" are the natural search terms.
+      label: "Toggle redact mode (hide names & e-mails for screen share)",
+      hint: redacted ? "on" : "off",
+      run: () => {
+        onClose();
+        onToggleRedact();
+      },
+    };
+
+    const watchNotifyCommands: PaletteCommand[] = onToggleWatchNotify
+      ? [
+          {
+            icon: Bell,
+            label: "Toggle desktop notifications for pinned refs",
+            hint: watchNotifyEnabled ? "on" : "off",
+            run: () => {
+              onToggleWatchNotify();
+              onClose();
+            },
+          },
+        ]
+      : [];
 
     const cvdCommand: PaletteCommand = {
       icon: Eye,
@@ -437,6 +473,8 @@ export function CommandPalette({
       summaryCommand,
       quietCommand,
       cvdCommand,
+      redactCommand,
+      ...watchNotifyCommands,
       liveCommand,
       fileHistoryCommand,
       ...browserCommands,
@@ -473,6 +511,10 @@ export function CommandPalette({
     onShowShortcuts,
     onShowWorkTree,
     onToggleQuietMode,
+    onToggleRedact,
+    redacted,
+    onToggleWatchNotify,
+    watchNotifyEnabled,
     onToggleSidebar,
     onToggleSummaryView,
     path,

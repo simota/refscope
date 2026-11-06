@@ -13,6 +13,24 @@ import type { Commit, CompareResult } from "./data";
 import { DiffViewer } from "./DiffViewer";
 import { buildCompareReport, fileStatusLabel, shortRev } from "../../lib/compareReview";
 import { fileToDiffText, parseUnifiedDiff } from "../../lib/parseUnifiedDiff";
+import {
+  REVIEW_GROUP_LABEL,
+  buildReviewPlan,
+  formatReviewPlanMarkdown,
+  type ReviewGroup,
+} from "../../lib/reviewOrder";
+import type { CompareFile } from "../../api";
+
+type FileOrder = "path" | "suggested";
+const FILE_ORDER_KEY = "refscope.compareReview.fileOrder";
+
+function readFileOrder(): FileOrder {
+  try {
+    return window.localStorage.getItem(FILE_ORDER_KEY) === "suggested" ? "suggested" : "path";
+  } catch {
+    return "path";
+  }
+}
 
 type ReviewTab = "commits" | "files" | "diff";
 
@@ -55,6 +73,15 @@ export function CompareReviewPanel({
   const [diff, setDiff] = useState<LoadState<CompareDiffResult>>(IDLE);
   const [focusPath, setFocusPath] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
+  const [fileOrder, setFileOrderState] = useState<FileOrder>(readFileOrder);
+  const setFileOrder = (next: FileOrder) => {
+    setFileOrderState(next);
+    try {
+      window.localStorage.setItem(FILE_ORDER_KEY, next);
+    } catch {
+      // In-session only.
+    }
+  };
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // A different pair is a different review: drop the old data and file focus.
@@ -104,9 +131,11 @@ export function CompareReviewPanel({
     return file ? fileToDiffText(file) : "";
   }, [focusPath, parsedDiff]);
 
+  const reviewPlan = useMemo(() => (diff.data ? buildReviewPlan(diff.data.files) : null), [diff.data]);
+
   const report = useMemo(() => {
     if (!commits.data) return "";
-    return buildCompareReport({
+    const baseReport = buildCompareReport({
       base,
       target,
       mode: diff.data?.mode ?? mode,
@@ -120,7 +149,11 @@ export function CompareReviewPanel({
       added: diff.data?.added,
       deleted: diff.data?.deleted,
     });
-  }, [base, target, mode, commits.data, diff.data, summary.mergeBase]);
+    // The derived reading order rides along only when the reviewer chose it.
+    return fileOrder === "suggested" && reviewPlan && reviewPlan.items.length > 0
+      ? `${baseReport.trimEnd()}\n\n${formatReviewPlanMarkdown(reviewPlan)}`
+      : baseReport;
+  }, [base, target, mode, commits.data, diff.data, summary.mergeBase, fileOrder, reviewPlan]);
 
   function flash(message: string) {
     setCopyStatus(message);
@@ -158,6 +191,43 @@ export function CompareReviewPanel({
   }
 
   const fileCount = diff.data?.files.length ?? summary.files;
+
+  function renderFileRow(file: CompareFile) {
+    return (
+      <button
+        type="button"
+        className="rs-review-row"
+        onClick={() => openFile(file.path)}
+        onContextMenu={(event) => {
+          if (!onOpenFileHistory) return;
+          event.preventDefault();
+          onOpenFileHistory(file.path);
+        }}
+        title={`Show the diff for ${file.path}${onOpenFileHistory ? " (right-click: file history)" : ""}`}
+      >
+        <StatusBadge status={file.status} />
+        <FileText size={12} aria-hidden style={{ color: "var(--rs-text-muted)", flexShrink: 0 }} />
+        <span className="truncate" style={{ fontFamily: "var(--rs-mono)", flex: 1, minWidth: 0 }}>
+          {file.oldPath ? (
+            <>
+              <span style={{ color: "var(--rs-text-muted)" }}>{file.oldPath} → </span>
+              {file.path}
+            </>
+          ) : (
+            file.path
+          )}
+        </span>
+        {file.binary ? (
+          <span style={{ color: "var(--rs-text-muted)" }}>binary</span>
+        ) : (
+          <span style={{ fontFamily: "var(--rs-mono)", flexShrink: 0 }}>
+            <span style={{ color: "var(--rs-git-added)" }}>+{file.added}</span>{" "}
+            <span style={{ color: "var(--rs-git-deleted)" }}>−{file.deleted}</span>
+          </span>
+        )}
+      </button>
+    );
+  }
 
   return (
     <div className="mt-2" style={{ borderTop: "1px solid var(--rs-border)", paddingTop: 6 }}>
@@ -265,47 +335,88 @@ export function CompareReviewPanel({
                   diff.data.files.length === 0 ? (
                     <Muted>No file differences.</Muted>
                   ) : (
-                    <ul
-                      aria-label="Changed files"
-                      style={{ maxHeight: 320, overflow: "auto", margin: 0, padding: 0, listStyle: "none" }}
-                    >
-                      {diff.data.files.map((file) => (
-                        <li key={`${file.oldPath ?? ""}\0${file.path}`}>
-                          <button
-                            type="button"
-                            className="rs-review-row"
-                            onClick={() => openFile(file.path)}
-                            onContextMenu={(event) => {
-                              if (!onOpenFileHistory) return;
-                              event.preventDefault();
-                              onOpenFileHistory(file.path);
-                            }}
-                            title={`Show the diff for ${file.path}${onOpenFileHistory ? " (right-click: file history)" : ""}`}
-                          >
-                            <StatusBadge status={file.status} />
-                            <FileText size={12} aria-hidden style={{ color: "var(--rs-text-muted)", flexShrink: 0 }} />
-                            <span className="truncate" style={{ fontFamily: "var(--rs-mono)", flex: 1, minWidth: 0 }}>
-                              {file.oldPath ? (
-                                <>
-                                  <span style={{ color: "var(--rs-text-muted)" }}>{file.oldPath} → </span>
-                                  {file.path}
-                                </>
-                              ) : (
-                                file.path
-                              )}
-                            </span>
-                            {file.binary ? (
-                              <span style={{ color: "var(--rs-text-muted)" }}>binary</span>
-                            ) : (
-                              <span style={{ fontFamily: "var(--rs-mono)", flexShrink: 0 }}>
-                                <span style={{ color: "var(--rs-git-added)" }}>+{file.added}</span>{" "}
-                                <span style={{ color: "var(--rs-git-deleted)" }}>−{file.deleted}</span>
-                              </span>
-                            )}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
+                    <>
+                      <div
+                        role="group"
+                        aria-label="File order"
+                        className="flex flex-wrap items-center gap-2"
+                        style={{ fontSize: 11, margin: "4px 0 6px" }}
+                      >
+                        <ModeButton
+                          active={fileOrder === "path"}
+                          onClick={() => setFileOrder("path")}
+                          title="Files in path order, as git lists them"
+                        >
+                          Path order
+                        </ModeButton>
+                        <ModeButton
+                          active={fileOrder === "suggested"}
+                          onClick={() => setFileOrder("suggested")}
+                          title="Derived reading order: risky kinds of change first (migrations, security, contracts, config, shared modules, deletions, large diffs), docs / lockfiles / generated last"
+                        >
+                          Suggested order
+                        </ModeButton>
+                        {fileOrder === "suggested" && reviewPlan ? (
+                          <span style={{ color: "var(--rs-text-muted)" }}>
+                            Derived from path kind, diff size, deletions and test presence — a starting point, not a verdict.
+                            {reviewPlan.untestedSources > 0
+                              ? ` ${reviewPlan.untestedSources} source file${reviewPlan.untestedSources === 1 ? "" : "s"} changed without a matching test.`
+                              : ""}
+                          </span>
+                        ) : null}
+                      </div>
+                      {fileOrder === "suggested" && reviewPlan ? (
+                        <div style={{ maxHeight: 360, overflow: "auto" }}>
+                          {(["first", "next", "skim"] as ReviewGroup[]).map((group) => {
+                            const groupItems = reviewPlan.items.filter((item) => item.group === group);
+                            if (groupItems.length === 0) return null;
+                            return (
+                              <section key={group} aria-label={`${REVIEW_GROUP_LABEL[group]} (${groupItems.length})`}>
+                                <h4
+                                  style={{
+                                    margin: "6px 0 2px",
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    letterSpacing: "0.6px",
+                                    textTransform: "uppercase",
+                                    color: group === "first" ? "var(--rs-warning)" : "var(--rs-text-secondary)",
+                                  }}
+                                >
+                                  {REVIEW_GROUP_LABEL[group]} · {groupItems.length}
+                                </h4>
+                                <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+                                  {groupItems.map((item) => (
+                                    <li key={`${item.file.oldPath ?? ""}\0${item.file.path}`}>
+                                      {renderFileRow(item.file)}
+                                      {item.reasons.length > 0 ? (
+                                        <div
+                                          style={{
+                                            padding: "0 8px 4px 28px",
+                                            fontSize: 10,
+                                            color: "var(--rs-text-muted)",
+                                          }}
+                                        >
+                                          {item.reasons.join(" · ")}
+                                        </div>
+                                      ) : null}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </section>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <ul
+                          aria-label="Changed files"
+                          style={{ maxHeight: 320, overflow: "auto", margin: 0, padding: 0, listStyle: "none" }}
+                        >
+                          {diff.data.files.map((file) => (
+                            <li key={`${file.oldPath ?? ""}\0${file.path}`}>{renderFileRow(file)}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
                   )
                 ) : null}
               </LoadGate>
