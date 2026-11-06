@@ -8,11 +8,13 @@
  * (`git log -L`) for exactly those lines starting at this commit → pick a
  * commit to jump the timeline/detail to it.
  *
- * Read-only: content comes from GET /files/content (raw `cat-file`, capped
+ * "Blame" annotates every line with the commit that last changed it
+ * (GET /files/blame at the shown revision); a gutter label opens that
+ * commit. Read-only: content comes from GET /files/content (raw `cat-file`, capped
  * and binary-aware on the server). Copy / download act on what was fetched.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Copy, Download, FileCode, History, Search, WrapText } from "lucide-react";
+import { Copy, Download, FileCode, History, Search, UserRound, WrapText } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -21,12 +23,29 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import {
+  fetchFileBlame,
   fetchFileContent,
   fetchRangeHistory,
+  type BlameCommit,
+  type FileBlameResponse,
   type FileContentResponse,
   type RangeHistoryResponse,
 } from "../../api";
 import { detectLanguage, highlightLines, type HighlightedRun } from "../../lib/syntaxHighlight";
+import { BLAME_AGE_BUCKETS, blameAgeBuckets, groupBlameRuns, shortAge } from "../../lib/blame";
+
+type BlameState =
+  | { kind: "off" }
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "ready"; result: FileBlameResponse };
+
+/** Gutter view of a blame result: label at each run start, shade per line. */
+type BlameView = {
+  runStarts: Map<number, { commit: BlameCommit; lines: number }>;
+  hashByLine: Map<number, string>;
+  ages: Map<string, number>;
+};
 
 export type FileViewerTarget = {
   path: string;
@@ -76,6 +95,8 @@ export function FileViewerDialog({
     | { kind: "ready"; result: RangeHistoryResponse }
   >({ kind: "idle" });
   const traceAbortRef = useRef<AbortController | null>(null);
+  const [blameOn, setBlameOn] = useState(false);
+  const [blame, setBlame] = useState<BlameState>({ kind: "off" });
 
   // Reset per-target state whenever a different file/commit is opened.
   const targetKey = target ? `${target.commit}\0${target.path}\0${target.side}` : "";
@@ -114,6 +135,40 @@ export function FileViewerDialog({
   }, [repoId, revision, target, viewPath]);
 
   useEffect(() => () => traceAbortRef.current?.abort(), []);
+
+  // Blame follows the shown revision/path; it is fetched only while enabled.
+  useEffect(() => {
+    if (!blameOn || !target || !revision || !repoId) {
+      setBlame({ kind: "off" });
+      return;
+    }
+    const ctrl = new AbortController();
+    setBlame({ kind: "loading" });
+    fetchFileBlame(repoId, revision, viewPath, ctrl.signal)
+      .then((result) => {
+        if (!ctrl.signal.aborted) setBlame({ kind: "ready", result });
+      })
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return;
+        setBlame({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+      });
+    return () => ctrl.abort();
+  }, [blameOn, repoId, revision, target, viewPath]);
+
+  const blameView = useMemo<BlameView | null>(() => {
+    if (blame.kind !== "ready") return null;
+    const commitsByHash = new Map(blame.result.commits.map((commit) => [commit.hash, commit]));
+    const runStarts: BlameView["runStarts"] = new Map();
+    for (const run of groupBlameRuns(blame.result.lines)) {
+      const commit = commitsByHash.get(run.hash);
+      if (commit) runStarts.set(run.startLine, { commit, lines: run.endLine - run.startLine + 1 });
+    }
+    return {
+      runStarts,
+      hashByLine: new Map(blame.result.lines.map((line) => [line.line, line.hash])),
+      ages: blameAgeBuckets(blame.result.commits),
+    };
+  }, [blame]);
 
   const file = state.kind === "ready" ? state.file : null;
   const language = useMemo(() => (viewPath ? detectLanguage(viewPath) : null), [viewPath]);
@@ -259,6 +314,26 @@ export function FileViewerDialog({
             <Download size={11} aria-hidden style={{ marginRight: 4 }} />
             Download
           </button>
+          <button
+            type="button"
+            className="rs-compact-button"
+            aria-pressed={blameOn}
+            onClick={() => setBlameOn((value) => !value)}
+            disabled={!file || file.binary || lines.length === 0}
+            title="Show who last changed each line (git blame) at this version"
+            style={
+              blameOn
+                ? {
+                    color: "var(--rs-text-primary)",
+                    borderColor: "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)",
+                    background: "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 22%)",
+                  }
+                : undefined
+            }
+          >
+            <UserRound size={11} aria-hidden style={{ marginRight: 4 }} />
+            {blame.kind === "loading" ? "Blaming…" : "Blame"}
+          </button>
           {onOpenHistory && target ? (
             <button
               type="button"
@@ -283,8 +358,16 @@ export function FileViewerDialog({
           />
           <span role="status" aria-live="polite" style={{ fontSize: 11, color: "var(--rs-text-muted)" }}>
             {copyStatus}
+            {blame.kind === "ready"
+              ? `${copyStatus ? " · " : ""}Blame: ${blame.result.commits.length} commit${blame.result.commits.length === 1 ? "" : "s"}`
+              : ""}
           </span>
         </div>
+        {blame.kind === "error" ? (
+          <p role="alert" style={{ fontSize: 11, color: "var(--rs-warning)", margin: 0 }}>
+            Blame unavailable: {blame.message}
+          </p>
+        ) : null}
 
         <div
           className="overflow-auto min-h-0"
@@ -315,6 +398,15 @@ export function FileViewerDialog({
               wrap={wrap}
               selection={selection}
               onGutterClick={handleGutterClick}
+              blame={blameView}
+              onSelectCommit={
+                onSelectCommit
+                  ? (hash) => {
+                      onSelectCommit(hash);
+                      onClose();
+                    }
+                  : undefined
+              }
             />
           ) : null}
           {file?.truncated ? (
@@ -485,14 +577,19 @@ function FileLines({
   wrap,
   selection,
   onGutterClick,
+  blame,
+  onSelectCommit,
 }: {
   lines: string[];
   highlighted: HighlightedRun[][] | null;
   wrap: boolean;
   selection: LineSelection;
   onGutterClick: (line: number, extend: boolean) => void;
+  blame: BlameView | null;
+  onSelectCommit?: (hash: string) => void;
 }) {
   const gutterWidth = `${String(lines.length).length + 2}ch`;
+  const nowMs = useMemo(() => Date.now(), [blame]);
   return (
     <div
       className="rs-prism"
@@ -520,6 +617,14 @@ function FileLines({
                 : undefined,
             }}
           >
+            {blame ? (
+              <BlameCell
+                start={blame.runStarts.get(lineNo) ?? null}
+                age={blame.ages.get(blame.hashByLine.get(lineNo) ?? "") ?? 0}
+                nowMs={nowMs}
+                onSelectCommit={onSelectCommit}
+              />
+            ) : null}
             <span
               role="rowheader"
               onMouseDown={(event) => {
@@ -537,7 +642,7 @@ function FileLines({
                 userSelect: "none",
                 cursor: "pointer",
                 position: "sticky",
-                left: 0,
+                left: blame ? BLAME_GUTTER_WIDTH : 0,
                 background: isSelected
                   ? "color-mix(in oklab, var(--rs-bg-canvas), var(--rs-accent) 18%)"
                   : "var(--rs-bg-canvas)",
@@ -575,6 +680,86 @@ function FileLines({
         );
       })}
     </div>
+  );
+}
+
+// Pixels, not `ch`: the cell and the line-number column use different font
+// sizes, and the line numbers stick at exactly this offset.
+const BLAME_GUTTER_WIDTH = "220px";
+
+/**
+ * One blame gutter cell. The first line of each run carries the label
+ * (hash · author · age) as a button that opens the commit; the left edge is
+ * shaded by relative age so recent edits stand out without relying on color
+ * alone (the age text is always present at the run start).
+ */
+function BlameCell({
+  start,
+  age,
+  nowMs,
+  onSelectCommit,
+}: {
+  start: { commit: BlameCommit; lines: number } | null;
+  age: number;
+  nowMs: number;
+  onSelectCommit?: (hash: string) => void;
+}) {
+  const shade = 8 + Math.round((age / Math.max(1, BLAME_AGE_BUCKETS - 1)) * 40);
+  const cellStyle = {
+    width: BLAME_GUTTER_WIDTH,
+    flex: "none",
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    paddingLeft: 6,
+    paddingRight: 6,
+    borderLeft: `3px solid color-mix(in oklab, var(--rs-bg-canvas), var(--rs-accent) ${shade}%)`,
+    borderTop: start ? "1px solid var(--rs-border)" : undefined,
+    background: "var(--rs-bg-panel)",
+    color: "var(--rs-text-muted)",
+    fontSize: 11,
+    overflow: "hidden",
+    userSelect: "none",
+    position: "sticky",
+    left: 0,
+    zIndex: 1,
+  } as const;
+  if (!start) return <span role="cell" aria-hidden style={cellStyle} />;
+  const { commit } = start;
+  const when = commit.authorTime ? commit.authorTime.slice(0, 10) : "unknown date";
+  const title = `${commit.shortHash} ${commit.summary}\n${commit.author} · ${when}${
+    commit.boundary ? "\n(history boundary)" : ""
+  }${onSelectCommit ? "\nClick to open this commit" : ""}`;
+  return (
+    <span role="cell" style={cellStyle}>
+      <button
+        type="button"
+        disabled={!onSelectCommit}
+        onClick={() => onSelectCommit?.(commit.hash)}
+        title={title}
+        aria-label={`Line last changed by ${commit.shortHash}, ${commit.summary}, ${commit.author}, ${when}`}
+        className="truncate"
+        style={{
+          display: "flex",
+          gap: 6,
+          minWidth: 0,
+          flex: 1,
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          color: "inherit",
+          font: "inherit",
+          textAlign: "left",
+          cursor: onSelectCommit ? "pointer" : "default",
+        }}
+      >
+        <span style={{ color: "var(--rs-accent)", flex: "none" }}>{commit.shortHash}</span>
+        <span className="truncate" style={{ flex: 1, minWidth: 0, color: "var(--rs-text-secondary)" }}>
+          {commit.author}
+        </span>
+        <span style={{ flex: "none" }}>{shortAge(commit.authorTime, nowMs)}</span>
+      </button>
+    </span>
   );
 }
 

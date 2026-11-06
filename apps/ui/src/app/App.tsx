@@ -89,6 +89,7 @@ import {
   type ViewerEvent,
   type WorkTreeResponse,
   type WorktreeEntry,
+  type CompareMode,
 } from "./api";
 import type { RefDriftSummary } from "./components/refscope/BranchSidebar";
 import {
@@ -99,6 +100,7 @@ import {
   mergeLiveFirstPage,
   pageMayHaveMore,
 } from "./lib/historyBrowsing";
+import { buildCompareLinkSearch, parseCompareLink } from "./lib/compareReview";
 import {
   loadRewriteSnapshots,
   saveRewriteSnapshot,
@@ -266,6 +268,14 @@ export default function App() {
   // ref; the first timeline load keeps it selected (shown from its own
   // detail) instead of replacing it with the newest row.
   const pendingDeepLinkCommitRef = useRef(initialDeepLink.commit);
+  // `?cbase=&ctarget=&cmode=` restores an open compare review.
+  const initialCompareLink = useMemo(
+    () =>
+      typeof window === "undefined"
+        ? { base: "", target: "", mode: "three-dot" as const }
+        : parseCompareLink(window.location.search),
+    [],
+  );
   const flightRecorderEnabled = useMemo(() => isFlightRecorderEnabled(), []);
   const availableLenses = useMemo<readonly LensId[]>(
     () => (flightRecorderEnabled ? [...BASE_LENSES, "flight"] : BASE_LENSES),
@@ -548,8 +558,9 @@ export default function App() {
   const debouncedPath = useDebouncedValue(path, 250);
   const debouncedSearchPattern = useDebouncedValue(searchPattern, 250);
   const [selectionNotice, setSelectionNotice] = useState("");
-  const [compareBase, setCompareBase] = useState("");
-  const [compareTarget, setCompareTarget] = useState("");
+  const [compareBase, setCompareBase] = useState(() => initialCompareLink.base);
+  const [compareTarget, setCompareTarget] = useState(() => initialCompareLink.target);
+  const [compareMode, setCompareMode] = useState<CompareMode>(() => initialCompareLink.mode);
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
   const [compareLoading, setCompareLoading] = useState(false);
   // Bumped by live refreshes so an open compare is recomputed.
@@ -825,6 +836,8 @@ export default function App() {
           setSelectedRef("HEAD");
           setSelected("");
           setPath("");
+          setCompareBase("");
+          setCompareTarget("");
         }
         setSelectedRepo((current) => current || (linkValid ? linked : items[0]?.id || ""));
         setError(items.length ? "" : "No repositories are allowlisted in RTGV_REPOS.");
@@ -1449,16 +1462,19 @@ export default function App() {
   // copied link reopens the same view. Unrelated params (fleet, flight) stay.
   useEffect(() => {
     if (typeof window === "undefined" || !selectedRepo) return;
-    const search = buildDeepLinkSearch(window.location.search, {
-      repo: selectedRepo,
-      ref: selectedRef,
-      commit: selectedWorkTree ? "" : selected,
-      path: debouncedPath.trim(),
-    });
+    const search = buildCompareLinkSearch(
+      buildDeepLinkSearch(window.location.search, {
+        repo: selectedRepo,
+        ref: selectedRef,
+        commit: selectedWorkTree ? "" : selected,
+        path: debouncedPath.trim(),
+      }),
+      { base: compareBase, target: compareTarget, mode: compareMode },
+    );
     if (search === window.location.search) return;
     const url = `${window.location.pathname}${search}${window.location.hash}`;
     window.history.replaceState(window.history.state, "", url);
-  }, [selectedRepo, selectedRef, selected, selectedWorkTree, debouncedPath]);
+  }, [selectedRepo, selectedRef, selected, selectedWorkTree, debouncedPath, compareBase, compareTarget, compareMode]);
   // The viewer reads from one repository; a repo switch closes it.
   useEffect(() => {
     setFileViewerTarget(null);
@@ -2409,6 +2425,9 @@ export default function App() {
                 setCompareTarget("");
                 setCompareResult(null);
               }}
+              compareMode={compareMode}
+              onCompareModeChange={setCompareMode}
+              onOpenCompareFileHistory={submitFileHistoryPath}
               compareBarCollapsed={compareBarCollapsed}
               activityGraphCollapsed={activityGraphCollapsed}
               onToggleCompareBar={toggleCompareBar}

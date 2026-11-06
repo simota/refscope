@@ -56,7 +56,7 @@ Full options and the CLI security model are in [`apps/cli/README.md`](apps/cli/R
 - **File history with co-change** — right-click any file row to open its history view, complete with a hunk timeline, branch-drift halo, and a related-files (co-change) panel.
 - **Period summary** — labelled metric bars for commit count, additions, deletions, signed commits, merge commits, and live-update arrivals across a chosen window.
 - **Sidebar with the full ref surface** — branches, tags, remote-tracking refs, pinned refs, stashes, linked worktrees, submodules, and an in-progress banner for active rebases / merges / cherry-picks.
-- **Compare bar** — pin a base ref/commit and a target ref to see ahead/behind counts plus copyable `git log` / `diff --stat` / `diff` commands with revisions kept as separate tokens.
+- **Compare bar with review workbench** — pin a base ref/commit and a target ref to see ahead/behind counts plus copyable `git log` / `diff --stat` / `diff` commands with revisions kept as separate tokens. **Review changes** opens the commits on each side (click one to inspect it), the changed-file list, and the range diff — either *since merge base* (the pull-request view, `base...target`) or the *direct* tree difference — and exports a Markdown report grouped by conventional-commit type (release-notes / PR-description draft). The compare pair is part of the URL, so a review can be shared as a link.
 - **Realtime updates with pause** — typed SSE events drive a calm timeline that never auto-scrolls; pause queues new observations until you resume. History rewrites are rendered as an event-driven alert list with the previous tip, current tip, observed time, and detection source kept separate from the interpretation, and are also retained in the `Rescue` lens for later recovery.
 - **Command palette** (`Cmd/Ctrl+K`) — operates on the same live ref/commit state as the page, and exposes pause, copy current hash, clear filters, and ref switching.
 - **Read-only right-click menus and global keyboard shortcuts** for refs, commits, files, and the diff viewer.
@@ -206,9 +206,12 @@ The captured media in `apps/web/public/media/` is committed; the capture script 
 - **View file** — the file icon / right-click on a changed file (list, tree or diff file
   list) opens the whole file at that commit; **Before** shows the parent's version
   (following renames). Select lines in the gutter (Shift-click extends) and **Trace** to
-  see which commits shaped them, then jump to one.
-- **Links** — the URL tracks `?repo=&ref=&commit=&path=`, so reloads restore the view and
-  the link icon in the commit panel copies a link to the selected commit.
+  see which commits shaped them, then jump to one. **Blame** annotates every line with the
+  commit that last changed it (hash · author · age, shaded by relative age); click a label
+  to open that commit.
+- **Links** — the URL tracks `?repo=&ref=&commit=&path=` (plus `cbase=&ctarget=&cmode=`
+  for an open compare), so reloads restore the view and the link icon in the commit panel
+  copies a link to the selected commit.
 
 ## API
 
@@ -231,10 +234,22 @@ Read-only endpoints (none of them write to a repository):
 - `GET /api/repos/:repoId/commits/:hash/refs`
 - `GET /api/repos/:repoId/compare?base=main&target=feature/refscope`
 - `GET /api/repos/:repoId/compare/cherry?base=main&target=feature/refscope`
+- `GET /api/repos/:repoId/compare/commits?base=main&target=feature/refscope&limit=100` —
+  the commits only in target (`ahead`) and only in base (`behind`), newest first, max 500
+  per side with `aheadTruncated` / `behindTruncated`
+- `GET /api/repos/:repoId/compare/diff?base=main&target=feature/refscope&mode=three-dot` —
+  changed files (status, rename source, counts, binary flag) plus the patch, bounded by
+  `RTGV_DIFF_MAX_BYTES` (`truncated`). `mode=three-dot` (default) diffs the merge base
+  against target; `two-dot` diffs base against target. Unrelated histories fall back to
+  two-dot with `fallback: true`
 - `GET /api/repos/:repoId/files/history?path=...`
 - `GET /api/repos/:repoId/files/content?commit=<full hash>&path=...` — the whole file
   at that commit (raw `cat-file`, 1 MiB cap with `truncated`, `binary: true` and no content
   for binary blobs)
+- `GET /api/repos/:repoId/files/blame?commit=<full hash>&path=...` — `git blame --porcelain`
+  at that commit: per-line commit attribution plus each commit's author, time and summary.
+  Only committed objects are read; `--no-textconv` and `--no-ignore-revs-file` keep repo
+  config out of the result. Files over 1 MiB (413) and binary files (422) are refused
 - `GET /api/repos/:repoId/files/range-history?path=...&lineStart=1&lineEnd=20`
 - `GET /api/repos/:repoId/files/related?path=...`
 - `GET /api/repos/:repoId/files/hotspot?ref=HEAD&limit=500&commitCap=200`
@@ -329,7 +344,9 @@ incoming SSE events are counted and announced through a polite live region, but
 the timeline is not refreshed until updates are resumed.
 The timeline includes a read-only compare bar for pinning a base ref/commit and
 target ref, preserving selected commits across ref switches when possible, and
-copying local Git comparison commands.
+copying local Git comparison commands. Its review workbench lists the commits and
+files behind the counts, renders the range diff, and refreshes with the summary
+when either compared ref moves.
 The timeline also includes a commit activity overview with labeled metrics and
 mini bars for commit count, additions, deletions, signed commits, merge commits,
 and live-update new commits.
@@ -349,10 +366,11 @@ API error message in the timeline instead of silently dropping the event.
 - Malformed percent-encoded API paths are rejected as public `400` errors before repository lookup.
 - Git commands are executed with argument arrays and `shell: false`.
 - Git command execution is limited to the read-only command set used by the
-  API (`cat-file`, `cherry`, `config` (read-only lookup), `diff`,
+  API (`blame`, `cat-file`, `cherry`, `config` (read-only lookup), `diff`,
   `for-each-ref`, `log`, `ls-files`, `merge-base`, `rev-list`, `rev-parse`,
   `show`, and the `stash list` / `submodule status` / `worktree list`
-  subcommands).
+  subcommands). `blame` options that read a file (`--contents`, `-S`,
+  `--ignore-revs-file`) are rejected before spawn.
 - Git command arguments must start with a command name. Leading Git global
   options such as `-c`, `--git-dir`, `--work-tree`, and `--namespace` are
   rejected before spawn so internal call sites cannot override the hardened

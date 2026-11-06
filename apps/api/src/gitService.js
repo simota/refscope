@@ -10,6 +10,7 @@ import {
   isValidObjectId,
   parseAuthorQuery,
   parseBranchPrefixQuery,
+  parseCompareModeQuery,
   parseDateQuery,
   parseFuncNameQuery,
   parseGroupByQuery,
@@ -127,6 +128,11 @@ const COMMIT_RECORD_HEADER_PATTERN = /(?:^|\n)\u001e(?=[0-9a-f]{40}\u0000)/;
 // The leading empty NUL token frames each numstat log record. Metadata has
 // six fields; paths cannot contain NUL and are consumed as numstat records.
 const NUMSTAT_COMMIT_FORMAT = "--format=%x00%H%x00%P%x00%an%x00%aI%x00%s%x00%D";
+
+// Compare review commit lists: enough rows to review a typical feature or
+// release branch, bounded so a compare across unrelated histories stays cheap.
+const COMPARE_COMMITS_DEFAULT_LIMIT = 100;
+const COMPARE_COMMITS_MAX_LIMIT = 500;
 
 /**
  * Options of a `git log -z --name-only` read whose records
@@ -1172,6 +1178,96 @@ export function createGitService(config) {
      * @param {string} hash — 40-char OID (pre-validated by http.js)
      * @returns {Promise<{ status: number; body: object }>}
      */
+    /**
+     * Line blame at a revision: GET /api/repos/:id/files/blame?commit=&path=
+     *
+     * Annotates every line of `<commit>:<path>` with the commit that last
+     * changed it (`git blame --porcelain`). Only committed objects are read —
+     * never the working tree — so no filter driver or fsmonitor is involved;
+     * `--no-textconv` keeps diff drivers off and `--no-ignore-revs-file`
+     * makes the result independent of the repository's `blame.ignoreRevsFile`
+     * (a missing file there would otherwise fail every read).
+     *
+     * Files over FILE_CONTENT_MAX_BYTES and binary files are refused rather
+     * than partially annotated.
+     *
+     * @param {{ id: string; path: string }} repo
+     * @param {URLSearchParams} query
+     */
+    async getFileBlame(repo, query) {
+      const values = {};
+      for (const name of ["commit", "path"]) {
+        const all = query.getAll(name);
+        if (all.length > 1) {
+          return { status: 400, body: { error: `Duplicate ${name} parameter` } };
+        }
+        values[name] = all[0] ?? "";
+      }
+      if (!isValidObjectId(values.commit)) {
+        return { status: 400, body: { error: "Invalid commit parameter" } };
+      }
+      const path = parsePathQuery(values.path);
+      if (!path.ok) {
+        return { status: 400, body: { error: path.error } };
+      }
+      if (!path.value) {
+        return { status: 400, body: { error: "Missing path parameter" } };
+      }
+      const commitObject = await validateCommitObject(repo, values.commit, config.gitTimeoutMs);
+      if (!commitObject.ok) {
+        return commitObject.result;
+      }
+      const resolved = await resolveCommitishRevision(repo, values.commit, config.gitTimeoutMs);
+      if (!resolved.ok) {
+        return resolved.result;
+      }
+      const commitOid = resolved.hash;
+
+      const { stdout: checkOut } = await runGit(
+        repo,
+        ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+        { timeoutMs: config.gitTimeoutMs, maxBytes: 4096, input: `${commitOid}:${path.value}\n` },
+      );
+      const match = BATCH_CHECK_LINE_PATTERN.exec(checkOut.replace(/\n$/, ""));
+      if (!match) {
+        return { status: 404, body: { error: "Path not found at this commit" } };
+      }
+      if (match[2] !== "blob") {
+        return { status: 400, body: { error: "Path is not a file at this commit" } };
+      }
+      if (Number(match[3]) > FILE_CONTENT_MAX_BYTES) {
+        return { status: 413, body: { error: "File is too large to blame", maxBytes: FILE_CONTENT_MAX_BYTES } };
+      }
+
+      let stdout;
+      try {
+        ({ stdout } = await runGit(repo, fileBlameArgs(commitOid, path.value), {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: MAX_GIT_OUTPUT_BYTES,
+        }));
+      } catch (error) {
+        if (error instanceof GitCommandError && error.timedOut) {
+          return { status: 504, body: { error: "Blame timed out for this file" } };
+        }
+        throw error;
+      }
+      const parsed = parseBlamePorcelain(stdout);
+      if (parsed.binary) {
+        return { status: 422, body: { error: "Binary files cannot be blamed" } };
+      }
+
+      return {
+        status: 200,
+        body: {
+          commit: commitOid,
+          path: path.value,
+          lineCount: parsed.lines.length,
+          commits: parsed.commits,
+          lines: parsed.lines,
+        },
+      };
+    },
+
     async getCommitRisk(repo, hash) {
       if (!isValidObjectId(hash)) {
         return { status: 400, body: { error: "Invalid commit hash" } };
@@ -2041,6 +2137,166 @@ export function createGitService(config) {
     },
 
     /**
+     * Compare review — commits: GET /api/repos/:id/compare/commits
+     *
+     * Lists the commits behind the compare summary's ahead/behind counts:
+     * `ahead` = reachable from target but not base (what target would bring
+     * in), `behind` = reachable from base but not target. Both are newest
+     * first, in the same row shape as the commit list (risk score and coarse
+     * kind included) so the UI can render them with the timeline's vocabulary.
+     * Each side reads `limit + 1` rows to report truncation honestly.
+     *
+     * @param {{ id: string; path: string }} repo
+     * @param {URLSearchParams} query
+     */
+    async getCompareCommits(repo, query) {
+      const queryValues = readCompareQuery(query);
+      if (!queryValues.ok) {
+        return { status: 400, body: { error: queryValues.error } };
+      }
+      if (query.getAll("limit").length > 1) {
+        return { status: 400, body: { error: "Duplicate limit parameter" } };
+      }
+      const limit = parseLimitQuery(query.get("limit"), COMPARE_COMMITS_DEFAULT_LIMIT, COMPARE_COMMITS_MAX_LIMIT);
+      if (!limit.ok) {
+        return { status: 400, body: { error: limit.error } };
+      }
+      const { base, target } = queryValues.value;
+      const [baseRevision, targetRevision] = await Promise.all([
+        resolveCommitishRevision(repo, base, config.gitTimeoutMs),
+        resolveCommitishRevision(repo, target, config.gitTimeoutMs),
+      ]);
+      if (!baseRevision.ok) return baseRevision.result;
+      if (!targetRevision.ok) return targetRevision.result;
+
+      const readSide = async (fromHash, toHash) => {
+        const { stdout } = await runGit(repo, compareCommitLogArgs(fromHash, toHash, limit.value + 1), {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: MAX_GIT_OUTPUT_BYTES,
+        });
+        return parseCommitRecords(stdout);
+      };
+      const [aheadRaw, behindRaw] = await Promise.all([
+        readSide(baseRevision.hash, targetRevision.hash),
+        readSide(targetRevision.hash, baseRevision.hash),
+      ]);
+      const hotspotFiles = _hotspotCache.get(repo.id)?.files ?? new Map();
+      const shape = (commits) =>
+        commits.slice(0, limit.value).map((commit) => {
+          const riskScore = scoreDiff(commit.fileDiffs ?? [], hotspotFiles);
+          const coarseKind = computeCoarseKind(commit.fileDiffs ?? [], commit.added, commit.deleted);
+          const { fileDiffs: _fd, ...rest } = commit;
+          return { ...rest, riskScore, coarseKind };
+        });
+
+      return {
+        status: 200,
+        body: {
+          base,
+          target,
+          baseHash: baseRevision.hash,
+          targetHash: targetRevision.hash,
+          limit: limit.value,
+          ahead: shape(aheadRaw),
+          behind: shape(behindRaw),
+          aheadTruncated: aheadRaw.length > limit.value,
+          behindTruncated: behindRaw.length > limit.value,
+        },
+      };
+    },
+
+    /**
+     * Compare review — files and patch: GET /api/repos/:id/compare/diff
+     *
+     * `mode=three-dot` (default) diffs the merge base against target — what
+     * a pull request from target into base would show. `mode=two-dot` diffs
+     * base against target directly, matching the summary counts. Histories
+     * with no merge base fall back to two-dot and say so (`fallback: true`).
+     *
+     * The file list comes from numstat + name-status and is always complete;
+     * only the patch text is bounded by RTGV_DIFF_MAX_BYTES (`truncated`).
+     *
+     * @param {{ id: string; path: string }} repo
+     * @param {URLSearchParams} query
+     */
+    async getCompareDiff(repo, query) {
+      const queryValues = readCompareQuery(query);
+      if (!queryValues.ok) {
+        return { status: 400, body: { error: queryValues.error } };
+      }
+      if (query.getAll("mode").length > 1) {
+        return { status: 400, body: { error: "Duplicate mode parameter" } };
+      }
+      const mode = parseCompareModeQuery(query.get("mode"));
+      if (!mode.ok) {
+        return { status: 400, body: { error: mode.error } };
+      }
+      const { base, target } = queryValues.value;
+      const [baseRevision, targetRevision] = await Promise.all([
+        resolveCommitishRevision(repo, base, config.gitTimeoutMs),
+        resolveCommitishRevision(repo, target, config.gitTimeoutMs),
+      ]);
+      if (!baseRevision.ok) return baseRevision.result;
+      if (!targetRevision.ok) return targetRevision.result;
+
+      const mergeBase = await readMergeBase(repo, baseRevision.hash, targetRevision.hash, config.gitTimeoutMs);
+      const fallback = mode.value === "three-dot" && !mergeBase;
+      const effectiveMode = fallback ? "two-dot" : mode.value;
+      const fromHash = effectiveMode === "three-dot" ? mergeBase : baseRevision.hash;
+      const toHash = targetRevision.hash;
+
+      const [numstat, nameStatus, patch] = await Promise.all([
+        runGit(repo, compareFileListArgs(fromHash, toHash, "--numstat"), {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: MAX_GIT_OUTPUT_BYTES,
+        }),
+        runGit(repo, compareFileListArgs(fromHash, toHash, "--name-status"), {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: MAX_GIT_OUTPUT_BYTES,
+        }),
+        runGit(repo, comparePatchArgs(fromHash, toHash), {
+          timeoutMs: config.gitTimeoutMs,
+          maxBytes: config.diffMaxBytes,
+          allowTruncatedStdout: true,
+        }),
+      ]);
+      const files = parseCompareFiles(numstat.stdout, nameStatus.stdout);
+      const totals = files.reduce(
+        (acc, file) => {
+          if (!file.binary) {
+            acc.added += file.added;
+            acc.deleted += file.deleted;
+          }
+          return acc;
+        },
+        { added: 0, deleted: 0 },
+      );
+      const diffText = patch.truncated
+        ? patch.stdout.slice(0, patch.stdout.lastIndexOf("\n") + 1)
+        : patch.stdout;
+
+      return {
+        status: 200,
+        body: {
+          base,
+          target,
+          mode: effectiveMode,
+          requestedMode: mode.value,
+          fallback,
+          mergeBase,
+          fromHash,
+          toHash,
+          files,
+          added: totals.added,
+          deleted: totals.deleted,
+          diff: diffText,
+          truncated: patch.truncated,
+          maxBytes: config.diffMaxBytes,
+        },
+      };
+    },
+
+    /**
      * Cherry-pick equivalence detection for a base/target compare.
      *
      * Surfaces the SRE / release-engineer answer to "is this fix already on
@@ -2859,6 +3115,181 @@ export function compareNumstatArgs(base, target) {
     target,
     "--",
   ];
+}
+
+/**
+ * Commits reachable from `toHash` but not `fromHash`, newest first, in the
+ * commit-list record format. Both sides are resolved object IDs and stay
+ * separate tokens.
+ */
+export function compareCommitLogArgs(fromHash, toHash, maxCount) {
+  return [
+    "log",
+    `--max-count=${maxCount}`,
+    "--date=iso-strict",
+    NUMSTAT_COMMIT_FORMAT,
+    ...PUBLIC_DECORATION_ARGS,
+    "--no-show-signature",
+    "--numstat",
+    MERGE_STATS_DIFF_ARG,
+    "-z",
+    "--no-ext-diff",
+    "--no-textconv",
+    ...commitRangeLogArgs(fromHash, toHash),
+    "--",
+  ];
+}
+
+/**
+ * File list for a compare diff. `listFlag` is `--numstat` or `--name-status`;
+ * both use rename detection so the two lists pair up by destination path.
+ */
+export function compareFileListArgs(fromHash, toHash, listFlag) {
+  if (listFlag !== "--numstat" && listFlag !== "--name-status") {
+    throw new Error("Unsupported compare file list flag");
+  }
+  return [
+    "diff",
+    listFlag,
+    "-z",
+    "--find-renames",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--end-of-options",
+    fromHash,
+    toHash,
+    "--",
+  ];
+}
+
+export function comparePatchArgs(fromHash, toHash) {
+  return [
+    "diff",
+    "--patch",
+    "--find-renames",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--end-of-options",
+    fromHash,
+    toHash,
+    "--",
+  ];
+}
+
+/**
+ * Pair `diff --numstat -z` and `diff --name-status -z` output into one file
+ * list. Renames and copies keep their source as `oldPath`; binary files are
+ * flagged with zero counts instead of numstat's `-`.
+ *
+ * @returns {Array<{ status: string; path: string; oldPath?: string; added: number; deleted: number; binary: boolean }>}
+ */
+export function parseCompareFiles(numstatOutput, nameStatusOutput) {
+  const stats = new Map(parseNumstatRecords(numstatOutput).map((file) => [file.path, file]));
+  const tokens = nameStatusOutput.split("\0");
+  const files = [];
+  for (let index = 0; index < tokens.length;) {
+    const status = tokens[index++][0];
+    if (!status) continue;
+    let oldPath;
+    if (status === "R" || status === "C") oldPath = tokens[index++];
+    const filePath = tokens[index++];
+    if (!filePath) continue;
+    const stat = stats.get(filePath);
+    const binary = Boolean(stat && (stat.added === -1 || stat.deleted === -1));
+    files.push({
+      status,
+      path: filePath,
+      ...(oldPath ? { oldPath } : {}),
+      added: binary || !stat ? 0 : stat.added,
+      deleted: binary || !stat ? 0 : stat.deleted,
+      binary,
+    });
+  }
+  return files;
+}
+
+/**
+ * `git blame` over a committed revision. `blame` does not accept
+ * `--end-of-options`; `commitOid` is a validated hex object ID (never starts
+ * with `-`) and the path follows `--`.
+ */
+export function fileBlameArgs(commitOid, filePath) {
+  return [
+    "blame",
+    "--porcelain",
+    "--no-textconv",
+    "--no-ignore-revs-file",
+    commitOid,
+    "--",
+    filePath,
+  ];
+}
+
+const BLAME_HEADER_PATTERN = /^([0-9a-f]{40}|[0-9a-f]{64}) (\d+) (\d+)(?: (\d+))?$/;
+
+/**
+ * Parse `git blame --porcelain`. Commit metadata appears once, on the first
+ * line attributed to that commit; every line carries its final line number
+ * and content (after a TAB).
+ *
+ * @returns {{ commits: Array<object>, lines: Array<{ line: number; hash: string; origLine: number; content: string }>, binary: boolean }}
+ */
+export function parseBlamePorcelain(stdout) {
+  const commits = new Map();
+  const lines = [];
+  let binary = false;
+  let current = null;
+  for (const raw of stdout.split("\n")) {
+    if (current && raw.startsWith("\t")) {
+      const content = raw.slice(1);
+      if (content.includes("\0")) binary = true;
+      lines.push({ line: current.finalLine, hash: current.hash, origLine: current.origLine, content });
+      current = null;
+      continue;
+    }
+    const header = BLAME_HEADER_PATTERN.exec(raw);
+    if (header) {
+      const hash = header[1];
+      current = { hash, origLine: Number(header[2]), finalLine: Number(header[3]) };
+      if (!commits.has(hash)) {
+        commits.set(hash, {
+          hash,
+          shortHash: hash.slice(0, 7),
+          author: "",
+          authorEmail: "",
+          authorTime: null,
+          summary: "",
+          boundary: false,
+          previousHash: null,
+          previousPath: null,
+          filename: "",
+        });
+      }
+      continue;
+    }
+    if (!current) continue;
+    const entry = commits.get(current.hash);
+    const space = raw.indexOf(" ");
+    const key = space === -1 ? raw : raw.slice(0, space);
+    const value = space === -1 ? "" : raw.slice(space + 1);
+    if (key === "author") entry.author = value;
+    else if (key === "author-mail") entry.authorEmail = value.replace(/^<|>$/g, "");
+    else if (key === "author-time") entry.authorTime = parseUnixSecondsToIso(value);
+    else if (key === "summary") entry.summary = value;
+    else if (key === "boundary") entry.boundary = true;
+    else if (key === "filename") entry.filename = value;
+    else if (key === "previous") {
+      const previousSpace = value.indexOf(" ");
+      if (previousSpace > 0) {
+        entry.previousHash = value.slice(0, previousSpace);
+        entry.previousPath = value.slice(previousSpace + 1);
+      }
+    }
+  }
+  lines.sort((a, b) => a.line - b.line);
+  return { commits: Array.from(commits.values()), lines, binary };
 }
 
 export function compareMergeBaseArgs(base, target) {

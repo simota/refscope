@@ -196,6 +196,16 @@ export function createRequestHandler(config, gitService, fleetService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "compareCommits") {
+        const result = await gitService.getCompareCommits(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "compareDiff") {
+        const result = await gitService.getCompareDiff(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "compareCherry") {
         const result = await gitService.getCompareCherry(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
@@ -203,6 +213,11 @@ export function createRequestHandler(config, gitService, fleetService) {
       }
       if (route.name === "fileHistory") {
         const result = await gitService.getFileHistory(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "fileBlame") {
+        const result = await gitService.getFileBlame(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
         return;
       }
@@ -369,6 +384,14 @@ function matchRoute(method, pathname) {
   if (parts.length === 5 && parts[3] === "compare" && parts[4] === "cherry") {
     return { name: "compareCherry", params: { repoId } };
   }
+  // Compare review: the commits behind ahead/behind, and the file list +
+  // patch for the range. Same base/target query contract as /compare.
+  if (parts.length === 5 && parts[3] === "compare" && parts[4] === "commits") {
+    return { name: "compareCommits", params: { repoId } };
+  }
+  if (parts.length === 5 && parts[3] === "compare" && parts[4] === "diff") {
+    return { name: "compareDiff", params: { repoId } };
+  }
   // `/commits/summary` is matched before the generic `/commits/:hash` route so
   // the literal path segment cannot be misread as a commit hash.
   if (parts.length === 5 && parts[3] === "commits" && parts[4] === "summary") {
@@ -403,6 +426,10 @@ function matchRoute(method, pathname) {
   // query string, same shape as `/files/history`.
   if (parts.length === 5 && parts[3] === "files" && parts[4] === "content") {
     return { name: "fileContent", params: { repoId } };
+  }
+  // Line blame at a revision: same commit + path query shape as /files/content.
+  if (parts.length === 5 && parts[3] === "files" && parts[4] === "blame") {
+    return { name: "fileBlame", params: { repoId } };
   }
   // Range-history (Why panel): `/files/range-history` so the line range and
   // path stay in the query string, matching the validation contract exactly.
