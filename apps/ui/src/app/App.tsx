@@ -8,19 +8,11 @@ import type { WhyPanelQuery } from "./components/refscope/DetailPanel";
 import { CommandPalette } from "./components/refscope/CommandPalette";
 import { FileHistoryView } from "./components/refscope/FileHistoryView";
 import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
-import { RewriteRescuePanel } from "./components/refscope/RewriteRescuePanel";
 import {
   RepoBrowserDialog,
   type BrowserRevision,
   type BrowserTab,
 } from "./components/refscope/RepoBrowserDialog";
-import { PulseLens } from "./components/refscope/PulseLens";
-import { FileStreamLens } from "./components/refscope/FileStreamLens";
-import { RiskHeatmapLens } from "./components/refscope/RiskHeatmapLens";
-import { CoChangeLens } from "./components/refscope/CoChangeLens";
-import { OutboxLens } from "./components/refscope/OutboxLens";
-import { DigestLens } from "./components/refscope/DigestLens";
-import { RefFlightRecorderLens } from "./components/refscope/RefFlightRecorderLens";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -126,6 +118,32 @@ const RiskTrendLens = lazyWithPreload(() =>
 );
 const DriftLens = lazyWithPreload(() =>
   import("./components/refscope/DriftLens").then((m) => m.DriftLens),
+);
+// The other non-default lenses mount only when their tab is chosen; the
+// startup bundle need not parse them. They are prefetched with the ones above.
+const PulseLens = lazyWithPreload(() =>
+  import("./components/refscope/PulseLens").then((m) => m.PulseLens),
+);
+const FileStreamLens = lazyWithPreload(() =>
+  import("./components/refscope/FileStreamLens").then((m) => m.FileStreamLens),
+);
+const RiskHeatmapLens = lazyWithPreload(() =>
+  import("./components/refscope/RiskHeatmapLens").then((m) => m.RiskHeatmapLens),
+);
+const CoChangeLens = lazyWithPreload(() =>
+  import("./components/refscope/CoChangeLens").then((m) => m.CoChangeLens),
+);
+const OutboxLens = lazyWithPreload(() =>
+  import("./components/refscope/OutboxLens").then((m) => m.OutboxLens),
+);
+const DigestLens = lazyWithPreload(() =>
+  import("./components/refscope/DigestLens").then((m) => m.DigestLens),
+);
+const RewriteRescuePanel = lazyWithPreload(() =>
+  import("./components/refscope/RewriteRescuePanel").then((m) => m.RewriteRescuePanel),
+);
+const RefFlightRecorderLens = lazyWithPreload(() =>
+  import("./components/refscope/RefFlightRecorderLens").then((m) => m.RefFlightRecorderLens),
 );
 
 function LensLoading() {
@@ -455,7 +473,19 @@ export default function App() {
     () =>
       whenIdle(() => {
         // A failed prefetch is retried when the lens is opened.
-        for (const lens of [HotspotLens, RiskTrendLens, DriftLens]) {
+        for (const lens of [
+          HotspotLens,
+          RiskTrendLens,
+          DriftLens,
+          PulseLens,
+          FileStreamLens,
+          RiskHeatmapLens,
+          CoChangeLens,
+          OutboxLens,
+          DigestLens,
+          RewriteRescuePanel,
+          RefFlightRecorderLens,
+        ]) {
           lens.preload().catch(() => {});
         }
       }),
@@ -2119,32 +2149,36 @@ export default function App() {
           SSE subscriptions, hooks, and resizable-panel refs stay alive. */}
       {activeLens === 'pulse' && mode === "detail" && (
         <div className="flex-1 overflow-hidden" id="lens-panel-pulse" role="tabpanel" aria-labelledby="lens-tab-pulse">
-          <PulseLens
-            repoId={selectedRepo || null}
-            commits={commits}
-            selectedCommitHash={selected || null}
-            onSelectCommit={handleSelectCommit}
-            onOpenFileHistory={submitFileHistoryPath}
-            workTree={workTreeHasChanges ? workTree : null}
-            eventStatus={eventStatus}
-            onChangeLens={setActiveLens}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <PulseLens
+              repoId={selectedRepo || null}
+              commits={commits}
+              selectedCommitHash={selected || null}
+              onSelectCommit={handleSelectCommit}
+              onOpenFileHistory={submitFileHistoryPath}
+              workTree={workTreeHasChanges ? workTree : null}
+              eventStatus={eventStatus}
+              onChangeLens={setActiveLens}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'stream' && mode === "detail" && (
         <div className="flex-1 overflow-hidden" id="lens-panel-stream" role="tabpanel" aria-labelledby="lens-tab-stream">
-          <FileStreamLens
-            // Remount per repo: its commit-detail cache is keyed by hash
-            // only, and forks share hashes across repositories.
-            key={selectedRepo}
-            repoId={selectedRepo || null}
-            commits={commits}
-            selectedCommitHash={selected || null}
-            onSelectCommit={handleSelectCommit}
-            onOpenFileHistory={submitFileHistoryPath}
-            workTree={workTreeHasChanges ? workTree : null}
-            onChangeLens={setActiveLens}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <FileStreamLens
+              // Remount per repo: its commit-detail cache is keyed by hash
+              // only, and forks share hashes across repositories.
+              key={selectedRepo}
+              repoId={selectedRepo || null}
+              commits={commits}
+              selectedCommitHash={selected || null}
+              onSelectCommit={handleSelectCommit}
+              onOpenFileHistory={submitFileHistoryPath}
+              workTree={workTreeHasChanges ? workTree : null}
+              onChangeLens={setActiveLens}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'hotspot' && mode === "detail" && selectedRepo && (
@@ -2172,23 +2206,27 @@ export default function App() {
       )}
       {activeLens === 'risk-heatmap' && mode === "detail" && (
         <div className="flex-1 overflow-hidden" id="lens-panel-risk-heatmap" role="tabpanel" aria-labelledby="lens-tab-risk-heatmap">
-          <RiskHeatmapLens
-            commits={commits}
-            onSelectCommit={handleSelectCommit}
-            onChangeLens={setActiveLens}
-            onSelectRange={(from, to) => setDateRangeFilter({ from, to })}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <RiskHeatmapLens
+              commits={commits}
+              onSelectCommit={handleSelectCommit}
+              onChangeLens={setActiveLens}
+              onSelectRange={(from, to) => setDateRangeFilter({ from, to })}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'co-change' && mode === "detail" && selectedRepo && (
         <div className="flex-1 overflow-hidden" id="lens-panel-co-change" role="tabpanel" aria-labelledby="lens-tab-co-change">
-          <CoChangeLens
-            repoId={selectedRepo}
-            selectedRef={selectedRef}
-            selectedFilePath={fileHistoryPath}
-            onOpenFileHistory={submitFileHistoryPath}
-            onChangeLens={setActiveLens}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <CoChangeLens
+              repoId={selectedRepo}
+              selectedRef={selectedRef}
+              selectedFilePath={fileHistoryPath}
+              onOpenFileHistory={submitFileHistoryPath}
+              onChangeLens={setActiveLens}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'drift' && mode === "detail" && selectedRepo && (
@@ -2206,71 +2244,77 @@ export default function App() {
       )}
       {activeLens === 'outbox' && mode === "detail" && selectedRepo && (
         <div className="flex-1 overflow-hidden" id="lens-panel-outbox" role="tabpanel" aria-labelledby="lens-tab-outbox">
-          <OutboxLens
-            repoId={selectedRepo}
-            refs={refs}
-            onSelectCommit={(hash) => {
-              handleSelectCommit(hash);
-              setActiveLens('live');
-            }}
-            onOpenWorktree={() => {
-              handleSelectWorkTree();
-              setActiveLens('live');
-            }}
-            onChangeLens={setActiveLens}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <OutboxLens
+              repoId={selectedRepo}
+              refs={refs}
+              onSelectCommit={(hash) => {
+                handleSelectCommit(hash);
+                setActiveLens('live');
+              }}
+              onOpenWorktree={() => {
+                handleSelectWorkTree();
+                setActiveLens('live');
+              }}
+              onChangeLens={setActiveLens}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'digest' && mode === "detail" && selectedRepo && (
         <div className="flex-1 overflow-hidden" id="lens-panel-digest" role="tabpanel" aria-labelledby="lens-tab-digest">
-          <DigestLens
-            repoId={selectedRepo}
-            onSelectCommit={(hash) => {
-              handleSelectCommit(hash);
-              setActiveLens('live');
-            }}
-            onOpenFileHistory={submitFileHistoryPath}
-            onChangeLens={setActiveLens}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <DigestLens
+              repoId={selectedRepo}
+              onSelectCommit={(hash) => {
+                handleSelectCommit(hash);
+                setActiveLens('live');
+              }}
+              onOpenFileHistory={submitFileHistoryPath}
+              onChangeLens={setActiveLens}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'rescue' && mode === "detail" && (
         <div className="flex-1 overflow-hidden" id="lens-panel-rescue" role="tabpanel" aria-labelledby="lens-tab-rescue">
-          <RewriteRescuePanel
-            repoId={selectedRepo}
-            entries={rewriteRescueEntries}
-            eventStatus={eventStatus}
-            onChangeLens={setActiveLens}
-            refs={refs}
-            onInspectCommit={(hash) => {
-              handleSelectCommit(hash);
-              setActiveLens('live');
-            }}
-            onBrowseAt={(hash, label) => openBrowser("files", { commit: hash, label })}
-            onCompareWithHead={(hash) => {
-              setCompareBase("HEAD");
-              setCompareTarget(hash);
-              setActiveLens('live');
-            }}
-            onClear={(repoId) => {
-              if (repoId === selectedRepo) {
-                setRewriteRescueEntries([]);
-              }
-            }}
-            onDelete={(repoId, previousHash, observedAt) => {
-              if (repoId === selectedRepo) {
-                setRewriteRescueEntries((prev) =>
-                  prev.filter(
-                    (e) =>
-                      !(
-                        e.previousHash === previousHash &&
-                        e.observedAt === observedAt
-                      ),
-                  ),
-                );
-              }
-            }}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <RewriteRescuePanel
+              repoId={selectedRepo}
+              entries={rewriteRescueEntries}
+              eventStatus={eventStatus}
+              onChangeLens={setActiveLens}
+              refs={refs}
+              onInspectCommit={(hash) => {
+                handleSelectCommit(hash);
+                setActiveLens('live');
+              }}
+              onBrowseAt={(hash, label) => openBrowser("files", { commit: hash, label })}
+              onCompareWithHead={(hash) => {
+                setCompareBase("HEAD");
+                setCompareTarget(hash);
+                setActiveLens('live');
+              }}
+              onClear={(repoId) => {
+                if (repoId === selectedRepo) {
+                  setRewriteRescueEntries([]);
+                }
+              }}
+              onDelete={(repoId, previousHash, observedAt) => {
+                if (repoId === selectedRepo) {
+                  setRewriteRescueEntries((prev) =>
+                    prev.filter(
+                      (e) =>
+                        !(
+                          e.previousHash === previousHash &&
+                          e.observedAt === observedAt
+                        ),
+                    ),
+                  );
+                }
+              }}
+            />
+          </Suspense>
         </div>
       )}
       {activeLens === 'symbol' && mode === "detail" && selectedRepo && (
@@ -2285,11 +2329,13 @@ export default function App() {
       )}
       {flightRecorderEnabled && activeLens === 'flight' && mode === "detail" && selectedRepo && (
         <div className="flex-1 overflow-hidden" id="lens-panel-flight" role="tabpanel" aria-labelledby="lens-tab-flight">
-          <RefFlightRecorderLens
-            repoId={selectedRepo}
-            refreshKey={flightRefreshKey}
-            onChangeLens={setActiveLens}
-          />
+          <Suspense fallback={<LensLoading />}>
+            <RefFlightRecorderLens
+              repoId={selectedRepo}
+              refreshKey={flightRefreshKey}
+              onChangeLens={setActiveLens}
+            />
+          </Suspense>
         </div>
       )}
       {/* Live lens: render the full existing layout. Hidden (not unmounted) when inactive
