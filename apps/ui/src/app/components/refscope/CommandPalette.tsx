@@ -7,6 +7,8 @@ import {
   FileSearch,
   FolderOpen,
   FolderTree,
+  PackageCheck,
+  Users,
   GitBranch,
   Hash,
   History,
@@ -73,6 +75,8 @@ export function CommandPalette({
   onOpenFileHistory,
   onBrowseFiles,
   onSearchCode,
+  onShowOwners,
+  onOpenReleases,
   onShowShortcuts,
   mode,
   onSetMode,
@@ -127,6 +131,10 @@ export function CommandPalette({
   // Repository browser at the selected commit (or the selected ref's tip).
   onBrowseFiles?: () => void;
   onSearchCode?: () => void;
+  /** Repository browser on the Owners tab (who changed a folder or file). */
+  onShowOwners?: () => void;
+  /** Releases dialog (tags reachable from the timeline's ref). */
+  onOpenReleases?: () => void;
   // Opens the keyboard-shortcut help dialog. Surfaced here so users who reach
   // for the palette can still find the shortcut list without knowing the `?` key.
   onShowShortcuts: () => void;
@@ -376,6 +384,32 @@ export function CommandPalette({
             },
           ]
         : []),
+      ...(onShowOwners
+        ? [
+            {
+              icon: Users,
+              label: "Who changed this? Owners of a folder or file…",
+              hint: `o · ${browserTarget}`,
+              run: () => {
+                onShowOwners();
+                onClose();
+              },
+            },
+          ]
+        : []),
+      ...(onOpenReleases
+        ? [
+            {
+              icon: PackageCheck,
+              label: "Releases, unreleased changes & release notes…",
+              hint: "Shift+L",
+              run: () => {
+                onOpenReleases();
+                onClose();
+              },
+            },
+          ]
+        : []),
     ];
 
     const shortcutHelpCommand: PaletteCommand = {
@@ -498,6 +532,8 @@ export function CommandPalette({
     onOpenFileHistory,
     onBrowseFiles,
     onSearchCode,
+    onShowOwners,
+    onOpenReleases,
     onPathChange,
     onSearchChange,
     onSearchPatternChange,

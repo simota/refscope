@@ -358,6 +358,84 @@ export async function fetchFileContent(
   );
 }
 
+// ─── Insights (releases / path owners) ─────────────────────────────────────
+
+export type ReleaseTagRef = { name: string; shortName: string; commit: string };
+
+export type ReleaseRangeCounts = {
+  /** Commits in the range; a lower bound when `truncated`. */
+  commitCount: number;
+  contributorCount: number;
+  truncated: boolean;
+};
+
+export type ReleaseEntry = ReleaseTagRef &
+  ReleaseRangeCounts & {
+    annotated: boolean;
+    /** Tagger date (annotated) or commit date (lightweight). */
+    taggedAt: string | null;
+    committedAt: string | null;
+    /** Next older tag reachable from the same ref; null for the first release. */
+    previous: ReleaseTagRef | null;
+  };
+
+export type ReleasesResponse = {
+  ref: string;
+  commit: string;
+  releases: ReleaseEntry[];
+  /** Commits on `ref` past its newest tag; null when no tag is reachable. */
+  unreleased: (ReleaseRangeCounts & { since: ReleaseTagRef }) | null;
+  totalTags: number;
+  /** Tags not reachable from `ref` (other release lines). */
+  otherTagCount: number;
+  truncated: boolean;
+  rangeCap: number;
+};
+
+/** Tags reachable from `ref` with per-release counts (GET /releases). */
+export async function fetchReleases(repoId: string, ref: string, signal?: AbortSignal) {
+  const params = new URLSearchParams({ ref: ref || "HEAD" });
+  return getJson<ReleasesResponse>(`/api/repos/${encodeURIComponent(repoId)}/releases?${params}`, signal);
+}
+
+export type PathOwner = {
+  author: string;
+  authorEmail: string;
+  /** Other names committed with the same e-mail. */
+  authorAliases: string[];
+  commits: number;
+  /** Commits within `recentWindowDays` before the browsed commit. */
+  recentCommits: number;
+  added: number;
+  deleted: number;
+  binaryChanges: number;
+  firstChangedAt: string | null;
+  lastChangedAt: string | null;
+};
+
+export type PathOwnersResponse = {
+  commit: string;
+  path: string;
+  authors: PathOwner[];
+  authorCount: number;
+  scannedCommits: number;
+  truncated: boolean;
+  commitCap: number;
+  /** Derived: fewest authors who together made at least half the commits. */
+  majorityAuthors: number;
+  firstChangedAt: string | null;
+  lastChangedAt: string | null;
+  recentWindowDays: number;
+  recentSince: string;
+};
+
+/** Who changed `path` ("" = whole repository) in `<commit>`'s history (GET /paths/owners). */
+export async function fetchPathOwners(repoId: string, commit: string, path: string, signal?: AbortSignal) {
+  const params = new URLSearchParams({ commit });
+  if (path) params.set("path", path);
+  return getJson<PathOwnersResponse>(`/api/repos/${encodeURIComponent(repoId)}/paths/owners?${params}`, signal);
+}
+
 // ─── Repository explorer (tree / code search / reflog) ─────────────────────
 
 export type TreeEntry = {

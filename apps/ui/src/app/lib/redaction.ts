@@ -37,7 +37,7 @@ const TEXT_KEYS = new Set(["subject", "body", "message", "summary"]);
 const TEXT_ARRAY_KEYS = new Set(["sampleSubjects"]);
 
 /** Keys holding an array of display names. */
-const NAME_ARRAY_KEYS = new Set(["authors", "committers"]);
+const NAME_ARRAY_KEYS = new Set(["authors", "committers", "authorAliases"]);
 
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const TRAILER_PATTERN =

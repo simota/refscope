@@ -6,6 +6,9 @@
  *     whole tree (GET /tree/paths, ranked client-side).
  *   - Search code: `git grep` over that revision's tree (GET /code-search),
  *     results grouped per file.
+ *   - Owners: who changed a folder or file in that revision's history
+ *     (GET /paths/owners) — commits, churn, recency — with a jump to that
+ *     author's commits on the path in the timeline.
  * Opening a file (or a search hit) hands off to the existing file viewer,
  * which already provides blame, line tracing and file history.
  *
@@ -13,12 +16,15 @@
  * with the folder, finder query and search results intact.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronRight, File, FileSearch, Folder, FolderGit2, FolderTree, History, Link2, Search } from "lucide-react";
+import { ChevronRight, File, FileSearch, Folder, FolderGit2, FolderTree, History, Link2, Search, Users } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import {
+  fetchPathOwners,
   fetchTree,
+  isRedactionEnabled,
   fetchTreePaths,
   searchCode,
+  type PathOwnersResponse,
   type CodeSearchMatch,
   type CodeSearchMode,
   type CodeSearchResponse,
@@ -33,6 +39,8 @@ import {
   pathBreadcrumbs,
   rankPaths,
 } from "../../lib/repoExplorer";
+import { activeOwners, formatCount, ownerFilterValue, ownerShare, ownersSummary } from "../../lib/insights";
+import { shortAge } from "../../lib/blame";
 
 export type BrowserRevision = {
   /** Full commit object ID. */
@@ -41,7 +49,7 @@ export type BrowserRevision = {
   label: string;
 };
 
-export type BrowserTab = "files" | "search";
+export type BrowserTab = "files" | "search" | "owners";
 
 type Async<T> =
   | { kind: "idle" }
@@ -61,6 +69,7 @@ export function RepoBrowserDialog({
   onClose,
   onOpenFile,
   onOpenHistory,
+  onShowAuthorCommits,
 }: {
   repoId: string;
   open: boolean;
@@ -72,6 +81,8 @@ export function RepoBrowserDialog({
   onClose: () => void;
   onOpenFile: (path: string, commit: string, line?: number) => void;
   onOpenHistory?: (path: string) => void;
+  /** Filter the timeline to `author` (an e-mail or name) on `path` ("" = everywhere). */
+  onShowAuthorCommits?: (author: string, path: string) => void;
 }) {
   const commit = revision?.commit ?? "";
   const [tab, setTab] = useState<BrowserTab>(requestedTab.tab);
@@ -92,13 +103,32 @@ export function RepoBrowserDialog({
   const [results, setResults] = useState<Async<CodeSearchResponse>>({ kind: "idle" });
   const searchAbortRef = useRef<AbortController | null>(null);
 
+  // ── Owners tab state ── (the path follows the folder being browsed until
+  // a file or folder is picked explicitly)
+  const [ownerPath, setOwnerPath] = useState<string | null>(null);
+  const [owners, setOwners] = useState<Async<PathOwnersResponse>>({ kind: "idle" });
+  const effectiveOwnerPath = ownerPath ?? dir;
+
   // A different revision (or repository) starts from the root with no results.
   useEffect(() => {
     setDir("");
     setPaths({ kind: "idle" });
     setResults({ kind: "idle" });
+    setOwnerPath(null);
     searchAbortRef.current?.abort();
   }, [repoId, commit]);
+
+  useEffect(() => {
+    if (!open || tab !== "owners" || !commit || !repoId) return;
+    const ctrl = new AbortController();
+    setOwners({ kind: "loading" });
+    fetchPathOwners(repoId, commit, effectiveOwnerPath, ctrl.signal)
+      .then((value) => !ctrl.signal.aborted && setOwners({ kind: "ready", value }))
+      .catch((err: unknown) => {
+        if (!ctrl.signal.aborted) setOwners({ kind: "error", message: errorMessage(err) });
+      });
+    return () => ctrl.abort();
+  }, [open, tab, repoId, commit, effectiveOwnerPath]);
 
   useEffect(() => {
     if (!open || !commit || !repoId) return;
@@ -158,6 +188,11 @@ export function RepoBrowserDialog({
   const searchInFolder = useCallback((folder: string) => {
     setScope(folder);
     setTab("search");
+  }, []);
+
+  const showOwners = useCallback((target: string) => {
+    setOwnerPath(target);
+    setTab("owners");
   }, []);
 
   const onFinderKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -220,8 +255,11 @@ export function RepoBrowserDialog({
             <TabButton id="files" active={tab === "files"} onSelect={setTab} position="first">
               <FolderTree size={12} aria-hidden /> Files
             </TabButton>
-            <TabButton id="search" active={tab === "search"} onSelect={setTab} position="last">
+            <TabButton id="search" active={tab === "search"} onSelect={setTab} position="middle">
               <FileSearch size={12} aria-hidden /> Search code
+            </TabButton>
+            <TabButton id="owners" active={tab === "owners"} onSelect={setTab} position="last">
+              <Users size={12} aria-hidden /> Owners
             </TabButton>
           </div>
           <label className="flex items-center gap-1.5 ml-auto" style={{ fontSize: 12, color: "var(--rs-text-secondary)" }}>
@@ -247,7 +285,7 @@ export function RepoBrowserDialog({
           </label>
         </div>
 
-        <div className="min-h-0 flex flex-col gap-2" role="tabpanel" aria-label={tab === "files" ? "Files" : "Search code"}>
+        <div className="min-h-0 flex flex-col gap-2" role="tabpanel" aria-label={tab === "files" ? "Files" : tab === "search" ? "Search code" : "Owners"}>
           {tab === "files" ? (
             <>
               <div className="relative">
@@ -279,9 +317,21 @@ export function RepoBrowserDialog({
                   onOpenFile={(p) => onOpenFile(p, commit)}
                   onOpenHistory={onOpenHistory}
                   onSearchInFolder={searchInFolder}
+                  onShowOwners={showOwners}
                 />
               )}
             </>
+          ) : tab === "owners" ? (
+            <OwnersView
+              path={effectiveOwnerPath}
+              state={owners}
+              onPathChange={setOwnerPath}
+              onBrowse={(target) => {
+                setDir(target);
+                setTab("files");
+              }}
+              onShowAuthorCommits={onShowAuthorCommits}
+            />
           ) : (
             <>
               <form onSubmit={runSearch} className="flex flex-wrap items-center gap-2">
@@ -342,7 +392,7 @@ function TabButton({
   id: BrowserTab;
   active: boolean;
   onSelect: (tab: BrowserTab) => void;
-  position: "first" | "last";
+  position: "first" | "middle" | "last";
   children: ReactNode;
 }) {
   return (
@@ -354,8 +404,12 @@ function TabButton({
       onClick={() => onSelect(id)}
       style={{
         borderRadius:
-          position === "first" ? "var(--rs-radius-sm) 0 0 var(--rs-radius-sm)" : "0 var(--rs-radius-sm) var(--rs-radius-sm) 0",
-        marginLeft: position === "last" ? -1 : 0,
+          position === "first"
+            ? "var(--rs-radius-sm) 0 0 var(--rs-radius-sm)"
+            : position === "last"
+              ? "0 var(--rs-radius-sm) var(--rs-radius-sm) 0"
+              : 0,
+        marginLeft: position === "first" ? 0 : -1,
         color: active ? "var(--rs-text-primary)" : undefined,
         background: active ? "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 22%)" : undefined,
         borderColor: active ? "color-mix(in oklab, var(--rs-border), var(--rs-accent) 50%)" : undefined,
@@ -373,6 +427,7 @@ function DirectoryView({
   onOpenFile,
   onOpenHistory,
   onSearchInFolder,
+  onShowOwners,
 }: {
   dir: string;
   state: Async<TreeResponse>;
@@ -380,6 +435,7 @@ function DirectoryView({
   onOpenFile: (path: string) => void;
   onOpenHistory?: (path: string) => void;
   onSearchInFolder: (dir: string) => void;
+  onShowOwners: (path: string) => void;
 }) {
   const crumbs = pathBreadcrumbs(dir);
   return (
@@ -409,6 +465,15 @@ function DirectoryView({
           style={{ fontFamily: "var(--rs-sans)" }}
         >
           <FileSearch size={12} aria-hidden /> Search here
+        </button>
+        <button
+          type="button"
+          className="rs-compact-button rs-compact-button--icon"
+          onClick={() => onShowOwners(dir)}
+          title={dir ? `Who changed ${dir}` : "Who changed the repository"}
+          style={{ fontFamily: "var(--rs-sans)" }}
+        >
+          <Users size={12} aria-hidden /> Owners
         </button>
       </nav>
       <div className="min-h-0 overflow-auto flex-1" style={listBoxStyle}>
@@ -455,6 +520,18 @@ function DirectoryView({
                     <span style={metaStyle}>{entry.type === "symlink" ? "symlink" : formatBytes(entry.size)}</span>
                   </button>
                 )}
+                {entry.type === "file" || entry.type === "dir" ? (
+                  <button
+                    type="button"
+                    className="rs-compact-button rs-compact-button--icon"
+                    onClick={() => onShowOwners(entry.path)}
+                    aria-label={`Owners of ${entry.path}`}
+                    title="Who changed this"
+                    style={{ marginRight: entry.type === "file" && onOpenHistory ? 2 : 6 }}
+                  >
+                    <Users size={12} aria-hidden />
+                  </button>
+                ) : null}
                 {entry.type === "file" && onOpenHistory ? (
                   <button
                     type="button"
@@ -627,6 +704,166 @@ function RangeHighlighted({ text, ranges }: { text: string; ranges: Array<[numbe
   });
   if (at < text.length) parts.push(<span key="tail">{text.slice(at)}</span>);
   return <>{parts}</>;
+}
+
+function OwnersView({
+  path,
+  state,
+  onPathChange,
+  onBrowse,
+  onShowAuthorCommits,
+}: {
+  path: string;
+  state: Async<PathOwnersResponse>;
+  onPathChange: (path: string) => void;
+  onBrowse: (dir: string) => void;
+  onShowAuthorCommits?: (author: string, path: string) => void;
+}) {
+  const [draft, setDraft] = useState(path);
+  useEffect(() => setDraft(path), [path]);
+  const nowMs = Date.now();
+  const crumbs = pathBreadcrumbs(path);
+  const result = state.kind === "ready" ? state.value : null;
+  const active = result ? activeOwners(result.authors).length : 0;
+  return (
+    <div className="min-h-0 flex flex-col gap-1.5 flex-1">
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onPathChange(draft.trim().replace(/^\/+|\/+$/g, ""));
+        }}
+      >
+        <input
+          type="text"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="Path (empty = whole repository), e.g. apps/api/src"
+          aria-label="File or folder to show owners for"
+          maxLength={400}
+          style={{ ...inputStyle, flex: "1 1 260px", fontFamily: "var(--rs-mono)" }}
+        />
+        <button type="submit" className="rs-compact-button rs-compact-button--icon">
+          <Users size={12} aria-hidden /> Show owners
+        </button>
+      </form>
+      <nav aria-label="Owner scope" className="flex flex-wrap items-center gap-0.5" style={{ fontSize: 12, fontFamily: "var(--rs-mono)" }}>
+        <button type="button" className="rs-compact-button rs-compact-button--icon" onClick={() => onPathChange("")} aria-current={path === "" ? "page" : undefined}>
+          /
+        </button>
+        {crumbs.map((crumb, i) => (
+          <span key={crumb.path} className="inline-flex items-center gap-0.5">
+            <ChevronRight size={11} aria-hidden style={{ color: "var(--rs-text-muted)" }} />
+            <button
+              type="button"
+              className="rs-compact-button rs-compact-button--icon"
+              onClick={() => onPathChange(crumb.path)}
+              aria-current={i === crumbs.length - 1 ? "page" : undefined}
+            >
+              {crumb.name}
+            </button>
+          </span>
+        ))}
+      </nav>
+      <div className="min-h-0 overflow-auto flex-1" style={listBoxStyle}>
+        {state.kind === "loading" || state.kind === "idle" ? (
+          <Status>Reading history…</Status>
+        ) : state.kind === "error" ? (
+          <Status role="alert">{state.message}</Status>
+        ) : (
+          <>
+            <p aria-live="polite" style={{ ...metaStyle, marginLeft: 0, margin: "8px 10px 4px", fontSize: 12, color: "var(--rs-text-secondary)" }}>
+              {ownersSummary(state.value)}
+              {state.value.scannedCommits > 0 ? (
+                <>
+                  {" "}
+                  {active === 0
+                    ? `Nobody changed it in the ${state.value.recentWindowDays} days before this revision.`
+                    : `${active} active in the ${state.value.recentWindowDays} days before this revision.`}
+                </>
+              ) : null}
+            </p>
+            {state.value.scannedCommits === 0 && path ? (
+              <Status>
+                Check the spelling, or{" "}
+                <button type="button" className="rs-compact-button" onClick={() => onBrowse(parentDirectory(path))}>
+                  browse the parent folder
+                </button>
+                .
+              </Status>
+            ) : null}
+            <ul aria-label={`Authors who changed ${path || "the repository"}`} style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {state.value.authors.map((owner, index) => {
+                const share = ownerShare(owner, state.value.scannedCommits);
+                const recent = owner.recentCommits > 0;
+                return (
+                  <li
+                    key={`${index}:${owner.author}`}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1"
+                    style={{ padding: "6px 10px", fontSize: 12, borderBottom: "1px solid color-mix(in oklab, var(--rs-border), transparent 50%)" }}
+                  >
+                    <span className="min-w-0" style={{ flex: "1 1 160px" }}>
+                      <span className="block truncate" style={{ fontWeight: 600 }} title={owner.authorEmail ? `${owner.author} <${owner.authorEmail}>` : owner.author}>
+                        {owner.author || "(no name)"}
+                      </span>
+                      {(owner.authorAliases ?? []).length > 0 ? (
+                        <span className="block truncate" style={{ fontSize: 11, color: "var(--rs-text-muted)" }} title="Other names committed with the same e-mail">
+                          also as {(owner.authorAliases ?? []).join(", ")}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5" style={{ flex: "0 0 150px" }} title={`${owner.commits} of ${state.value.scannedCommits} commits`}>
+                      <span
+                        aria-hidden
+                        style={{ display: "inline-block", width: 60, height: 6, borderRadius: 3, background: "color-mix(in oklab, var(--rs-border), transparent 30%)", overflow: "hidden" }}
+                      >
+                        <span style={{ display: "block", width: `${Math.max(2, share)}%`, height: "100%", background: "var(--rs-accent)" }} />
+                      </span>
+                      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                        {owner.commits.toLocaleString("en-US")} commit{owner.commits === 1 ? "" : "s"} · {share}%
+                      </span>
+                    </span>
+                    <span style={{ fontFamily: "var(--rs-mono)", fontSize: 11, flex: "0 0 auto" }} title="Lines added / deleted in this path">
+                      <span style={{ color: "var(--rs-git-added)" }}>+{formatCount(owner.added, false)}</span>{" "}
+                      <span style={{ color: "var(--rs-git-deleted)" }}>−{formatCount(owner.deleted, false)}</span>
+                    </span>
+                    <span style={{ fontSize: 11, color: "var(--rs-text-muted)", flex: "0 0 auto" }} title={owner.lastChangedAt ?? undefined}>
+                      last {owner.lastChangedAt ? `${shortAge(owner.lastChangedAt, nowMs)} ago` : "—"}
+                    </span>
+                    {recent ? (
+                      <span className="rs-chip" style={{ fontSize: 10 }} title={`${owner.recentCommits} commit(s) in the ${state.value.recentWindowDays} days before this revision`}>
+                        active · {owner.recentCommits}
+                      </span>
+                    ) : null}
+                    {onShowAuthorCommits ? (
+                      <button
+                        type="button"
+                        className="rs-compact-button rs-compact-button--icon"
+                        onClick={() => onShowAuthorCommits(ownerFilterValue(owner, isRedactionEnabled()), path)}
+                        aria-label={`Show commits by ${owner.author} on ${path || "the repository"} in the timeline`}
+                        title="Filter the timeline to this author on this path"
+                      >
+                        <History size={12} aria-hidden /> Commits
+                      </button>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+            {state.value.authorCount > state.value.authors.length ? (
+              <Status>
+                Showing the top {state.value.authors.length} of {state.value.authorCount} authors.
+              </Status>
+            ) : null}
+            {state.value.truncated ? (
+              <Status>Only the newest {state.value.commitCap.toLocaleString("en-US")} commits were read — older contributors may be missing.</Status>
+            ) : null}
+            <Status>Counted from non-merge commits that touched this path; a commit is not line ownership. Derived from Git history, read-only.</Status>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function Status({ children, role }: { children: ReactNode; role?: "alert" }) {

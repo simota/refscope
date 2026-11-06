@@ -13,6 +13,7 @@ import {
   type BrowserRevision,
   type BrowserTab,
 } from "./components/refscope/RepoBrowserDialog";
+import { ReleasesDialog } from "./components/refscope/ReleasesDialog";
 import {
   FileHistoryPrompt,
   validatePath,
@@ -1557,7 +1558,26 @@ export default function App() {
   }, []);
   useEffect(() => {
     setBrowserRevision(null);
+    setReleasesOpen(false);
   }, [selectedRepo]);
+  // Releases dialog (tags reachable from the timeline's ref). Reviewing a
+  // release hands the pair to the compare review on the Live lens.
+  const [releasesOpen, setReleasesOpen] = useState(false);
+  const openReleaseReview = useCallback((base: string, target: string) => {
+    setReleasesOpen(false);
+    setCompareBase(base);
+    setCompareTarget(target);
+    setActiveLens("live");
+  }, []);
+  // Owners tab → timeline: one author's commits on one path.
+  const showAuthorCommitsOnPath = useCallback((authorName: string, ownerPath: string) => {
+    setBrowserRevision(null);
+    setSearch("");
+    setAuthor(authorName);
+    setPath(ownerPath);
+    setSelected("");
+    setActiveLens("live");
+  }, []);
   // Deep-link sync: mirror repo / ref / selected commit / path filter into
   // the URL (replaceState — no history entry per click), so a reload or a
   // copied link reopens the same view. Unrelated params (fleet, flight) stay.
@@ -1956,6 +1976,22 @@ export default function App() {
         },
       },
       {
+        combo: "o",
+        description: "Who changed this folder (owners) at the selected commit",
+        category: "Navigation",
+        run: () => {
+          if (mode === "detail") openBrowser("owners");
+        },
+      },
+      {
+        combo: "Shift+L",
+        description: "Releases: tags, unreleased changes, release notes",
+        category: "Navigation",
+        run: () => {
+          if (mode === "detail") setReleasesOpen(true);
+        },
+      },
+      {
         combo: "Mod+B",
         description: "Toggle branch sidebar",
         category: "View",
@@ -2050,6 +2086,7 @@ export default function App() {
     fileHistoryPromptOpen ||
     Boolean(fileHistoryPath) ||
     browserRevision !== null ||
+    releasesOpen ||
     fileViewerTarget !== null;
 
   useKeyboardShortcuts(shortcutBindings, shortcutsSuppressed);
@@ -2540,6 +2577,7 @@ export default function App() {
             driftBaseShortName={driftBaseShortName}
             onSetRefAsCompareBase={setCompareBase}
             onSetRefAsCompareTarget={setCompareTarget}
+            onOpenReleases={selectedRepo ? () => setReleasesOpen(true) : undefined}
             stashes={stashes}
             worktrees={worktrees}
             submodules={submodules}
@@ -2683,6 +2721,25 @@ export default function App() {
           setBrowserRevision(null);
           submitFileHistoryPath(filePath);
         }}
+        onShowAuthorCommits={showAuthorCommitsOnPath}
+      />
+      <ReleasesDialog
+        repoId={selectedRepo}
+        open={releasesOpen && Boolean(selectedRepo)}
+        refs={refs}
+        initialRef={selectedRef && !selectedRef.startsWith("refs/tags/") ? selectedRef : "HEAD"}
+        onClose={() => setReleasesOpen(false)}
+        onReview={openReleaseReview}
+        onBrowse={(commitHash, label) => {
+          setReleasesOpen(false);
+          openBrowser("files", { commit: commitHash, label });
+        }}
+        onShowRef={(refName) => {
+          setReleasesOpen(false);
+          setSelectedRef(refName);
+          setSelected("");
+          setActiveLens("live");
+        }}
       />
       <FileViewerDialog
         repoId={selectedRepo}
@@ -2750,6 +2807,8 @@ export default function App() {
         onOpenFileHistory={openFileHistoryPrompt}
         onBrowseFiles={mode === "detail" && selectedRepo ? () => openBrowser("files") : undefined}
         onSearchCode={mode === "detail" && selectedRepo ? () => openBrowser("search") : undefined}
+        onShowOwners={mode === "detail" && selectedRepo ? () => openBrowser("owners") : undefined}
+        onOpenReleases={mode === "detail" && selectedRepo ? () => setReleasesOpen(true) : undefined}
         onShowShortcuts={() => setHelpOpen(true)}
         mode={mode}
         onSetMode={setMode}

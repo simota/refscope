@@ -5,6 +5,7 @@ import { GitCommandError, MAX_GIT_OUTPUT_BYTES, runGit } from "./gitRunner.js";
 import { addRepository as configAddRepository, removeRepository as configRemoveRepository } from "./config.js";
 import { classifyFileDiff } from "./structuralDiff.js";
 import { createExplorerMethods } from "./explorerService.js";
+import { createInsightMethods } from "./insightsService.js";
 import {
   isPublicFullRefName,
   isValidGitRef,
@@ -2843,6 +2844,7 @@ export function createGitService(config) {
 
     // Tree browser, code search, and reflog explorer (explorerService.js).
     ...createExplorerMethods(config),
+    ...createInsightMethods(config, { resolveCommitishRevision }),
 
     // Fleet probes. fleetService receives this object (server.js), so the
     // probes must be reachable through it, not only as module exports.
