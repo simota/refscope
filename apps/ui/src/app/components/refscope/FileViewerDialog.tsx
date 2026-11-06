@@ -56,6 +56,10 @@ export type FileViewerTarget = {
   /** Path on the parent side when the file was renamed in this commit. */
   beforePath?: string;
   side: "after" | "before";
+  /** Line to select and scroll to once the file loads (e.g. a code-search hit). */
+  line?: number;
+  /** Where the viewer was opened from; the browser has no parent side by design. */
+  origin?: "commit" | "browser";
 };
 
 // Whole-file Prism passes are synchronous; beyond this the viewer renders
@@ -99,7 +103,7 @@ export function FileViewerDialog({
   const [blame, setBlame] = useState<BlameState>({ kind: "off" });
 
   // Reset per-target state whenever a different file/commit is opened.
-  const targetKey = target ? `${target.commit}\0${target.path}\0${target.side}` : "";
+  const targetKey = target ? `${target.commit}\0${target.path}\0${target.side}\0${target.line ?? ""}` : "";
   useEffect(() => {
     setSide(target?.side ?? "after");
     setSelection(null);
@@ -135,6 +139,20 @@ export function FileViewerDialog({
   }, [repoId, revision, target, viewPath]);
 
   useEffect(() => () => traceAbortRef.current?.abort(), []);
+
+  // Jump to the requested line once the "after" side has loaded.
+  const jumpLine = target?.line;
+  const loadedFile = state.kind === "ready" ? state.file : null;
+  useEffect(() => {
+    if (!jumpLine || !loadedFile || side !== "after" || loadedFile.content == null) return;
+    setSelection({ start: jumpLine, end: jumpLine });
+    const frame = window.requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-file-viewer-line="${jumpLine}"]`)
+        ?.scrollIntoView({ block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [jumpLine, loadedFile, side]);
 
   // Blame follows the shown revision/path; it is fetched only while enabled.
   useEffect(() => {
@@ -288,7 +306,13 @@ export function FileViewerDialog({
               label="Before"
               position="last"
               disabled={!target?.parent}
-              title={target?.parent ? `Parent ${target.parent.slice(0, 7)}` : "Root commit has no parent"}
+              title={
+                target?.parent
+                  ? `Parent ${target.parent.slice(0, 7)}`
+                  : target?.origin === "browser"
+                    ? "Browsing a revision — open the file from a commit to compare with its parent"
+                    : "Root commit has no parent"
+              }
             />
           </div>
           <button
@@ -610,6 +634,7 @@ function FileLines({
           <div
             key={index}
             role="row"
+            data-file-viewer-line={lineNo}
             style={{
               display: "flex",
               background: isSelected

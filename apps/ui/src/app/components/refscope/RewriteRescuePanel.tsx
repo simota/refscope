@@ -7,6 +7,8 @@
  */
 
 import { useState, type ReactNode } from "react";
+import { ReflogExplorer } from "./ReflogExplorer";
+import type { GitRef } from "./data";
 import { AlertTriangle, ChevronDown, ChevronRight, Copy, Trash2 } from "lucide-react";
 import type { RewriteRescueEntry } from "../../rewriteStore";
 import {
@@ -54,6 +56,14 @@ export type RewriteRescuePanelProps = {
   eventStatus?: "connecting" | "connected" | "error";
   /** Navigate to another Lens (used by EmptyStateCard related links). */
   onChangeLens?: (lens: LensId) => void;
+  /** Refs for the reflog ref picker (local branches and remote-tracking refs). */
+  refs?: GitRef[];
+  /** Open a commit (possibly one no ref reaches any more) in the detail panel. */
+  onInspectCommit?: (hash: string) => void;
+  /** Open the repository browser at a commit. */
+  onBrowseAt?: (hash: string, label: string) => void;
+  /** Compare HEAD (base) with a commit (target). */
+  onCompareWithHead?: (hash: string) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -118,6 +128,18 @@ function RescueHelpContent(): ReactNode {
         ・スナップショットは<strong>refscope が接続中</strong>に発生した rewrite のみ記録されます
         (オフライン中に起きた rewrite は記録されません)<br />
         ・最大 <strong>{MAX_SNAPSHOTS}</strong> 件まで保持。新しい順に並び、上限超過時は古いものから自動で破棄されます
+      </div>
+
+      <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text-primary)" }}>
+        Reflog タブ
+      </div>
+      <div style={{ color: "var(--rs-text-secondary)", marginBottom: 8, lineHeight: 1.7 }}>
+        ・Git 自身の reflog (<code>git log --walk-reflogs</code>) を HEAD / ブランチ単位で表示します。
+        refscope 起動前の <code>reset --hard</code> / <code>rebase</code> / <code>commit --amend</code> も遡れます<br />
+        ・どのブランチ・タグ・リモート・HEAD からも到達できない commit に <strong>lost</strong>、
+        その操作で置き去りになった直前の tip に <strong>orphaned</strong> を表示します<br />
+        ・<strong>Lost work only</strong> で救出対象だけに絞り込み、commit を開く / ファイルを閲覧 /
+        HEAD と比較 / rescue branch コマンドをコピーできます
       </div>
 
       <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--rs-text-primary)" }}>
@@ -497,7 +519,14 @@ export function RewriteRescuePanel({
   onDelete,
   eventStatus,
   onChangeLens,
+  refs = [],
+  onInspectCommit,
+  onBrowseAt,
+  onCompareWithHead,
 }: RewriteRescuePanelProps) {
+  // The reflog reaches further back than what Refscope observed, so it is
+  // the better starting point when nothing has been observed yet.
+  const [view, setView] = useState<"observed" | "reflog">(() => (entries.length > 0 ? "observed" : "reflog"));
   function handleConfirmedClear() {
     clearRewriteSnapshots(repoId);
     onClear(repoId);
@@ -614,9 +643,53 @@ export function RewriteRescuePanel({
         </div>
       )}
 
+      {onInspectCommit ? (
+        <div
+          role="tablist"
+          aria-label="Rescue source"
+          className="flex items-center gap-1"
+          style={{ padding: "6px 12px", borderBottom: "1px solid var(--rs-border)", flexShrink: 0 }}
+        >
+          {(
+            [
+              ["observed", `Observed rewrites (${entries.length})`],
+              ["reflog", "Reflog"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={view === id}
+              className="rs-compact-button"
+              onClick={() => setView(id)}
+              style={{
+                color: view === id ? "var(--rs-text-primary)" : undefined,
+                background: view === id ? "color-mix(in oklab, var(--rs-bg-elevated), var(--rs-accent) 22%)" : undefined,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          <span style={{ marginLeft: 8, fontSize: 11, color: "var(--rs-text-muted)" }}>
+            {view === "reflog"
+              ? "Git's own record of every ref move — reaches back before Refscope started."
+              : "Rewrites Refscope saw while connected."}
+          </span>
+        </div>
+      ) : null}
+
       {/* Entry list or empty state */}
       <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px" }}>
-        {entries.length === 0 ? (
+        {view === "reflog" && onInspectCommit ? (
+          <ReflogExplorer
+            repoId={repoId}
+            refs={refs}
+            onInspectCommit={onInspectCommit}
+            onBrowseAt={onBrowseAt}
+            onCompareWithHead={onCompareWithHead}
+          />
+        ) : entries.length === 0 ? (
           <EmptyStateCard
             reason="no-rewrite-events"
             messages={RESCUE_EMPTY_MESSAGES}

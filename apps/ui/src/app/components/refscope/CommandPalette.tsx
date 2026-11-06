@@ -4,6 +4,7 @@ import {
   Eye,
   FileSearch,
   FolderOpen,
+  FolderTree,
   GitBranch,
   Hash,
   History,
@@ -64,6 +65,8 @@ export function CommandPalette({
   onShowWorkTree,
   onRefreshWorkTree,
   onOpenFileHistory,
+  onBrowseFiles,
+  onSearchCode,
   onShowShortcuts,
   mode,
   onSetMode,
@@ -110,6 +113,9 @@ export function CommandPalette({
   // Opens the file-history path-input prompt. Always available — the prompt
   // itself is the gate, so we don't gate the command on selection state.
   onOpenFileHistory: () => void;
+  // Repository browser at the selected commit (or the selected ref's tip).
+  onBrowseFiles?: () => void;
+  onSearchCode?: () => void;
   // Opens the keyboard-shortcut help dialog. Surfaced here so users who reach
   // for the palette can still find the shortcut list without knowing the `?` key.
   onShowShortcuts: () => void;
@@ -304,6 +310,38 @@ export function CommandPalette({
       },
     };
 
+    const browserTarget = selectedCommit
+      ? selectedCommit.shortHash ?? selectedCommit.hash.slice(0, 7)
+      : "ref tip";
+    const browserCommands: PaletteCommand[] = [
+      ...(onBrowseFiles
+        ? [
+            {
+              icon: FolderTree,
+              label: "Browse files / go to file…",
+              hint: `t · ${browserTarget}`,
+              run: () => {
+                onBrowseFiles();
+                onClose();
+              },
+            },
+          ]
+        : []),
+      ...(onSearchCode
+        ? [
+            {
+              icon: FileSearch,
+              label: "Search code (grep) at revision…",
+              hint: browserTarget,
+              run: () => {
+                onSearchCode();
+                onClose();
+              },
+            },
+          ]
+        : []),
+    ];
+
     const shortcutHelpCommand: PaletteCommand = {
       icon: Keyboard,
       label: "Show keyboard shortcuts",
@@ -401,6 +439,7 @@ export function CommandPalette({
       cvdCommand,
       liveCommand,
       fileHistoryCommand,
+      ...browserCommands,
       shortcutHelpCommand,
       ...workTreeCommands,
       ...diffFullscreenCommand,
@@ -419,6 +458,8 @@ export function CommandPalette({
     onAuthorChange,
     onClose,
     onOpenFileHistory,
+    onBrowseFiles,
+    onSearchCode,
     onPathChange,
     onSearchChange,
     onSearchPatternChange,
