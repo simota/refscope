@@ -1,3 +1,4 @@
+import type { ReflogAction } from "./lib/repoExplorer";
 import type {
   Commit,
   CommitDetail,
@@ -327,6 +328,108 @@ export async function fetchFileContent(
     `/api/repos/${encodeURIComponent(repoId)}/files/content?${params}`,
     signal,
   );
+}
+
+// ─── Repository explorer (tree / code search / reflog) ─────────────────────
+
+export type TreeEntry = {
+  name: string;
+  path: string;
+  type: "file" | "dir" | "symlink" | "submodule";
+  mode: string;
+  objectId: string;
+  size: number | null;
+};
+
+export type TreeResponse = {
+  commit: string;
+  path: string;
+  entries: TreeEntry[];
+  truncated: boolean;
+};
+
+/** One directory of `<commit>`'s tree (GET /tree); "" is the repository root. */
+export async function fetchTree(repoId: string, commit: string, path: string, signal?: AbortSignal) {
+  const params = new URLSearchParams({ commit });
+  if (path) params.set("path", path);
+  return getJson<TreeResponse>(`/api/repos/${encodeURIComponent(repoId)}/tree?${params}`, signal);
+}
+
+export type TreePathsResponse = { commit: string; paths: string[]; truncated: boolean };
+
+/** Every file path at `<commit>` (GET /tree/paths), for the go-to-file finder. */
+export async function fetchTreePaths(repoId: string, commit: string, signal?: AbortSignal) {
+  const params = new URLSearchParams({ commit });
+  return getJson<TreePathsResponse>(`/api/repos/${encodeURIComponent(repoId)}/tree/paths?${params}`, signal);
+}
+
+export type CodeSearchMode = "fixed" | "regex";
+
+export type CodeSearchMatch = { path: string; line: number; text: string; clipped: boolean };
+
+export type CodeSearchResponse = {
+  commit: string;
+  query: string;
+  mode: CodeSearchMode;
+  ignoreCase: boolean;
+  path: string;
+  matches: CodeSearchMatch[];
+  fileCount: number;
+  truncated: boolean;
+  perFileLimit: number;
+};
+
+/** `git grep` over `<commit>`'s tree (GET /code-search). */
+export async function searchCode(
+  repoId: string,
+  options: { commit: string; query: string; mode: CodeSearchMode; ignoreCase: boolean; path?: string; limit?: number },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ commit: options.commit, q: options.query, mode: options.mode });
+  if (options.ignoreCase) params.set("ignoreCase", "1");
+  if (options.path) params.set("path", options.path);
+  if (options.limit) params.set("limit", String(options.limit));
+  return getJson<CodeSearchResponse>(`/api/repos/${encodeURIComponent(repoId)}/code-search?${params}`, signal);
+}
+
+export type ReflogEntry = {
+  index: number;
+  selector: string;
+  hash: string;
+  previousHash: string | null;
+  parents: string[];
+  author: string;
+  authorDate: string;
+  subject: string;
+  message: string;
+  action: ReflogAction;
+  rewrites: boolean;
+  actor: string;
+  movedAt: string | null;
+  /** false: reachable from no branch, tag, remote-tracking ref, or HEAD. null: unknown. */
+  reachable: boolean | null;
+  previousReachable: boolean | null;
+};
+
+export type ReflogResponse = {
+  ref: string;
+  entries: ReflogEntry[];
+  hasMore: boolean;
+  skip: number;
+  limit: number;
+  lostCount: number;
+};
+
+/** A ref's reflog, newest first (GET /reflog). `ref` is HEAD or a full refs/heads|remotes name. */
+export async function fetchReflog(
+  repoId: string,
+  options: { ref: string; limit?: number; skip?: number },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ ref: options.ref });
+  if (options.limit) params.set("limit", String(options.limit));
+  if (options.skip) params.set("skip", String(options.skip));
+  return getJson<ReflogResponse>(`/api/repos/${encodeURIComponent(repoId)}/reflog?${params}`, signal);
 }
 
 export type BlameCommit = {

@@ -58,6 +58,8 @@ Full options and the CLI security model are in [`apps/cli/README.md`](apps/cli/R
 - **Sidebar with the full ref surface** — branches, tags, remote-tracking refs, pinned refs, stashes, linked worktrees, submodules, and an in-progress banner for active rebases / merges / cherry-picks.
 - **Compare bar with review workbench** — pin a base ref/commit and a target ref to see ahead/behind counts plus copyable `git log` / `diff --stat` / `diff` commands with revisions kept as separate tokens. **Review changes** opens the commits on each side (click one to inspect it), the changed-file list, and the range diff — either *since merge base* (the pull-request view, `base...target`) or the *direct* tree difference — and exports a Markdown report grouped by conventional-commit type (release-notes / PR-description draft). The compare pair is part of the URL, so a review can be shared as a link.
 - **Realtime updates with pause** — typed SSE events drive a calm timeline that never auto-scrolls; pause queues new observations until you resume. History rewrites are rendered as an event-driven alert list with the previous tip, current tip, observed time, and detection source kept separate from the interpretation, and are also retained in the `Rescue` lens for later recovery.
+- **Repository browser at any revision** (`t`, or the folder icon on a commit) — walk the tree as it was at the selected commit, a ref tip, or a reflog entry; "go to file" fuzzy-finds across every path; files open in the file viewer (blame, line trace, history). **Search code** (`Cmd/Ctrl+Shift+F`) runs `git grep` over that revision's tree — fixed text or extended regex, case toggle, optional path scope — and each hit opens the viewer at the matching line. Committed objects only; the working tree is never read.
+- **Reflog explorer** (Rescue lens → *Reflog*) — the HEAD / branch / remote-tracking reflog as Git recorded it, so moves from before Refscope started (`reset --hard`, `rebase`, `commit --amend`) are covered. Each tip that no branch, tag, remote-tracking ref, or HEAD reaches any more is marked *lost* (and the move that left it behind *orphaned*); *Lost work only* narrows to those, with inspect / browse / compare-with-HEAD and a copyable `git branch rescue/... <hash>` command.
 - **Command palette** (`Cmd/Ctrl+K`) — operates on the same live ref/commit state as the page, and exposes pause, copy current hash, clear filters, and ref switching.
 - **Read-only right-click menus and global keyboard shortcuts** for refs, commits, files, and the diff viewer.
 
@@ -250,6 +252,20 @@ Read-only endpoints (none of them write to a repository):
   at that commit: per-line commit attribution plus each commit's author, time and summary.
   Only committed objects are read; `--no-textconv` and `--no-ignore-revs-file` keep repo
   config out of the result. Files over 1 MiB (413) and binary files (422) are refused
+- `GET /api/repos/:repoId/tree?commit=<full hash>&path=<dir>` — one directory of the
+  commit's tree (`ls-tree -l`): name, path, `file|dir|symlink|submodule`, size. Directories
+  first; capped at 5000 entries with `truncated`
+- `GET /api/repos/:repoId/tree/paths?commit=<full hash>` — every file path at the commit
+  (for go-to-file), capped at 100,000 paths with `truncated`
+- `GET /api/repos/:repoId/code-search?commit=<full hash>&q=...[&mode=fixed|regex][&ignoreCase=1][&path=...][&limit=200]`
+  — `git grep` over the commit's tree (never the working tree): `{ path, line, text }`
+  matches, binary files skipped, 50 matches per file, `limit` up to 1000, lines clipped at 400
+  chars. An invalid regex is a 400 with Git's reason
+- `GET /api/repos/:repoId/reflog?ref=HEAD|refs/heads/<b>|refs/remotes/<r>[&limit=100][&skip=0]`
+  — the ref's reflog, newest first: operation (`commit`, `amend`, `reset`, `rebase`, ...),
+  `rewrites`, moved-to `hash`, `previousHash`, `movedAt`, and `reachable` /
+  `previousReachable` (false = no branch, tag, remote-tracking ref, or HEAD reaches it).
+  Short names, tags, stash, and symrefs are rejected
 - `GET /api/repos/:repoId/files/range-history?path=...&lineStart=1&lineEnd=20`
 - `GET /api/repos/:repoId/files/related?path=...`
 - `GET /api/repos/:repoId/files/hotspot?ref=HEAD&limit=500&commitCap=200`

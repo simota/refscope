@@ -221,6 +221,26 @@ export function createRequestHandler(config, gitService, fleetService) {
         sendJson(res, result.status, result.body);
         return;
       }
+      if (route.name === "tree") {
+        const result = await gitService.getTree(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "treePaths") {
+        const result = await gitService.getTreePaths(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "codeSearch") {
+        const result = await gitService.searchCode(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
+      if (route.name === "reflog") {
+        const result = await gitService.getReflog(repo.value, url.searchParams);
+        sendJson(res, result.status, result.body);
+        return;
+      }
       if (route.name === "fileContent") {
         const result = await gitService.getFileContent(repo.value, url.searchParams);
         sendJson(res, result.status, result.body);
@@ -462,6 +482,15 @@ function matchRoute(method, pathname) {
   if (parts.length === 4 && parts[3] === "worktree") {
     return { name: "workTree", params: { repoId } };
   }
+  // Repository explorer (explorerService.js): tree at a commit, the full
+  // path index for a file finder, code search at a commit, and a ref's reflog.
+  // The commit / path / ref values stay in the query string.
+  if (parts.length === 4 && parts[3] === "tree") return { name: "tree", params: { repoId } };
+  if (parts.length === 5 && parts[3] === "tree" && parts[4] === "paths") {
+    return { name: "treePaths", params: { repoId } };
+  }
+  if (parts.length === 4 && parts[3] === "code-search") return { name: "codeSearch", params: { repoId } };
+  if (parts.length === 4 && parts[3] === "reflog") return { name: "reflog", params: { repoId } };
   if (parts.length === 4 && parts[3] === "events") return { name: "events", params: { repoId } };
   // Branch group health: GET /api/repos/:id/branches/grouped
   // Returns branches filtered by prefix with ahead/behind/rotScore fields.

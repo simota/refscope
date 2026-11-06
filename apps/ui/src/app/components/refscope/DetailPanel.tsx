@@ -83,6 +83,7 @@ export function DetailPanel({
   whyPanelQuery,
   onWhyPanelQueryChange,
   onViewFile,
+  onBrowseFiles,
 }: {
   commit: Commit | null;
   detail: CommitDetail | null;
@@ -110,6 +111,8 @@ export function DetailPanel({
   onWhyPanelQueryChange?: (q: WhyPanelQuery | null) => void;
   // Opens the file-at-revision viewer for a changed file of this commit.
   onViewFile?: (path: string, side: "after" | "before", beforePath?: string) => void;
+  // Opens the repository browser (tree + code search) at this commit.
+  onBrowseFiles?: (hash: string) => void;
 }) {
   // Hooks must run unconditionally before any early return, otherwise React's
   // rules-of-hooks check trips and reorders break state. The previous version
@@ -214,6 +217,17 @@ export function DetailPanel({
             >
               {copyStatus}
             </span>
+          ) : null}
+          {onBrowseFiles ? (
+            <button
+              type="button"
+              className="rs-icon-btn"
+              title="Browse files at this commit (t)"
+              aria-label="Browse files at this commit"
+              onClick={() => onBrowseFiles(commit.hash)}
+            >
+              <FolderTree size={13} />
+            </button>
           ) : null}
           <button
             type="button"

@@ -45,7 +45,7 @@ loadConfig() → createGitService(config) → createRequestHandler(config, gitSe
 
 - `config.js` parses and validates env (`RTGV_REPOS`, origins, numeric limits). Repository allowlist is a `Map<repoId, absolutePath>`; duplicate IDs are rejected at startup.
 - `gitRunner.js` is the **only** sanctioned way to invoke Git. It enforces:
-  - An allowlist of commands (`blame` without file-input options, `cat-file`, `cherry`, `config` as a read-only `--get-regexp` lookup, `diff`, `for-each-ref`, `log`, `ls-files`, `merge-base`, `rev-list`, `rev-parse`, `show`, plus `stash list` / `submodule status` / `worktree list`).
+  - An allowlist of commands (`blame` without file-input options, `cat-file`, `cherry`, `config` as a read-only `--get-regexp` lookup, `diff`, `for-each-ref`, `grep` without pager / pattern-file / working-tree options, `log`, `ls-files`, `ls-tree`, `merge-base`, `rev-list`, `rev-parse`, `show`, plus `stash list` / `submodule status` / `worktree list`).
   - Repo-config program hooks forced off: `core.fsmonitor=false` via `GIT_CONFIG_COUNT`; any read that compares against the working tree must pass `disableFilterDrivers: await listFilterDriverNames(...)` so `filter.<driver>` commands are blanked.
   - Argument-array `spawn` with `shell: false`, `--no-pager`, bounded stdout/stderr, timeouts, and `GIT_*` env scrubbing (no inherited `GIT_DIR`, pagers, SSH, proxies, GCM, replace-objects, lazy fetch, terminal prompt, optional locks, ext-diff/textconv).
   - Rejection of dangerous flags (`-c`, `--git-dir`, `--work-tree`, `--namespace`, `--output`, `--no-index`, pager options) before spawn.
@@ -53,6 +53,7 @@ loadConfig() → createGitService(config) → createRequestHandler(config, gitSe
   - Never bypass this runner. New call sites must go through `runGit`, not `spawn` directly.
 - `validation.js` is the public-input contract: `isValidGitRef`, `isValidObjectId`, `parseSearchQuery`, `parseAuthorQuery`, `parsePathQuery`, `parseLimitQuery`, `isValidRepoId`. Any new public input must reuse or extend these — do not write ad-hoc validators in `http.js` or `gitService.js`.
 - `gitService.js` resolves public refs to commit object IDs first (`rev-parse` + `cat-file -t`), then runs `log` / `diff` / `show` against the resolved IDs with option parsing terminated (`--end-of-options` / `--`). For compare, `base` and `target` stay as separate revision tokens — never concatenate `base..target` into a single arg.
+- `explorerService.js` adds tree listing (`/tree`, `/tree/paths`), code search at a commit (`/code-search`, `git grep` with the pattern attached to `-e`), and reflog walking (`/reflog`, HEAD or full `refs/heads|remotes` names only, symrefs rejected) with lost-commit detection; its methods are spread into the `gitService` object.
 - `http.js` is a hand-rolled router; SSE lives at `GET /api/repos/:repoId/events` and emits typed events: `connected`, `ref_created`, `ref_updated`, `ref_deleted`, `commit_added`, `history_rewritten`, `error`.
 
 Cryptographic signature verification is intentionally **not** performed — `signed: false`, `signatureStatus: "unknown"`, `--no-show-signature` everywhere. Don't add `gpg.program` or pretty-format placeholders that would invoke GPG.

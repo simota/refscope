@@ -91,6 +91,10 @@
   font-size: 11px;
   white-space: nowrap;
 }
+/* Opt-in spacing for compact buttons that pair an icon with a label. */
+.rs-compact-button.rs-compact-button--icon {
+  gap: 4px;
+}
 .rs-compact-button:not(:disabled) {
   cursor: pointer;
 }

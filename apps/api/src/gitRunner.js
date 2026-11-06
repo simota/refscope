@@ -9,8 +9,10 @@ const ALLOWED_GIT_COMMANDS = new Set([
   "config",
   "diff",
   "for-each-ref",
+  "grep",
   "log",
   "ls-files",
+  "ls-tree",
   "merge-base",
   "rev-list",
   "rev-parse",
@@ -360,6 +362,9 @@ function validateGitArgs(args) {
   if (args[0] === "blame" && args.some(isBlameFileInputOption)) {
     throw new Error("Git blame file input options are not allowed");
   }
+  if (args[0] === "grep" && args.some(isGrepUnsafeOption)) {
+    throw new Error("Git grep pager, file input, and working-tree options are not allowed");
+  }
   if (args[0] === "config" && !isReadOnlyConfigLookup(args)) {
     throw new Error("Git config is allowed only as a read-only lookup");
   }
@@ -375,6 +380,24 @@ function isBlameFileInputOption(arg) {
     arg.startsWith("-S") ||
     arg === "--ignore-revs-file" ||
     arg.startsWith("--ignore-revs-file=")
+  );
+}
+
+// `git grep` can run a program on the matches (`-O` / `--open-files-in-pager`),
+// read patterns from a file (`-f` / `--file`), or search the working tree and
+// untracked/ignored files. Code search only ever greps a commit's tree, with
+// the pattern attached to `-e` so it cannot collide with these names.
+function isGrepUnsafeOption(arg) {
+  return (
+    arg.startsWith("-O") ||
+    arg.startsWith("--open-files-in-pager") ||
+    arg === "-f" ||
+    arg === "--file" ||
+    arg.startsWith("--file=") ||
+    arg === "--untracked" ||
+    arg === "--no-exclude-standard" ||
+    arg === "--cached" ||
+    arg === "--recurse-submodules"
   );
 }
 

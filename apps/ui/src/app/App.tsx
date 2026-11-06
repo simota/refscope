@@ -9,6 +9,11 @@ import { CommandPalette } from "./components/refscope/CommandPalette";
 import { FileHistoryView } from "./components/refscope/FileHistoryView";
 import { LensSwitcher, type LensId } from "./components/refscope/LensSwitcher";
 import { RewriteRescuePanel } from "./components/refscope/RewriteRescuePanel";
+import {
+  RepoBrowserDialog,
+  type BrowserRevision,
+  type BrowserTab,
+} from "./components/refscope/RepoBrowserDialog";
 import { PulseLens } from "./components/refscope/PulseLens";
 import { FileStreamLens } from "./components/refscope/FileStreamLens";
 import { RiskHeatmapLens } from "./components/refscope/RiskHeatmapLens";
@@ -1457,6 +1462,36 @@ export default function App() {
     },
     [current, selectedDetail],
   );
+  // Repository browser (tree + code search at a revision). A file opened
+  // from it stacks the viewer on top as a nested dialog, so closing the
+  // viewer returns to the same folder / search results.
+  const [browserRevision, setBrowserRevision] = useState<BrowserRevision | null>(null);
+  const [browserTabRequest, setBrowserTabRequest] = useState<{ tab: BrowserTab; nonce: number }>({
+    tab: "files",
+    nonce: 0,
+  });
+  const defaultBrowserRevision = useCallback((): BrowserRevision | null => {
+    if (current) return { commit: current.hash, label: current.shortHash || current.hash.slice(0, 7) };
+    const ref = refs.find((r) => r.name === selectedRef);
+    if (ref && /^[0-9a-f]{40}$/i.test(ref.hash)) return { commit: ref.hash, label: ref.shortName };
+    const tip = commits[0];
+    return tip ? { commit: tip.hash, label: selectedRef || tip.hash.slice(0, 7) } : null;
+  }, [current, refs, selectedRef, commits]);
+  const openBrowser = useCallback(
+    (tab: BrowserTab, revision?: BrowserRevision) => {
+      const next = revision ?? defaultBrowserRevision();
+      if (!next) return;
+      setBrowserRevision(next);
+      setBrowserTabRequest((prev) => ({ tab, nonce: prev.nonce + 1 }));
+    },
+    [defaultBrowserRevision],
+  );
+  const handleOpenFileFromBrowser = useCallback((filePath: string, commit: string, line?: number) => {
+    setFileViewerTarget({ path: filePath, commit, parent: null, side: "after", line, origin: "browser" });
+  }, []);
+  useEffect(() => {
+    setBrowserRevision(null);
+  }, [selectedRepo]);
   // Deep-link sync: mirror repo / ref / selected commit / path filter into
   // the URL (replaceState — no history entry per click), so a reload or a
   // copied link reopens the same view. Unrelated params (fleet, flight) stay.
@@ -1839,6 +1874,22 @@ export default function App() {
         run: () => setHelpOpen(true),
       },
       {
+        combo: "t",
+        description: "Browse files / go to file at the selected commit",
+        category: "Navigation",
+        run: () => {
+          if (mode === "detail") openBrowser("files");
+        },
+      },
+      {
+        combo: "Mod+Shift+F",
+        description: "Search code at the selected commit",
+        category: "Navigation",
+        run: () => {
+          if (mode === "detail") openBrowser("search");
+        },
+      },
+      {
         combo: "Mod+B",
         description: "Toggle branch sidebar",
         category: "View",
@@ -1913,6 +1964,8 @@ export default function App() {
     goToAdjacentCommit,
     diffFullscreenAvailable,
     diffFullscreen,
+    openBrowser,
+    mode,
   ]);
 
   // Suppress non-global shortcuts whenever a modal-like surface owns the
@@ -1922,7 +1975,9 @@ export default function App() {
     paletteOpen ||
     helpOpen ||
     fileHistoryPromptOpen ||
-    Boolean(fileHistoryPath);
+    Boolean(fileHistoryPath) ||
+    browserRevision !== null ||
+    fileViewerTarget !== null;
 
   useKeyboardShortcuts(shortcutBindings, shortcutsSuppressed);
 
@@ -2186,6 +2241,17 @@ export default function App() {
             entries={rewriteRescueEntries}
             eventStatus={eventStatus}
             onChangeLens={setActiveLens}
+            refs={refs}
+            onInspectCommit={(hash) => {
+              handleSelectCommit(hash);
+              setActiveLens('live');
+            }}
+            onBrowseAt={(hash, label) => openBrowser("files", { commit: hash, label })}
+            onCompareWithHead={(hash) => {
+              setCompareBase("HEAD");
+              setCompareTarget(hash);
+              setActiveLens('live');
+            }}
             onClear={(repoId) => {
               if (repoId === selectedRepo) {
                 setRewriteRescueEntries([]);
@@ -2482,11 +2548,28 @@ export default function App() {
               whyPanelQuery={whyPanelQuery}
               onWhyPanelQueryChange={setWhyPanelQuery}
               onViewFile={handleViewFile}
+              onBrowseFiles={(hash) =>
+                openBrowser("files", { commit: hash, label: current?.hash === hash ? current.shortHash || hash.slice(0, 7) : hash.slice(0, 7) })
+              }
             />
           </section>
         </ResizablePanel>
       </ResizablePanelGroup>
       </div>
+      <RepoBrowserDialog
+        repoId={selectedRepo}
+        open={browserRevision !== null}
+        revision={browserRevision}
+        requestedTab={browserTabRequest}
+        refs={refs}
+        onRevisionChange={setBrowserRevision}
+        onClose={() => setBrowserRevision(null)}
+        onOpenFile={handleOpenFileFromBrowser}
+        onOpenHistory={(filePath) => {
+          setBrowserRevision(null);
+          submitFileHistoryPath(filePath);
+        }}
+      />
       <FileViewerDialog
         repoId={selectedRepo}
         target={fileViewerTarget}
@@ -2545,6 +2628,8 @@ export default function App() {
         onShowWorkTree={handleSelectWorkTree}
         onRefreshWorkTree={handleRefreshWorkTree}
         onOpenFileHistory={openFileHistoryPrompt}
+        onBrowseFiles={mode === "detail" && selectedRepo ? () => openBrowser("files") : undefined}
+        onSearchCode={mode === "detail" && selectedRepo ? () => openBrowser("search") : undefined}
         onShowShortcuts={() => setHelpOpen(true)}
         mode={mode}
         onSetMode={setMode}
