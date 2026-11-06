@@ -431,3 +431,39 @@ function createMockResponse() {
     },
   };
 }
+
+test("routes compare review and blame endpoints to their service methods", async () => {
+  const calls = [];
+  const repo = { id: "demo", name: "demo", path: "/tmp/demo" };
+  const service = {
+    getRepository: (repoId) => (repoId === "demo" ? repo : undefined),
+    async getCompareCommits(r, query) {
+      calls.push(["commits", r.id, query.get("base"), query.get("target")]);
+      return { status: 200, body: { kind: "commits" } };
+    },
+    async getCompareDiff(r, query) {
+      calls.push(["diff", r.id, query.get("mode")]);
+      return { status: 200, body: { kind: "diff" } };
+    },
+    async getFileBlame(r, query) {
+      calls.push(["blame", r.id, query.get("path")]);
+      return { status: 200, body: { kind: "blame" } };
+    },
+  };
+  const handler = createRequestHandler({ allowedOrigins: new Set() }, service);
+  for (const [url, kind] of [
+    ["/api/repos/demo/compare/commits?base=main&target=dev", "commits"],
+    ["/api/repos/demo/compare/diff?base=main&target=dev&mode=two-dot", "diff"],
+    ["/api/repos/demo/files/blame?commit=abc&path=a.txt", "blame"],
+  ]) {
+    const response = createMockResponse();
+    await handler(createMockRequest({ method: "GET", url }), response);
+    assert.equal(response.statusCode, 200, url);
+    assert.deepEqual(JSON.parse(response.body), { kind });
+  }
+  assert.deepEqual(calls, [
+    ["commits", "demo", "main", "dev"],
+    ["diff", "demo", "two-dot"],
+    ["blame", "demo", "a.txt"],
+  ]);
+});

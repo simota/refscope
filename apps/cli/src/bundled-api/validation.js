@@ -791,3 +791,25 @@ function isLocalhostAddress(host) {
   }
   return false;
 }
+
+/**
+ * Compare review mode for `/compare/commits`-adjacent diff reads.
+ *
+ * - `three-dot` (default): changes `target` introduced since its merge base
+ *   with `base` — the pull-request view (`git diff base...target`).
+ * - `two-dot`: the direct tree difference between `base` and `target`
+ *   (`git diff base target`), matching the compare summary counts.
+ *
+ * Empty / missing → `three-dot`. Anything else is rejected.
+ */
+export const COMPARE_MODES = new Set(["three-dot", "two-dot"]);
+
+export function parseCompareModeQuery(rawValue) {
+  if (rawValue == null || rawValue === "") {
+    return { ok: true, value: "three-dot" };
+  }
+  if (typeof rawValue !== "string" || !COMPARE_MODES.has(rawValue)) {
+    return { ok: false, error: "Invalid mode parameter" };
+  }
+  return { ok: true, value: rawValue };
+}

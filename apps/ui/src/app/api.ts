@@ -329,6 +329,49 @@ export async function fetchFileContent(
   );
 }
 
+export type BlameCommit = {
+  hash: string;
+  shortHash: string;
+  author: string;
+  authorEmail: string;
+  authorTime: string | null;
+  summary: string;
+  /** The commit is the history boundary (root), not necessarily the author of the line. */
+  boundary: boolean;
+  previousHash: string | null;
+  previousPath: string | null;
+  filename: string;
+};
+
+export type BlameLine = {
+  line: number;
+  hash: string;
+  origLine: number;
+  content: string;
+};
+
+export type FileBlameResponse = {
+  commit: string;
+  path: string;
+  lineCount: number;
+  commits: BlameCommit[];
+  lines: BlameLine[];
+};
+
+/** Who last changed each line of `<commit>:<path>` (GET /files/blame). */
+export async function fetchFileBlame(
+  repoId: string,
+  commit: string,
+  path: string,
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ commit, path });
+  return getJson<FileBlameResponse>(
+    `/api/repos/${encodeURIComponent(repoId)}/files/blame?${params}`,
+    signal,
+  );
+}
+
 export async function getCommit(repoId: string, hash: string, signal?: AbortSignal) {
   return getJson<CommitDetail>(
     `/api/repos/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(hash)}`,
@@ -404,6 +447,82 @@ export async function getDiff(
 export async function compareRefs(repoId: string, base: string, target: string) {
   const params = new URLSearchParams({ base, target });
   return getJson<CompareResult>(`/api/repos/${encodeURIComponent(repoId)}/compare?${params}`);
+}
+
+// ---------------------------------------------------------------------------
+// Compare review — GET /compare/commits + GET /compare/diff
+// ---------------------------------------------------------------------------
+
+export type CompareMode = "three-dot" | "two-dot";
+
+export type CompareCommitsResult = {
+  base: string;
+  target: string;
+  baseHash: string;
+  targetHash: string;
+  limit: number;
+  /** Reachable from target but not base, newest first. */
+  ahead: Commit[];
+  /** Reachable from base but not target, newest first. */
+  behind: Commit[];
+  aheadTruncated: boolean;
+  behindTruncated: boolean;
+};
+
+export async function fetchCompareCommits(
+  repoId: string,
+  base: string,
+  target: string,
+  signal?: AbortSignal,
+): Promise<CompareCommitsResult> {
+  const params = new URLSearchParams({ base, target });
+  const body = await getJson<Omit<CompareCommitsResult, "ahead" | "behind"> & {
+    ahead: CommitResponse[];
+    behind: CommitResponse[];
+  }>(`/api/repos/${encodeURIComponent(repoId)}/compare/commits?${params}`, signal);
+  return { ...body, ahead: body.ahead.map(toCommit), behind: body.behind.map(toCommit) };
+}
+
+export type CompareFile = {
+  status: string;
+  path: string;
+  oldPath?: string;
+  added: number;
+  deleted: number;
+  binary: boolean;
+};
+
+export type CompareDiffResult = {
+  base: string;
+  target: string;
+  /** Mode actually used; differs from `requestedMode` when `fallback`. */
+  mode: CompareMode;
+  requestedMode: CompareMode;
+  /** True when three-dot was requested but the histories share no merge base. */
+  fallback: boolean;
+  mergeBase: string | null;
+  fromHash: string;
+  toHash: string;
+  files: CompareFile[];
+  added: number;
+  deleted: number;
+  diff: string;
+  truncated: boolean;
+  maxBytes: number;
+};
+
+export async function fetchCompareDiff(
+  repoId: string,
+  base: string,
+  target: string,
+  mode: CompareMode,
+  signal?: AbortSignal,
+): Promise<CompareDiffResult> {
+  const params = new URLSearchParams({ base, target, mode });
+  return getJson<CompareDiffResult>(
+    `/api/repos/${encodeURIComponent(repoId)}/compare/diff?${params}`,
+    signal,
+  );
 }
 
 /** Grade assigned to an equivalent cherry-pick entry (D-6). */

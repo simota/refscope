@@ -12,6 +12,9 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Commit, CompareResult, GitRef, StructuralKind } from "./data";
 import { StructuralDiffBadge } from "./StructuralDiffBadge";
+import { CompareReviewPanel } from "./CompareReviewPanel";
+import { compareCommands } from "../../lib/compareReview";
+import type { CompareMode } from "../../api";
 import {
   compareCherry as fetchCompareCherry,
   type CompareCherryResult,
@@ -60,6 +63,9 @@ export function CommitTimeline({
   onPinSelectedAsBase,
   onPinCurrentRefAsTarget,
   onClearCompare,
+  compareMode,
+  onCompareModeChange,
+  onOpenCompareFileHistory,
   compareBarCollapsed,
   activityGraphCollapsed,
   onToggleCompareBar,
@@ -103,6 +109,10 @@ export function CommitTimeline({
   onPinSelectedAsBase: () => void;
   onPinCurrentRefAsTarget: () => void;
   onClearCompare: () => void;
+  compareMode: CompareMode;
+  onCompareModeChange: (mode: CompareMode) => void;
+  /** Right-click on a compare review file opens its history. */
+  onOpenCompareFileHistory?: (path: string) => void;
   compareBarCollapsed: boolean;
   activityGraphCollapsed: boolean;
   onToggleCompareBar: () => void;
@@ -188,6 +198,11 @@ export function CommitTimeline({
         onPinSelectedAsBase={onPinSelectedAsBase}
         onPinCurrentRefAsTarget={onPinCurrentRefAsTarget}
         onClearCompare={onClearCompare}
+        compareMode={compareMode}
+        onCompareModeChange={onCompareModeChange}
+        selectedHash={selected}
+        onSelectCommit={onSelect}
+        onOpenFileHistory={onOpenCompareFileHistory}
         collapsed={compareBarCollapsed}
         onToggle={onToggleCompareBar}
       />
@@ -516,6 +531,11 @@ function CompareBar({
   onPinSelectedAsBase,
   onPinCurrentRefAsTarget,
   onClear,
+  mode,
+  onModeChange,
+  selectedHash,
+  onSelectCommit,
+  onOpenFileHistory,
 }: {
   refs: GitRef[];
   repoId: string;
@@ -530,8 +550,14 @@ function CompareBar({
   onPinSelectedAsBase: () => void;
   onPinCurrentRefAsTarget: () => void;
   onClear: () => void;
+  mode: CompareMode;
+  onModeChange: (mode: CompareMode) => void;
+  selectedHash: string;
+  onSelectCommit: (hash: string) => void;
+  onOpenFileHistory?: (path: string) => void;
 }) {
   const active = Boolean(base || target);
+  const commands = compareCommands(base, target, mode);
   // Cherry-pick equivalence is opt-in: it computes patch-ids server-side and
   // is heavier than the regular ahead/behind summary, so we only fetch when
   // the user clicks the button. State resets when base/target change so the
@@ -606,9 +632,9 @@ function CompareBar({
           </CompareSummary>
           <CompareGraph result={result} />
           <div className="mt-2 flex flex-wrap gap-2 items-center">
-            <CopyCommand label="Copy log" command={result.commands.log} />
-            <CopyCommand label="Copy stat" command={result.commands.stat} />
-            <CopyCommand label="Copy diff" command={result.commands.diff} />
+            <CopyCommand label="Copy log" command={commands.log} />
+            <CopyCommand label="Copy stat" command={commands.stat} />
+            <CopyCommand label="Copy diff" command={commands.diff} />
             <button
               type="button"
               className="rs-compact-button"
@@ -649,6 +675,17 @@ function CompareBar({
             <CompareSummary role="alert">Cherry-pick check failed: {cherryError}</CompareSummary>
           ) : null}
           {cherry ? <CherryStatus cherry={cherry} threshold={threshold} /> : null}
+          <CompareReviewPanel
+            repoId={repoId}
+            base={base}
+            target={target}
+            summary={result}
+            mode={mode}
+            onModeChange={onModeChange}
+            selectedHash={selectedHash}
+            onSelectCommit={onSelectCommit}
+            onOpenFileHistory={onOpenFileHistory}
+          />
         </>
       ) : active ? (
         <CompareSummary>Choose both base and target to compare.</CompareSummary>
@@ -673,6 +710,11 @@ function CompareBarCollapsible({
   onPinSelectedAsBase,
   onPinCurrentRefAsTarget,
   onClearCompare,
+  compareMode,
+  onCompareModeChange,
+  selectedHash,
+  onSelectCommit,
+  onOpenFileHistory,
   collapsed,
   onToggle,
 }: {
@@ -689,6 +731,11 @@ function CompareBarCollapsible({
   onPinSelectedAsBase: () => void;
   onPinCurrentRefAsTarget: () => void;
   onClearCompare: () => void;
+  compareMode: CompareMode;
+  onCompareModeChange: (mode: CompareMode) => void;
+  selectedHash: string;
+  onSelectCommit: (hash: string) => void;
+  onOpenFileHistory?: (path: string) => void;
   collapsed: boolean;
   onToggle: () => void;
 }) {
@@ -755,6 +802,11 @@ function CompareBarCollapsible({
             onPinSelectedAsBase={onPinSelectedAsBase}
             onPinCurrentRefAsTarget={onPinCurrentRefAsTarget}
             onClear={onClearCompare}
+            mode={compareMode}
+            onModeChange={onCompareModeChange}
+            selectedHash={selectedHash}
+            onSelectCommit={onSelectCommit}
+            onOpenFileHistory={onOpenFileHistory}
           />
         </div>
       </CollapsibleContent>

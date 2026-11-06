@@ -45,7 +45,7 @@ loadConfig() → createGitService(config) → createRequestHandler(config, gitSe
 
 - `config.js` parses and validates env (`RTGV_REPOS`, origins, numeric limits). Repository allowlist is a `Map<repoId, absolutePath>`; duplicate IDs are rejected at startup.
 - `gitRunner.js` is the **only** sanctioned way to invoke Git. It enforces:
-  - An allowlist of commands (`cat-file`, `cherry`, `config` as a read-only `--get-regexp` lookup, `diff`, `for-each-ref`, `log`, `ls-files`, `merge-base`, `rev-list`, `rev-parse`, `show`, plus `stash list` / `submodule status` / `worktree list`).
+  - An allowlist of commands (`blame` without file-input options, `cat-file`, `cherry`, `config` as a read-only `--get-regexp` lookup, `diff`, `for-each-ref`, `log`, `ls-files`, `merge-base`, `rev-list`, `rev-parse`, `show`, plus `stash list` / `submodule status` / `worktree list`).
   - Repo-config program hooks forced off: `core.fsmonitor=false` via `GIT_CONFIG_COUNT`; any read that compares against the working tree must pass `disableFilterDrivers: await listFilterDriverNames(...)` so `filter.<driver>` commands are blanked.
   - Argument-array `spawn` with `shell: false`, `--no-pager`, bounded stdout/stderr, timeouts, and `GIT_*` env scrubbing (no inherited `GIT_DIR`, pagers, SSH, proxies, GCM, replace-objects, lazy fetch, terminal prompt, optional locks, ext-diff/textconv).
   - Rejection of dangerous flags (`-c`, `--git-dir`, `--work-tree`, `--namespace`, `--output`, `--no-index`, pager options) before spawn.

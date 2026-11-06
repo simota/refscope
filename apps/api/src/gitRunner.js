@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const ALLOWED_GIT_COMMANDS = new Set([
+  "blame",
   "cat-file",
   "cherry",
   "config",
@@ -356,9 +357,25 @@ function validateGitArgs(args) {
   if (subcommandAllowlist && !subcommandAllowlist.has(args[1])) {
     throw new Error("Git subcommand is not allowed");
   }
+  if (args[0] === "blame" && args.some(isBlameFileInputOption)) {
+    throw new Error("Git blame file input options are not allowed");
+  }
   if (args[0] === "config" && !isReadOnlyConfigLookup(args)) {
     throw new Error("Git config is allowed only as a read-only lookup");
   }
+}
+
+// `git blame` can read a filesystem file as the final image (`--contents`),
+// a revision list (`-S`), or an ignore list (`--ignore-revs-file`). Blame is
+// only ever run against committed objects, so none of these are needed.
+function isBlameFileInputOption(arg) {
+  return (
+    arg === "--contents" ||
+    arg.startsWith("--contents=") ||
+    arg.startsWith("-S") ||
+    arg === "--ignore-revs-file" ||
+    arg.startsWith("--ignore-revs-file=")
+  );
 }
 
 // `git config` both reads and writes depending on its arguments. Only the
