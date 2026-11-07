@@ -99,6 +99,39 @@ export function tagListArgs(commit, merged) {
   return ["for-each-ref", TAG_FORMAT, `${merged ? "--merged" : "--no-merged"}=${commit}`, "refs/tags"];
 }
 
+/** `for-each-ref` over every tag, with no reachability walk. */
+export function allTagListArgs() {
+  return ["for-each-ref", TAG_FORMAT, "refs/tags"];
+}
+
+/**
+ * How many release candidates are not reachable from `commit`, given the
+ * `parseTagList` count of those that are.
+ *
+ * `--no-merged` walks the history much like `--merged` does, only to be
+ * counted. Every tag `parseTagList` keeps peels to a commit, and a ref that
+ * peels to a commit is either merged or not merged, so the plain tag list
+ * (no walk) minus the merged ones is the same count. The reachability read
+ * is still used when the plain list cannot stand in for it: when it hit the
+ * byte cap, or when Git failed on it (the reachability filters skip a tag
+ * whose object is missing; the plain list stops on it).
+ */
+async function countUnmergedTags(repo, commit, mergedCount, allRead, options) {
+  let all = null;
+  try {
+    all = await allRead;
+  } catch (error) {
+    // A timeout would only repeat on the slower reachability read.
+    if (!(error instanceof GitCommandError) || error.timedOut) throw error;
+  }
+  if (all && !all.truncated) {
+    // Clamped: a tag deleted between the two reads must not go negative.
+    return Math.max(0, parseTagList(all.stdout).length - mergedCount);
+  }
+  const otherOut = await runGit(repo, tagListArgs(commit, false), options);
+  return parseTagList(otherOut.stdout).length;
+}
+
 /**
  * Parse `tagListArgs` output into release candidates. Only tags that name a
  * commit (directly, or through one annotated tag object) are kept: a tag of a
@@ -368,13 +401,16 @@ export function createInsightMethods(config, deps) {
       const target = await deps.resolveCommitishRevision(repo, ref, config.gitTimeoutMs);
       if (!target.ok) return target.result;
 
-      const [mergedOut, otherOut] = await Promise.all([
-        runGit(repo, tagListArgs(target.hash, true), { timeoutMs: config.gitTimeoutMs, maxBytes: TAG_LIST_MAX_BYTES, allowTruncatedStdout: true }),
-        runGit(repo, tagListArgs(target.hash, false), { timeoutMs: config.gitTimeoutMs, maxBytes: TAG_LIST_MAX_BYTES, allowTruncatedStdout: true }),
-      ]);
+      const tagListOptions = { timeoutMs: config.gitTimeoutMs, maxBytes: TAG_LIST_MAX_BYTES, allowTruncatedStdout: true };
+      // Both reads start together, as the merged / not-merged pair did.
+      const allRead = runGit(repo, allTagListArgs(), tagListOptions);
+      // Settled here so a failure is handled by countUnmergedTags, not left
+      // unobserved when the merged read rejects first.
+      allRead.catch(() => {});
+      const mergedOut = await runGit(repo, tagListArgs(target.hash, true), tagListOptions);
       // A record cut by the byte cap fails the field-count check and drops.
       const tags = parseTagList(mergedOut.stdout);
-      const otherTagCount = parseTagList(otherOut.stdout).length;
+      const otherTagCount = await countUnmergedTags(repo, target.hash, tags.length, allRead, tagListOptions);
       const shown = tags.slice(0, limit.value);
 
       const ranges = await mapLimited(

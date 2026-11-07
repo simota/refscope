@@ -175,6 +175,66 @@ test("getReleases lists reachable tags with per-release counts and unreleased co
   }
 });
 
+function noMergedCount(repoPath, commit) {
+  return parseTagList(git(repoPath, ...tagListArgs(commit, false))).length;
+}
+
+test("getReleases otherTagCount equals the --no-merged count across tag kinds", async () => {
+  const repoPath = tempRepo();
+  try {
+    write(repoPath, "a.txt", "1\n");
+    commit(repoPath, "first", "Ann", "ann@x", "2024-01-01T00:00:00Z");
+    git(repoPath, "tag", "v1");
+    git(repoPath, "checkout", "-q", "-b", "side");
+    write(repoPath, "b.txt", "side\n");
+    commit(repoPath, "side", "Bob", "bob@x", "2024-02-01T00:00:00Z");
+    git(repoPath, "tag", "side-light");
+    git(repoPath, "tag", "-a", "side-annotated", "-m", "side");
+    // A tag of a tag and a tag of a tree are not release candidates either way.
+    git(repoPath, "tag", "-a", "side-nested", "-m", "nested", "side-annotated");
+    git(repoPath, "tag", "side-tree", git(repoPath, "rev-parse", "HEAD^{tree}").trim());
+    git(repoPath, "checkout", "-q", "main");
+    write(repoPath, "a.txt", "2\n");
+    commit(repoPath, "second", "Ann", "ann@x", "2024-03-01T00:00:00Z");
+    git(repoPath, "tag", "-a", "v2", "-m", "two");
+
+    const { service, repo } = setup(repoPath);
+    for (const ref of ["HEAD", "refs/heads/side", "v1"]) {
+      const result = await service.getReleases(repo, new URLSearchParams({ ref }));
+      assert.equal(result.status, 200);
+      assert.equal(result.body.otherTagCount, noMergedCount(repoPath, result.body.commit), ref);
+    }
+    const head = await service.getReleases(repo, new URLSearchParams(""));
+    assert.equal(head.body.otherTagCount, 2);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
+test("getReleases counts other tags through the reachability read when a tag object is missing", async () => {
+  const repoPath = tempRepo();
+  try {
+    write(repoPath, "a.txt", "1\n");
+    commit(repoPath, "first", "Ann", "ann@x", "2024-01-01T00:00:00Z");
+    git(repoPath, "tag", "v1");
+    git(repoPath, "checkout", "-q", "-b", "side");
+    write(repoPath, "b.txt", "side\n");
+    commit(repoPath, "side", "Bob", "bob@x", "2024-02-01T00:00:00Z");
+    git(repoPath, "tag", "side-1");
+    git(repoPath, "checkout", "-q", "main");
+    // The plain tag list stops on this ref; --merged / --no-merged skip it.
+    fs.appendFileSync(path.join(repoPath, ".git", "packed-refs"), `${H1} refs/tags/broken\n`);
+
+    const { service, repo } = setup(repoPath);
+    const result = await service.getReleases(repo, new URLSearchParams(""));
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.releases.map((r) => r.shortName), ["v1"]);
+    assert.equal(result.body.otherTagCount, 1);
+  } finally {
+    fs.rmSync(repoPath, { recursive: true, force: true });
+  }
+});
+
 test("getReleases reports no release when nothing is tagged", async () => {
   const repoPath = tempRepo();
   try {
